@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { RoomSummary } from '@concord/shared';
 import type { ScreenSource } from '../types/window';
 import micOffIcon from '../assets/icons/mic-off.svg';
+import closeIcon from '../assets/icons/window-close.svg';
 import CallControls from './CallControls';
 import ScreenSharePicker from './ScreenSharePicker';
 import MediaStreamVideo from './MediaStreamVideo';
@@ -15,6 +16,7 @@ interface RoomViewProps {
   room: RoomSummary | null;
   isMicMuted: boolean;
   onToggleMic: () => void;
+  isSpeaking: boolean;
   onLeave: () => void;
 }
 
@@ -22,25 +24,15 @@ type Tile =
   | { kind: 'participant'; key: string; name: string; isSelf: boolean }
   | { kind: 'screen'; key: string; name: string; stream: MediaStream };
 
-export default function RoomView({ room, isMicMuted, onToggleMic, onLeave }: RoomViewProps) {
-  // Placeholder for the real signal: once WebRTC audio is wired, this will be
-  // replaced by a getStats() poll reading each track's audioLevel (RFC 6464)
-  // against a threshold, per the "Detecção de atividade de voz" stack decision.
-  const [isSpeaking, setIsSpeaking] = useState(false);
-
+export default function RoomView({ room, isMicMuted, onToggleMic, isSpeaking, onLeave }: RoomViewProps) {
   const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
   const [screenStream, setScreenStream] = useState<MediaStream | null>(null);
   const [isPickerOpen, setIsPickerOpen] = useState(false);
   const [mediaError, setMediaError] = useState<string | null>(null);
+  const [focusedTileKey, setFocusedTileKey] = useState<string | null>(null);
 
   const cameraStreamRef = useRef<MediaStream | null>(null);
   const screenStreamRef = useRef<MediaStream | null>(null);
-
-  useEffect(() => {
-    if (!room) return;
-    const interval = setInterval(() => setIsSpeaking((prev) => !prev), 1600);
-    return () => clearInterval(interval);
-  }, [room]);
 
   // Stop every local track on unmount / leaving the room — real local capture,
   // never sent anywhere (no RTCPeerConnection yet), but the hardware indicator
@@ -53,6 +45,7 @@ export default function RoomView({ room, isMicMuted, onToggleMic, onLeave }: Roo
     screenStreamRef.current = null;
     setCameraStream(null);
     setScreenStream(null);
+    setFocusedTileKey(null);
   }, [room]);
 
   useEffect(() => {
@@ -61,6 +54,20 @@ export default function RoomView({ room, isMicMuted, onToggleMic, onLeave }: Roo
       screenStreamRef.current?.getTracks().forEach((track) => track.stop());
     };
   }, []);
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') setFocusedTileKey(null);
+    }
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
+  // If the focused tile disappears (e.g. screen share stopped), fall back to the grid.
+  useEffect(() => {
+    if (focusedTileKey && focusedTileKey !== 'self-screen') return;
+    if (focusedTileKey === 'self-screen' && !screenStream) setFocusedTileKey(null);
+  }, [focusedTileKey, screenStream]);
 
   async function startCamera(deviceId?: string) {
     const preferred = deviceId ?? getPreferredDeviceId('videoinput') ?? undefined;
@@ -101,6 +108,7 @@ export default function RoomView({ room, isMicMuted, onToggleMic, onLeave }: Roo
       screenStream.getTracks().forEach((track) => track.stop());
       screenStreamRef.current = null;
       setScreenStream(null);
+      setFocusedTileKey(null);
       return;
     }
     setIsPickerOpen(true);
@@ -163,32 +171,65 @@ export default function RoomView({ room, isMicMuted, onToggleMic, onLeave }: Roo
           const speaking = tile.kind === 'participant' && tile.isSelf && isSpeaking && !isMicMuted;
           const muted = tile.kind === 'participant' && tile.isSelf && isMicMuted;
           const showCamera = tile.kind === 'participant' && tile.isSelf && cameraStream;
+          const isFocused = tile.key === focusedTileKey;
+          const isFocusable = tile.kind === 'screen';
+
+          const media =
+            tile.kind === 'screen' ? (
+              <MediaStreamVideo stream={tile.stream} fit="contain" />
+            ) : showCamera ? (
+              <MediaStreamVideo stream={cameraStream} mirrored fit="cover" />
+            ) : (
+              <div
+                className={'room-view__avatar' + (speaking ? ' room-view__avatar--speaking' : '')}
+                style={{ background: getAvatarColor(tile.name) }}
+              >
+                {tile.name.charAt(0)}
+              </div>
+            );
+
+          const status = (
+            <div className="room-view__participant-status">
+              {muted && <img src={micOffIcon} alt="" className="room-view__participant-status-icon" />}
+              <span>{tile.name}</span>
+            </div>
+          );
 
           return (
             <div
               key={tile.key}
-              className="room-view__participant-tile"
-              style={getGridItemStyle(index, tiles.length)}
+              className={
+                'room-view__participant-tile' +
+                (isFocused ? ' room-view__participant-tile--focused' : '') +
+                (isFocusable ? ' room-view__participant-tile--focusable' : '')
+              }
+              style={isFocused ? undefined : getGridItemStyle(index, tiles.length)}
+              onClick={isFocusable && !isFocused ? () => setFocusedTileKey(tile.key) : undefined}
             >
-              {tile.kind === 'screen' ? (
-                <MediaStreamVideo stream={tile.stream} fit="contain" />
-              ) : showCamera ? (
-                <MediaStreamVideo stream={cameraStream} mirrored fit="cover" />
-              ) : (
-                <div
-                  className={'room-view__avatar' + (speaking ? ' room-view__avatar--speaking' : '')}
-                  style={{ background: getAvatarColor(tile.name) }}
-                >
-                  {tile.name.charAt(0)}
+              {isFocused ? (
+                // Locked to 16:9, letterboxed, even when the available space isn't
+                // that shape — the transmission's own aspect (via object-fit:contain
+                // on the video) can add further black bars inside this box too.
+                <div className="room-view__focus-frame">
+                  {media}
+                  <button
+                    className="room-view__focus-close"
+                    title="Fechar (Esc)"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setFocusedTileKey(null);
+                    }}
+                  >
+                    <img src={closeIcon} alt="" />
+                  </button>
+                  {status}
                 </div>
+              ) : (
+                <>
+                  {media}
+                  {status}
+                </>
               )}
-
-              <div className="room-view__participant-status">
-                {muted && (
-                  <img src={micOffIcon} alt="" className="room-view__participant-status-icon" />
-                )}
-                <span>{tile.name}</span>
-              </div>
             </div>
           );
         })}

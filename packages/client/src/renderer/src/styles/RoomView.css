@@ -21,6 +21,7 @@
 }
 
 .room-view__participants {
+  position: relative;
   flex: 1;
   display: grid;
   gap: 16px;
@@ -41,6 +42,55 @@
   overflow: hidden;
 }
 
+.room-view__participant-tile--focusable {
+  cursor: pointer;
+}
+
+.room-view__participant-tile--focused {
+  position: absolute;
+  inset: 24px;
+  z-index: 20;
+  cursor: default;
+  background: #000000;
+}
+
+/* Locks the focused tile to 16:9 no matter the shape of the space around it —
+   min()/cqw/cqh picks whichever axis is the limiting one, so the box never
+   stretches past 16:9; the empty space around it reads as letterbox bars. */
+.room-view__focus-frame {
+  position: relative;
+  container-type: size;
+  width: min(100cqw, 177.78cqh);
+  height: min(100cqh, 56.25cqw);
+  background: #000000;
+  overflow: hidden;
+  border-radius: var(--radius-md);
+}
+
+.room-view__focus-close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 21;
+}
+
+.room-view__focus-close:hover {
+  background: rgba(0, 0, 0, 0.8);
+}
+
+.room-view__focus-close img {
+  width: 14px;
+  height: 14px;
+}
+
 .room-view__avatar {
   width: 45%;
   max-width: 220px;
@@ -58,7 +108,24 @@
 }
 
 .room-view__avatar--speaking {
-  box-shadow: 0 0 0 3px var(--color-online);
+  box-shadow:
+    0 0 0 5px var(--color-online),
+    0 0 18px 4px rgba(35, 165, 90, 0.65);
+  animation: room-view-speaking-pulse 1s ease-in-out infinite;
+}
+
+@keyframes room-view-speaking-pulse {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 5px var(--color-online),
+      0 0 18px 4px rgba(35, 165, 90, 0.65);
+  }
+  50% {
+    box-shadow:
+      0 0 0 7px var(--color-online),
+      0 0 26px 8px rgba(35, 165, 90, 0.85);
+  }
 }
 
 /* Second layer: status overlay pinned over the tile, on top of the

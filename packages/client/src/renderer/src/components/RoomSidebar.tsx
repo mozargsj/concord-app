@@ -17,6 +17,7 @@ interface RoomSidebarProps {
   isDeafened: boolean;
   onToggleMic: () => void;
   onToggleDeafen: () => void;
+  isSpeaking: boolean;
 }
 
 export default function RoomSidebar({
@@ -27,7 +28,8 @@ export default function RoomSidebar({
   isMicMuted,
   isDeafened,
   onToggleMic,
-  onToggleDeafen
+  onToggleDeafen,
+  isSpeaking
 }: RoomSidebarProps) {
   return (
     <aside className="room-sidebar">
@@ -72,17 +74,23 @@ export default function RoomSidebar({
 
               {participants.length > 0 && (
                 <div className="room-sidebar__participants">
-                  {participants.map((name) => (
-                    <div key={name} className="room-sidebar__participant">
-                      <span
-                        className="room-sidebar__participant-avatar"
-                        style={{ background: getAvatarColor(name) }}
-                      >
-                        {name.charAt(0)}
-                      </span>
-                      <span className="room-sidebar__participant-name">{name}</span>
-                    </div>
-                  ))}
+                  {participants.map((name, participantIndex) => {
+                    const isSelf = isJoined && participantIndex === 0;
+                    return (
+                      <div key={name} className="room-sidebar__participant">
+                        <span
+                          className={
+                            'room-sidebar__participant-avatar' +
+                            (isSelf && isSpeaking ? ' room-sidebar__participant-avatar--speaking' : '')
+                          }
+                          style={{ background: getAvatarColor(name) }}
+                        >
+                          {name.charAt(0)}
+                        </span>
+                        <span className="room-sidebar__participant-name">{name}</span>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>
