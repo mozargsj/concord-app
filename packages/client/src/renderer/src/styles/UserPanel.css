@@ -1,0 +1,121 @@
+.user-panel {
+  height: 56px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px;
+  background: var(--color-bg-rail);
+}
+
+.user-panel__avatar {
+  position: relative;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--color-accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
+.user-panel__online-dot {
+  position: absolute;
+  bottom: -2px;
+  right: -2px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--color-online);
+  border: 2px solid var(--color-bg-rail);
+}
+
+.user-panel__info {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  flex: 1;
+}
+
+.user-panel__name {
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.user-panel__status {
+  font-size: 11px;
+  color: var(--color-online);
+}
+
+.user-panel__actions {
+  display: flex;
+  gap: 2px;
+}
+
+.user-panel__device-group {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.user-panel__icon-button,
+.user-panel__device-button,
+.user-panel__device-chevron-button {
+  height: 28px;
+  border: none;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.user-panel__icon-button {
+  width: 28px;
+}
+
+.user-panel__device-button {
+  width: 28px;
+}
+
+.user-panel__device-chevron-button {
+  width: 14px;
+}
+
+.user-panel__icon-button:hover,
+.user-panel__device-button:hover,
+.user-panel__device-chevron-button:hover {
+  background: var(--color-bg-elevated);
+  color: var(--color-text-primary);
+}
+
+.user-panel__icon-button img {
+  width: 18px;
+  height: 18px;
+}
+
+.user-panel__device-button img {
+  width: 18px;
+  height: 18px;
+}
+
+.user-panel__device-chevron {
+  width: 10px;
+  height: 10px;
+  opacity: 0.8;
+}
+
+.user-panel__device-button--active {
+  background: rgba(242, 63, 66, 0.18);
+}
+
+.user-panel__device-button--active:hover {
+  background: rgba(242, 63, 66, 0.3);
+}

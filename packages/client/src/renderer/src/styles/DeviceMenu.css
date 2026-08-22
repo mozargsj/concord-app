@@ -1,0 +1,57 @@
+.device-menu__backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+}
+
+.device-menu {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  min-width: 200px;
+  max-width: 280px;
+  background: var(--color-bg-elevated);
+  border-radius: var(--radius-md);
+  padding: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  z-index: 91;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.device-menu--left {
+  left: 0;
+}
+
+.device-menu--right {
+  right: 0;
+}
+
+.device-menu__empty {
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.device-menu__item {
+  text-align: left;
+  border: none;
+  background: transparent;
+  color: var(--color-text-secondary);
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.device-menu__item:hover {
+  background: var(--color-bg-elevated-hover);
+  color: var(--color-text-primary);
+}
+
+.device-menu__item--selected {
+  color: var(--color-accent);
+  font-weight: 600;
+}

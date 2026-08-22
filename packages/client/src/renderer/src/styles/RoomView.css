@@ -1,0 +1,92 @@
+.room-view {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.room-view--empty {
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-muted);
+}
+
+.room-view__error {
+  margin: 12px 24px 0;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  background: rgba(242, 63, 66, 0.15);
+  color: var(--color-danger);
+  font-size: 13px;
+}
+
+.room-view__participants {
+  flex: 1;
+  display: grid;
+  gap: 16px;
+  padding: 24px;
+  min-height: 0;
+}
+
+.room-view__participant-tile {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  container-type: size;
+  background: var(--color-bg-elevated);
+  border-radius: var(--radius-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.room-view__avatar {
+  width: 45%;
+  max-width: 220px;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: var(--color-accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 18cqmin;
+  color: #ffffff;
+  box-shadow: 0 0 0 3px transparent;
+  transition: box-shadow 0.1s ease;
+}
+
+.room-view__avatar--speaking {
+  box-shadow: 0 0 0 3px var(--color-online);
+}
+
+/* Second layer: status overlay pinned over the tile, on top of the
+   avatar/video background — same premise as a real video-call tile
+   (name + mic state float over the media, not stacked below it). */
+.room-view__participant-status {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  background: rgba(0, 0, 0, 0.55);
+  font-size: 12px;
+  color: var(--color-text-primary);
+  max-width: calc(100% - 16px);
+}
+
+.room-view__participant-status span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.room-view__participant-status-icon {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+}

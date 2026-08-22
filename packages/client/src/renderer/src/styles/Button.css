@@ -1,0 +1,27 @@
+.button {
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 10px 16px;
+  font-size: 14px;
+  font-weight: 600;
+  transition: background-color 0.15s ease;
+}
+
+.button--primary {
+  background: var(--color-accent);
+  color: #ffffff;
+}
+
+.button--primary:hover {
+  background: var(--color-accent-hover);
+}
+
+.button--ghost {
+  background: transparent;
+  color: var(--color-text-secondary);
+}
+
+.button--ghost:hover {
+  background: var(--color-bg-elevated);
+  color: var(--color-text-primary);
+}

@@ -1,0 +1,31 @@
+{
+  "name": "concord",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:client": "npm run dev --workspace=@concord/client",
+    "dev:server": "npm run dev --workspace=@concord/server",
+    "build": "npm run build --workspaces --if-present",
+    "lint": "eslint ."
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.9.0",
+    "@typescript-eslint/eslint-plugin": "^8.5.0",
+    "@typescript-eslint/parser": "^8.5.0",
+    "eslint": "^9.9.0",
+    "eslint-config-prettier": "^9.1.0",
+    "eslint-plugin-react-hooks": "^5.1.0",
+    "globals": "^15.9.0",
+    "prettier": "^3.3.3",
+    "typescript": "^5.5.4"
+  },
+  "allowScripts": {
+    "electron@31.7.7": true,
+    "esbuild@0.28.2": true,
+    "esbuild@0.21.5": true
+  }
+}
