@@ -1,5 +1,6 @@
 appId: com.concord.app
 productName: Concord
+electronVersion: 31.7.7
 directories:
   output: ../../release
 files:
