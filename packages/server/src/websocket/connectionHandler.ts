@@ -1,5 +1,12 @@
 import type { WebSocket } from 'ws';
 import type { ClientToServerMessage } from '@concord/shared';
+import {
+  handleCandidateConfirm,
+  handleDisconnect,
+  handleHeartbeat,
+  joinRoom,
+  relay
+} from '../rooms/roomManager.js';
 
 export function handleConnection(socket: WebSocket): void {
   socket.on('message', (raw) => {
@@ -10,8 +17,23 @@ export function handleConnection(socket: WebSocket): void {
       return;
     }
 
-    // Signaling protocol (SDP/ICE relay, host election) is not wired yet —
-    // this is the entry point where each message type will be dispatched.
-    void message;
+    switch (message.type) {
+      case 'join-room':
+        joinRoom(socket, message.roomId);
+        break;
+      case 'sdp-offer':
+      case 'sdp-answer':
+      case 'ice-candidate':
+        relay(socket, message);
+        break;
+      case 'host-heartbeat':
+        handleHeartbeat(socket, message.roomId, message.epoch);
+        break;
+      case 'host-candidate-confirm':
+        handleCandidateConfirm(socket, message.roomId, message.epoch);
+        break;
+    }
   });
+
+  socket.on('close', () => handleDisconnect(socket));
 }
