@@ -20,6 +20,10 @@ export default function ServerListPage({ onActiveServerChange }: ServerListPageP
   // against a threshold, per the "Detecção de atividade de voz" stack decision.
   // Slowed down (~4s) so the effect is easy to observe during manual testing.
   const [isSpeaking, setIsSpeaking] = useState(false);
+  // Same mock debt as isSpeaking above: real latency will come from the signaling
+  // connection (RTT of the host-heartbeat round trip) once it exists. Cycles through
+  // all three bands so the color-coding is visible without real network data.
+  const [latencyMs, setLatencyMs] = useState(80);
 
   const selectedServer = mockServers.find((server) => server.id === selectedServerId)!;
   const rooms = mockRoomsByServer[selectedServerId] ?? [];
@@ -32,6 +36,17 @@ export default function ServerListPage({ onActiveServerChange }: ServerListPageP
   useEffect(() => {
     if (!selectedRoomId) return;
     const interval = setInterval(() => setIsSpeaking((prev) => !prev), 4000);
+    return () => clearInterval(interval);
+  }, [selectedRoomId]);
+
+  useEffect(() => {
+    if (!selectedRoomId) return;
+    const bandsMs = [80, 175, 230];
+    let index = 0;
+    const interval = setInterval(() => {
+      index = (index + 1) % bandsMs.length;
+      setLatencyMs(bandsMs[index]);
+    }, 3000);
     return () => clearInterval(interval);
   }, [selectedRoomId]);
 
@@ -58,6 +73,10 @@ export default function ServerListPage({ onActiveServerChange }: ServerListPageP
     });
   }
 
+  function handleLeave() {
+    setSelectedRoomId(null);
+  }
+
   return (
     <div className="server-list-page">
       <ServerRail
@@ -76,6 +95,8 @@ export default function ServerListPage({ onActiveServerChange }: ServerListPageP
         onToggleMic={handleToggleMic}
         onToggleDeafen={handleToggleDeafen}
         isSpeaking={isSpeaking && !isMicMuted}
+        latencyMs={latencyMs}
+        onLeave={handleLeave}
       />
 
       <div className="server-list-page__main">
@@ -85,7 +106,7 @@ export default function ServerListPage({ onActiveServerChange }: ServerListPageP
           isMicMuted={isMicMuted}
           onToggleMic={handleToggleMic}
           isSpeaking={isSpeaking}
-          onLeave={() => setSelectedRoomId(null)}
+          onLeave={handleLeave}
         />
       </div>
     </div>

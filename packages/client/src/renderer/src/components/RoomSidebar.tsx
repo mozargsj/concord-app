@@ -1,5 +1,7 @@
 import type { RoomSummary, ServerSummary } from '@concord/shared';
 import UserPanel from './UserPanel';
+import VoiceConnectionStatus from './VoiceConnectionStatus';
+import HostStarBadge from './HostStarBadge';
 import chevronDownIcon from '../assets/icons/chevron-down.svg';
 import userPlusIcon from '../assets/icons/user-plus.svg';
 import plusIcon from '../assets/icons/plus.svg';
@@ -18,6 +20,8 @@ interface RoomSidebarProps {
   onToggleMic: () => void;
   onToggleDeafen: () => void;
   isSpeaking: boolean;
+  latencyMs: number;
+  onLeave: () => void;
 }
 
 export default function RoomSidebar({
@@ -29,8 +33,11 @@ export default function RoomSidebar({
   isDeafened,
   onToggleMic,
   onToggleDeafen,
-  isSpeaking
+  isSpeaking,
+  latencyMs,
+  onLeave
 }: RoomSidebarProps) {
+  const selectedRoom = rooms.find((room) => room.id === selectedRoomId) ?? null;
   return (
     <aside className="room-sidebar">
       <header className="room-sidebar__header">
@@ -76,6 +83,7 @@ export default function RoomSidebar({
                 <div className="room-sidebar__participants">
                   {participants.map((name, participantIndex) => {
                     const isSelf = isJoined && participantIndex === 0;
+                    const isHost = participantIndex === 0; // host = primeiro peer a conectar
                     return (
                       <div key={name} className="room-sidebar__participant">
                         <span
@@ -88,6 +96,7 @@ export default function RoomSidebar({
                           {name.charAt(0)}
                         </span>
                         <span className="room-sidebar__participant-name">{name}</span>
+                        {isHost && <HostStarBadge className="room-sidebar__host-star" />}
                       </div>
                     );
                   })}
@@ -97,6 +106,15 @@ export default function RoomSidebar({
           );
         })}
       </div>
+
+      {selectedRoom && (
+        <VoiceConnectionStatus
+          serverName={server.name}
+          roomName={selectedRoom.name}
+          latencyMs={latencyMs}
+          onLeave={onLeave}
+        />
+      )}
 
       <UserPanel
         isMicMuted={isMicMuted}

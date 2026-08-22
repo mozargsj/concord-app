@@ -6,6 +6,7 @@ import closeIcon from '../assets/icons/window-close.svg';
 import CallControls from './CallControls';
 import ScreenSharePicker from './ScreenSharePicker';
 import MediaStreamVideo from './MediaStreamVideo';
+import HostStarBadge from './HostStarBadge';
 import { mockCurrentUser, mockParticipantsByRoom } from '../fixtures/mockData';
 import { getAvatarColor } from '../lib/avatarColor';
 import { getGridContainerStyle, getGridItemStyle } from '../lib/participantGrid';
@@ -188,10 +189,20 @@ export default function RoomView({ room, isMicMuted, onToggleMic, isSpeaking, on
               </div>
             );
 
+          const isHost = tile.kind === 'participant' && index === 0; // host = primeiro peer a conectar
+
           const status = (
             <div className="room-view__participant-status">
               {muted && <img src={micOffIcon} alt="" className="room-view__participant-status-icon" />}
               <span>{tile.name}</span>
+              {isHost && <HostStarBadge className="room-view__host-star" />}
+            </div>
+          );
+
+          const liveIndicator = tile.kind === 'screen' && (
+            <div className="room-view__live-indicator" title="Transmitindo">
+              <span className="room-view__live-dot" />
+              AO VIVO
             </div>
           );
 
@@ -222,11 +233,13 @@ export default function RoomView({ room, isMicMuted, onToggleMic, isSpeaking, on
                   >
                     <img src={closeIcon} alt="" />
                   </button>
+                  {liveIndicator}
                   {status}
                 </div>
               ) : (
                 <>
                   {media}
+                  {liveIndicator}
                   {status}
                 </>
               )}

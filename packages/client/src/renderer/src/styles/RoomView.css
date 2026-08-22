@@ -128,6 +128,44 @@
   }
 }
 
+/* "Recording"-style live indicator on any tile that's actively transmitting
+   (screen share) — blinking red dot, same visual language as OBS/streaming
+   software, so it reads as "this is going out live" at a glance. */
+.room-view__live-indicator {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 21;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  background: rgba(0, 0, 0, 0.55);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--color-danger);
+}
+
+.room-view__live-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-danger);
+  animation: room-view-live-blink 1.2s ease-in-out infinite;
+}
+
+@keyframes room-view-live-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.25;
+  }
+}
+
 /* Second layer: status overlay pinned over the tile, on top of the
    avatar/video background — same premise as a real video-call tile
    (name + mic state float over the media, not stacked below it). */
@@ -156,4 +194,11 @@
   width: 13px;
   height: 13px;
   flex-shrink: 0;
+}
+
+.room-view__host-star {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+  color: var(--color-warning);
 }
