@@ -18,6 +18,8 @@ export interface GoogleLoginResult {
   avatarImageUrl?: string;
 }
 
+export type UpdateStatus = 'checking' | 'updating' | 'done';
+
 declare global {
   interface Window {
     concord: {
@@ -44,6 +46,7 @@ declare global {
         onBeforeQuit: (callback: () => void) => () => void;
         onConfirmCloseRequest: (callback: () => void) => () => void;
         respondToCloseConfirmation: (confirmed: boolean) => void;
+        onUpdateStatus: (callback: (status: UpdateStatus) => void) => () => void;
       };
     };
   }

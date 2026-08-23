@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Minus, Square, X } from 'lucide-react';
 import logo from '../assets/images/logo.png';
+import DonateModal from './DonateModal';
 import '../styles/TitleBar.css';
 
 interface TitleBarProps {
@@ -9,19 +10,27 @@ interface TitleBarProps {
 
 export default function TitleBar({ title }: TitleBarProps) {
   const [isMaximized, setIsMaximized] = useState(false);
+  const [isDonateOpen, setIsDonateOpen] = useState(false);
 
   useEffect(() => {
     return window.concord?.windowControls.onMaximizedChange(setIsMaximized);
   }, []);
 
   return (
-    <header className="title-bar">
+    <>
+      <header className="title-bar">
       <div className="title-bar__center">
         <img src={logo} alt="" className="title-bar__logo" />
         <span className="title-bar__title">{title}</span>
       </div>
 
       <div className="title-bar__actions">
+        <button className="title-bar__donate" onClick={() => setIsDonateOpen(true)}>
+          DONATE
+        </button>
+
+        <div className="title-bar__divider" />
+
         <button
           className="title-bar__window-button"
           title="Minimizar"
@@ -44,6 +53,9 @@ export default function TitleBar({ title }: TitleBarProps) {
           <X size={14} />
         </button>
       </div>
-    </header>
+      </header>
+
+      {isDonateOpen && <DonateModal onClose={() => setIsDonateOpen(false)} />}
+    </>
   );
 }

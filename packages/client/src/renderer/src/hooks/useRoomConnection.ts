@@ -4,6 +4,14 @@ import { SignalingClient, type SignalingStatus } from '../lib/signalingClient';
 import { MeshManager } from '../lib/webrtcMesh';
 import { getPreferredDeviceId } from '../lib/devicePreferences';
 import { playDeviceSwitch, playRoomJoin } from '../lib/soundEffects';
+import { TEST_OFFLINE } from '../lib/api';
+
+const MIC_CONSTRAINTS = (preferredDeviceId: string | null): MediaTrackConstraints => ({
+  echoCancellation: true,
+  noiseSuppression: true,
+  autoGainControl: true,
+  ...(preferredDeviceId ? { deviceId: { exact: preferredDeviceId } } : {})
+});
 
 const PING_INTERVAL_MS = 4000;
 
@@ -52,6 +60,61 @@ export function useRoomConnection(roomId: string | null, displayName: string, is
     }
 
     let cancelled = false;
+
+    // [MODO TESTE OFFLINE — TEMPORÁRIO] Sem WebSocket real nenhum — simula "conectado e sozinho
+    // na sala" na hora, sem depender de nenhum servidor (nem local nem produção). Câmera/mic/
+    // detecção de fala continuam reais (getUserMedia + AnalyserNode são 100% locais); só não tem
+    // ninguém pra mandar/receber mídia de verdade, já que não existe conexão de sinalização pra
+    // descobrir outro peer.
+    if (TEST_OFFLINE) {
+      const mesh = new MeshManager({
+        send: () => {},
+        onRemoteStreamsChange: () => {},
+        onSpeakingChange: () => {},
+        onLocalSpeakingChange: (isSpeaking) => {
+          setState((prev) => ({ ...prev, selfIsSpeaking: isSpeaking }));
+        }
+      });
+      meshRef.current = mesh;
+
+      const selfPeerId = 'offline-self';
+      setState((prev) => ({
+        ...prev,
+        connectionStatus: 'connected',
+        selfPeerId,
+        hostPeerId: selfPeerId,
+        peers: [],
+        latencyMs: 0
+      }));
+
+      let localMicStream: MediaStream | null = null;
+      const preferredMic = getPreferredDeviceId('audioinput');
+      navigator.mediaDevices
+        .getUserMedia({ audio: MIC_CONSTRAINTS(preferredMic) })
+        .then((stream) => {
+          if (cancelled) {
+            stream.getTracks().forEach((track) => track.stop());
+            return;
+          }
+          localMicStream = stream;
+          micStreamRef.current = stream;
+          const track = stream.getAudioTracks()[0] ?? null;
+          if (track) track.enabled = !isMicMuted;
+          mesh.setLocalMicTrack(track);
+        })
+        .catch(() => {
+          // No mic available/denied — proceed without local audio (video-only participation).
+        });
+
+      return () => {
+        cancelled = true;
+        mesh.closeAll();
+        localMicStream?.getTracks().forEach((track) => track.stop());
+        micStreamRef.current = null;
+        meshRef.current = null;
+      };
+    }
+
     const signaling = new SignalingClient();
     signalingRef.current = signaling;
     const pendingPings = new Map<string, number>();
@@ -162,14 +225,7 @@ export function useRoomConnection(roomId: string | null, displayName: string, is
     let localMicStream: MediaStream | null = null;
     const preferredMic = getPreferredDeviceId('audioinput');
     navigator.mediaDevices
-      .getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-          ...(preferredMic ? { deviceId: { exact: preferredMic } } : {})
-        }
-      })
+      .getUserMedia({ audio: MIC_CONSTRAINTS(preferredMic) })
       .then((stream) => {
         if (cancelled) {
           stream.getTracks().forEach((track) => track.stop());
@@ -228,14 +284,7 @@ export function useRoomConnection(roomId: string | null, displayName: string, is
     const mesh = meshRef.current;
     if (!mesh) return;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-          deviceId: { exact: deviceId }
-        }
-      });
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: MIC_CONSTRAINTS(deviceId) });
       const newTrack = stream.getAudioTracks()[0] ?? null;
       if (!newTrack) return;
       newTrack.enabled = !isMicMuted;

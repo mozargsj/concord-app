@@ -1,3 +1,7 @@
+# Test builds (npm run package:test-dev / package:test-offline) override productName/appId to
+# "ConcordTest"/com.concord.app.test via electron-builder's --config.<path>=<value> CLI flag —
+# keeps a test install from colliding with a real one on the same machine (separate install
+# dir, Start Menu shortcut, and uninstall registry entry, since NSIS derives those from appId).
 appId: com.concord.app
 productName: Concord
 electronVersion: 31.7.7
@@ -13,3 +17,10 @@ win:
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
+# Reuses the signaling server's own domain (already trusted, already TLS via Cloudflare) as a
+# static file host for update artifacts, instead of standing up a new public S3 bucket —
+# concord-server-icons is deliberately fully private (server icons/avatars), not meant to also
+# serve public release files. Server side: GET /updates/* in packages/server/src/http/router.ts.
+publish:
+  provider: generic
+  url: https://signaling.undersoft.tec.br/updates/

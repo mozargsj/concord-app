@@ -43,6 +43,11 @@ export class ApiError extends Error {
  */
 export const TEST_MODE = import.meta.env.VITE_TEST_MODE === 'true';
 
+// [MODO TESTE OFFLINE — TEMPORÁRIO] Sub-flag do modo teste — além da conta/servidor/sala serem
+// fake, a sinalização (WebSocket) também vira fake, sem nenhuma dependência de servidor (nem
+// local nem produção). Ver useRoomConnection.ts. Só faz sentido com TEST_MODE=true.
+export const TEST_OFFLINE = import.meta.env.VITE_TEST_OFFLINE === 'true';
+
 interface TestModeState {
   user: UserProfile | null;
   server: ServerSummary | null;

@@ -3,6 +3,7 @@ import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, safeStorage } fro
 import { readFile, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { loginWithGoogle } from './googleAuth';
+import { checkForUpdatesOnStartup } from './autoUpdate';
 
 const sessionFilePath = () => path.join(app.getPath('userData'), 'session.enc');
 
@@ -75,6 +76,13 @@ function createMainWindow(): void {
 
   window.on('maximize', () => window.webContents.send('window:maximized-change', true));
   window.on('unmaximize', () => window.webContents.send('window:maximized-change', false));
+
+  // Waits for the page's own script (and its onUpdateStatus listener) to be ready before
+  // sending anything — checkForUpdatesOnStartup's status events would otherwise risk arriving
+  // before the renderer is listening for them.
+  window.webContents.once('did-finish-load', () => {
+    checkForUpdatesOnStartup(window, isDev);
+  });
 
   if (isDev) {
     window.loadURL('http://localhost:5173');

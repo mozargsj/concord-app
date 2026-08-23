@@ -8,9 +8,11 @@ import RoomView from '../components/RoomView';
 import ServerActionsModal from '../components/ServerActionsModal';
 import InviteCodeModal from '../components/InviteCodeModal';
 import ScreenSharePicker from '../components/ScreenSharePicker';
+import LoadingSpinner from '../components/LoadingSpinner';
 import ProfilePage from './ProfilePage';
 import {
   ApiError,
+  TEST_MODE,
   createInvite,
   createRoom,
   deleteRoom,
@@ -23,6 +25,7 @@ import { useRoomConnection } from '../hooks/useRoomConnection';
 import { getPreferredDeviceId } from '../lib/devicePreferences';
 import {
   playCameraStart,
+  playRoomJoin,
   playTransmissionEnter,
   playTransmissionExit,
   setDeafened as setSoundsDeafened
@@ -245,6 +248,15 @@ export default function ServerListPage({
     setSelectedRoomId(null);
   }
 
+  // [MODO TESTE — TEMPORÁRIO] Fora do modo teste, esse som só toca via peer-joined real (a
+  // sinalização confirmando que outra pessoa entrou) — sozinho numa sala nunca dá pra ouvir.
+  // Em teste, dispara também ao clicar pra entrar, sem esperar validação real do servidor, só
+  // pra dar pra conferir o som sem precisar de uma segunda janela/peer.
+  function handleSelectRoom(roomId: string) {
+    setSelectedRoomId(roomId);
+    if (TEST_MODE) playRoomJoin();
+  }
+
   function handleServerCreated(server: ServerSummary) {
     setServerActionsMode(null);
     onCurrentUserChange({ ...currentUser, ownedServerId: server.id });
@@ -298,7 +310,11 @@ export default function ServerListPage({
   }
 
   if (myServers === null) {
-    return <div className="server-list-page server-list-page--loading" />;
+    return (
+      <div className="server-list-page server-list-page--loading">
+        <LoadingSpinner />
+      </div>
+    );
   }
 
   const hasOwnServer = currentUser.ownedServerId !== null;
@@ -343,7 +359,11 @@ export default function ServerListPage({
   }
 
   if (!selectedServerId || !selectedServer) {
-    return <div className="server-list-page server-list-page--loading" />;
+    return (
+      <div className="server-list-page server-list-page--loading">
+        <LoadingSpinner />
+      </div>
+    );
   }
 
   const selectedRoom = rooms.find((room) => room.id === selectedRoomId) ?? null;
@@ -366,7 +386,7 @@ export default function ServerListPage({
         myRole={myRole}
         rooms={rooms}
         selectedRoomId={selectedRoomId}
-        onSelectRoom={setSelectedRoomId}
+        onSelectRoom={handleSelectRoom}
         onCreateRoom={handleCreateRoom}
         onRenameRoom={handleRenameRoom}
         onDeleteRoom={handleDeleteRoom}

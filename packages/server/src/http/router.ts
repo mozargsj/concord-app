@@ -1,4 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { createReadStream, existsSync, statSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import type {
   ApiErrorResponse,
   CreateInviteResponse,
@@ -39,6 +41,30 @@ const CORS_HEADERS = {
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { 'Content-Type': 'application/json', ...CORS_HEADERS });
   res.end(JSON.stringify(body));
+}
+
+// Static file host for auto-update artifacts (latest.yml, the NSIS installer, .blockmap) —
+// electron-updater's "generic" provider just does plain HTTPS GET requests. Reuses this
+// server's own already-trusted domain instead of a new public S3 bucket (concord-server-icons
+// is deliberately fully private). Files are uploaded to this directory manually/via SSM at
+// release time — no publish automation yet.
+const UPDATES_DIR = resolve(process.env.UPDATES_DIR ?? join(process.cwd(), 'updates'));
+
+function contentTypeForUpdateFile(filePath: string): string {
+  if (filePath.endsWith('.yml') || filePath.endsWith('.yaml')) return 'application/x-yaml';
+  return 'application/octet-stream';
+}
+
+function handleServeUpdateFile(req: IncomingMessage, res: ServerResponse, segments: string[]): void {
+  if (req.method !== 'GET' || segments.length < 2) return sendError(res, 404, 'not-found');
+
+  const filePath = resolve(join(UPDATES_DIR, ...segments.slice(1)));
+  if (!filePath.startsWith(UPDATES_DIR) || !existsSync(filePath) || !statSync(filePath).isFile()) {
+    return sendError(res, 404, 'not-found');
+  }
+
+  res.writeHead(200, { 'Content-Type': contentTypeForUpdateFile(filePath), ...CORS_HEADERS });
+  createReadStream(filePath).pipe(res);
 }
 
 function sendError(res: ServerResponse, status: number, error: string): void {
@@ -144,6 +170,10 @@ export async function handleHttpRequest(req: IncomingMessage, res: ServerRespons
   }
 
   try {
+    if (segments[0] === 'updates') {
+      handleServeUpdateFile(req, res, segments);
+      return;
+    }
     if (method === 'POST' && segments.length === 1 && segments[0] === 'users') {
       await handleLogin(req, res);
       return;

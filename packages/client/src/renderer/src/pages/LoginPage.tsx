@@ -1,8 +1,9 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import type { UserProfile } from '@concord/shared';
 import Button from '../components/Button';
 import logo from '../assets/images/logo.png';
 import { TEST_MODE, login } from '../lib/api';
+import { clearStoredTestIdentity, getStoredTestIdentity, setStoredTestIdentity } from '../lib/testIdentity';
 import '../styles/LoginPage.css';
 
 interface LoginPageProps {
@@ -14,6 +15,7 @@ export default function LoginPage({ onContinue }: LoginPageProps) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [testEmail, setTestEmail] = useState('');
   const [testNickname, setTestNickname] = useState('');
+  const hasAutoLoggedIn = useRef(false);
 
   async function handleGoogleLogin() {
     setError(null);
@@ -32,17 +34,42 @@ export default function LoginPage({ onContinue }: LoginPageProps) {
   // [MODO TESTE — TEMPORÁRIO] Sem validação de propósito, é só pra navegar o app enquanto o
   // OAuth/backend real não estão testáveis ponta-a-ponta (bloqueio de AWS). Tirar junto com
   // VITE_TEST_MODE quando a versão estável (com AWS funcionando) chegar.
-  async function handleTestLogin(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!testEmail.trim() || !testNickname.trim()) return;
+  async function performTestLogin(email: string, nickname: string) {
     setError(null);
     setIsSubmitting(true);
     try {
-      const { user, sessionToken } = await login(testEmail.trim(), testNickname.trim());
+      const { user, sessionToken } = await login(email, nickname);
+      setStoredTestIdentity({ email, nickname });
       onContinue(user, sessionToken);
     } finally {
       setIsSubmitting(false);
     }
+  }
+
+  // Auto-login with whatever test identity was saved from a previous run — the whole point is
+  // not having to retype it every time the test build opens. Runs once; hasAutoLoggedIn guards
+  // against React 18 StrictMode's double-invoke of effects in dev re-running the login.
+  useEffect(() => {
+    if (!TEST_MODE || hasAutoLoggedIn.current) return;
+    const stored = getStoredTestIdentity();
+    if (!stored) return;
+    hasAutoLoggedIn.current = true;
+    setTestEmail(stored.email);
+    setTestNickname(stored.nickname);
+    void performTestLogin(stored.email, stored.nickname);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally only on mount
+  }, []);
+
+  function handleTestLogin(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!testEmail.trim() || !testNickname.trim()) return;
+    void performTestLogin(testEmail.trim(), testNickname.trim());
+  }
+
+  function handleForgetTestIdentity() {
+    clearStoredTestIdentity();
+    setTestEmail('');
+    setTestNickname('');
   }
 
   return (
@@ -71,6 +98,11 @@ export default function LoginPage({ onContinue }: LoginPageProps) {
             <Button className="login-page__google-button" type="submit" disabled={isSubmitting}>
               {isSubmitting ? 'Entrando…' : 'Entrar (teste)'}
             </Button>
+            {(testEmail || testNickname) && (
+              <button type="button" className="login-page__forget-test" onClick={handleForgetTestIdentity}>
+                Trocar conta de teste
+              </button>
+            )}
           </form>
         ) : (
           <Button className="login-page__google-button" onClick={handleGoogleLogin} disabled={isSubmitting}>

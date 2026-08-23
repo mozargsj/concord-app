@@ -1,0 +1,62 @@
+.donate-modal__backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+}
+
+.donate-modal {
+  width: 320px;
+  background: var(--color-bg-elevated);
+  border-radius: var(--radius-lg);
+  padding: 20px 24px 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+
+.donate-modal__header {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.donate-modal__header h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.donate-modal__close {
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: 20px;
+  line-height: 1;
+  border-radius: var(--radius-sm);
+  flex-shrink: 0;
+}
+
+.donate-modal__close:hover {
+  background: var(--color-bg-elevated-hover);
+  color: var(--color-text-primary);
+}
+
+.donate-modal__qrcode {
+  width: 100%;
+  border-radius: var(--radius-md);
+}
+
+.donate-modal__hint {
+  margin: 0;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  text-align: center;
+  line-height: 1.5;
+}

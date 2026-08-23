@@ -54,6 +54,19 @@
   color: var(--color-warning);
 }
 
+.login-page__forget-test {
+  border: none;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  text-decoration: underline;
+  align-self: center;
+}
+
+.login-page__forget-test:hover {
+  color: var(--color-text-primary);
+}
+
 .login-page__input {
   width: 100%;
   height: 40px;

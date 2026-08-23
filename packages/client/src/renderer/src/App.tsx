@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
 import type { UserProfile } from '@concord/shared';
+import type { UpdateStatus } from './types/window';
 import TitleBar from './components/TitleBar';
 import ConfirmModal from './components/ConfirmModal';
+import LoadingSpinner from './components/LoadingSpinner';
 import LoginPage from './pages/LoginPage';
 import ServerListPage from './pages/ServerListPage';
 import { getCurrentUser, setSessionToken } from './lib/api';
@@ -15,12 +17,22 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
   const [activeServerName, setActiveServerName] = useState('Concord');
   const [isCloseConfirmOpen, setIsCloseConfirmOpen] = useState(false);
+  // 'checking' at startup, every launch — no prompt either way: 'done' (nothing found, or an
+  // error) just falls through to the normal boot below; 'updating' means main is silently
+  // downloading and will relaunch on its own once ready (see main/autoUpdate.ts), so the normal
+  // session check is held off until then.
+  const [updateStatus, setUpdateStatus] = useState<UpdateStatus>('checking');
 
   useEffect(() => {
     return window.concord?.app.onConfirmCloseRequest(() => setIsCloseConfirmOpen(true));
   }, []);
 
   useEffect(() => {
+    return window.concord?.app.onUpdateStatus(setUpdateStatus);
+  }, []);
+
+  useEffect(() => {
+    if (updateStatus !== 'done') return;
     getStoredSessionToken().then((token) => {
       if (!token) {
         setView('login');
@@ -38,7 +50,7 @@ export default function App() {
           setView('login');
         });
     });
-  }, []);
+  }, [updateStatus]);
 
   function handleLoggedIn(user: UserProfile, sessionToken: string): void {
     setSessionToken(sessionToken);
@@ -51,7 +63,11 @@ export default function App() {
     <div className="app-shell">
       <TitleBar title={activeServerName} />
       <div className="app-shell__content">
-        {view === 'loading' && <div className="app-shell__loading" />}
+        {updateStatus === 'updating' ? (
+          <LoadingSpinner message="O Concord está sendo atualizado, aguarde..." />
+        ) : (
+          view === 'loading' && <LoadingSpinner />
+        )}
         {view === 'login' && <LoginPage onContinue={handleLoggedIn} />}
         {view === 'app' && currentUser && (
           <ServerListPage
