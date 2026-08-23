@@ -7,10 +7,9 @@ interface DeviceMenuProps {
   kind: DeviceKind;
   onSelect: (deviceId: string) => void;
   onClose: () => void;
-  align?: 'left' | 'right';
 }
 
-export default function DeviceMenu({ kind, onSelect, onClose, align = 'left' }: DeviceMenuProps) {
+export default function DeviceMenu({ kind, onSelect, onClose }: DeviceMenuProps) {
   const devices = useMediaDevices(kind);
   const selectedId = getPreferredDeviceId(kind);
 
@@ -23,7 +22,7 @@ export default function DeviceMenu({ kind, onSelect, onClose, align = 'left' }: 
   return (
     <>
       <div className="device-menu__backdrop" onClick={onClose} />
-      <div className={'device-menu device-menu--' + align}>
+      <div className="device-menu">
         {devices.length === 0 && <div className="device-menu__empty">Nenhum dispositivo encontrado</div>}
         {devices.map((device) => (
           <button

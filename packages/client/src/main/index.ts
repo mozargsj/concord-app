@@ -15,6 +15,36 @@ const IMAGE_MIME_TYPES: Record<string, string> = {
 
 const isDev = !app.isPackaged;
 
+// Single-instance lock — only enforced for the packaged app. Dev mode deliberately allows
+// multiple windows/processes: that's how two peers are tested locally (npm run dev:electron
+// run twice). Packaged Concord should never run as two processes; launching it again just
+// focuses the window that's already open instead of starting a redundant second instance.
+const hasSingleInstanceLock = isDev || app.requestSingleInstanceLock();
+if (!hasSingleInstanceLock) app.quit();
+
+// Best-effort window to let the renderer tear down an active call cleanly (stop mic/camera,
+// close the mesh + signaling socket) before the process actually exits — so other participants
+// see the disconnect right away instead of waiting for a TCP timeout. Not an ack round-trip on
+// purpose: track-stop/socket-close are effectively synchronous locally, a fixed short wait is
+// simpler than plumbing a renderer ack and covers it comfortably.
+const QUIT_CLEANUP_GRACE_MS = 400;
+
+// Native dialog.showMessageBox looks like generic OS chrome — this asks the renderer to show
+// a modal that matches the app's own design instead, and waits for the user's choice back.
+async function confirmAndClose(window: BrowserWindow, markConfirmed: () => void): Promise<void> {
+  const confirmed = await new Promise<boolean>((resolve) => {
+    ipcMain.once('app:confirm-close-response', (_event, value: boolean) => resolve(value));
+    window.webContents.send('app:confirm-close-request');
+  });
+  if (!confirmed) return;
+
+  window.webContents.send('app:before-quit');
+  await new Promise((resolve) => setTimeout(resolve, QUIT_CLEANUP_GRACE_MS));
+
+  markConfirmed();
+  window.close();
+}
+
 function createMainWindow(): void {
   const window = new BrowserWindow({
     width: 1280,
@@ -23,11 +53,24 @@ function createMainWindow(): void {
     minHeight: 600,
     frame: false,
     backgroundColor: '#1e1f22',
+    // Packaged builds get the icon embedded in the .exe by electron-builder (win.icon in
+    // electron-builder.yml) — build/icon.ico isn't bundled into resources, so only wire this
+    // up in dev, where the taskbar icon would otherwise default to Electron's own icon.
+    ...(isDev ? { icon: path.join(__dirname, '../../../build/icon.ico') } : {}),
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.js'),
       contextIsolation: true,
       nodeIntegration: false
     }
+  });
+
+  let isCloseConfirmed = false;
+  window.on('close', (event) => {
+    if (isCloseConfirmed) return;
+    event.preventDefault();
+    void confirmAndClose(window, () => {
+      isCloseConfirmed = true;
+    });
   });
 
   window.on('maximize', () => window.webContents.send('window:maximized-change', true));
@@ -115,18 +158,27 @@ ipcMain.handle('screen:get-sources', async () => {
   }));
 });
 
-app.whenReady().then(() => {
-  createMainWindow();
+if (hasSingleInstanceLock) {
+  app.on('second-instance', () => {
+    const [existingWindow] = BrowserWindow.getAllWindows();
+    if (!existingWindow) return;
+    if (existingWindow.isMinimized()) existingWindow.restore();
+    existingWindow.focus();
+  });
 
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createMainWindow();
+  app.whenReady().then(() => {
+    createMainWindow();
+
+    app.on('activate', () => {
+      if (BrowserWindow.getAllWindows().length === 0) {
+        createMainWindow();
+      }
+    });
+  });
+
+  app.on('window-all-closed', () => {
+    if (process.platform !== 'darwin') {
+      app.quit();
     }
   });
-});
-
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
-    app.quit();
-  }
-});
+}

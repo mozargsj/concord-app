@@ -74,15 +74,6 @@
   color: var(--color-text-primary);
 }
 
-.call-controls__chevron img {
-  width: 10px;
-  height: 10px;
-}
-
-.call-controls__button img {
-  width: 18px;
-  height: 18px;
-}
 
 .call-controls__hangup {
   width: 44px;
@@ -100,7 +91,3 @@
   background: #c0282b;
 }
 
-.call-controls__hangup img {
-  width: 18px;
-  height: 18px;
-}

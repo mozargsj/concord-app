@@ -4,6 +4,16 @@ import type { ClientToServerMessage } from '@concord/shared';
 // with real ICE-failure data from the alpha phase.
 const ICE_SERVERS: RTCIceServer[] = [{ urls: 'stun:stun.l.google.com:19302' }];
 
+// getStats() poll for the "está falando" indicator — RFC 6464 audioLevel, per decisions.md.
+const SPEAKING_POLL_INTERVAL_MS = 200;
+const SPEAKING_THRESHOLD = 0.05;
+const SPEAKING_DEBOUNCE_TICKS = 2; // consecutive ticks required before flipping state, avoids flicker
+
+interface SpeakingState {
+  isSpeaking: boolean;
+  consecutive: number;
+}
+
 type TrackRole = 'mic' | 'camera' | 'screenVideo' | 'screenAudio';
 
 interface PeerConnectionEntry {
@@ -23,6 +33,8 @@ interface MeshManagerOptions {
     peerId: string,
     streams: { personal: MediaStream | null; screen: MediaStream | null }
   ) => void;
+  onSpeakingChange: (peerId: string, isSpeaking: boolean) => void;
+  onLocalSpeakingChange: (isSpeaking: boolean) => void;
 }
 
 /**
@@ -40,8 +52,19 @@ export class MeshManager {
   private cameraTrack: MediaStreamTrack | null = null;
   private screenVideoTrack: MediaStreamTrack | null = null;
   private screenAudioTrack: MediaStreamTrack | null = null;
+  private speakingStateByPeer = new Map<string, SpeakingState>();
+  private localSpeakingState: SpeakingState = { isSpeaking: false, consecutive: 0 };
+  private speakingPollHandle: ReturnType<typeof setInterval>;
+  // Local level comes straight off the mic track via Web Audio, not getStats() on an
+  // RTCRtpSender — a sender only exists once there's an actual peer connection, which
+  // meant the local indicator silently never worked when alone in a room (no peers yet).
+  private audioContext: AudioContext | null = null;
+  private micAnalyser: AnalyserNode | null = null;
+  private micAnalyserSource: MediaStreamAudioSourceNode | null = null;
 
-  constructor(private opts: MeshManagerOptions) {}
+  constructor(private opts: MeshManagerOptions) {
+    this.speakingPollHandle = setInterval(() => void this.pollSpeaking(), SPEAKING_POLL_INTERVAL_MS);
+  }
 
   addExistingPeer(peerId: string): void {
     const entry = this.getOrCreateConnection(peerId);
@@ -89,6 +112,7 @@ export class MeshManager {
     if (!entry) return;
     entry.pc.close();
     this.connections.delete(peerId);
+    this.speakingStateByPeer.delete(peerId);
     this.opts.onRemoteStreamsChange(peerId, { personal: null, screen: null });
   }
 
@@ -99,6 +123,28 @@ export class MeshManager {
     for (const entry of this.connections.values()) {
       if (this.applyTrack(entry, 'mic', track, this.personalStream)) void this.renegotiate(entry);
     }
+    this.rewireMicAnalyser(track);
+  }
+
+  /** (Re)connects the local speaking-level analyser to whichever mic track is active — torn
+   * down and rebuilt on every device switch since a MediaStreamAudioSourceNode is tied to one
+   * specific track. */
+  private rewireMicAnalyser(track: MediaStreamTrack | null): void {
+    this.micAnalyserSource?.disconnect();
+    this.micAnalyserSource = null;
+
+    if (!track) return;
+
+    if (!this.audioContext) this.audioContext = new AudioContext();
+    void this.audioContext.resume().catch(() => {});
+
+    if (!this.micAnalyser) {
+      this.micAnalyser = this.audioContext.createAnalyser();
+      this.micAnalyser.fftSize = 512;
+    }
+
+    this.micAnalyserSource = this.audioContext.createMediaStreamSource(new MediaStream([track]));
+    this.micAnalyserSource.connect(this.micAnalyser);
   }
 
   setMicEnabled(enabled: boolean): void {
@@ -138,7 +184,13 @@ export class MeshManager {
   }
 
   closeAll(): void {
+    clearInterval(this.speakingPollHandle);
     for (const peerId of [...this.connections.keys()]) this.removePeer(peerId);
+    this.micAnalyserSource?.disconnect();
+    this.micAnalyserSource = null;
+    this.micAnalyser = null;
+    void this.audioContext?.close().catch(() => {});
+    this.audioContext = null;
   }
 
   private getOrCreateConnection(peerId: string): PeerConnectionEntry {
@@ -251,6 +303,57 @@ export class MeshManager {
       } catch {
         // stale/invalid candidate — safe to drop
       }
+    }
+  }
+
+  private async pollSpeaking(): Promise<void> {
+    for (const entry of this.connections.values()) {
+      try {
+        const stats = await entry.pc.getStats();
+        let level = 0;
+        stats.forEach((report: RTCStats & { kind?: string; audioLevel?: number }) => {
+          if (report.type === 'inbound-rtp' && report.kind === 'audio' && typeof report.audioLevel === 'number') {
+            level = Math.max(level, report.audioLevel);
+          }
+        });
+        let state = this.speakingStateByPeer.get(entry.peerId);
+        if (!state) {
+          state = { isSpeaking: false, consecutive: 0 };
+          this.speakingStateByPeer.set(entry.peerId, state);
+        }
+        this.applySpeakingLevel(state, level, (isSpeaking) => this.opts.onSpeakingChange(entry.peerId, isSpeaking));
+      } catch {
+        // transient stats failure — skip this tick
+      }
+    }
+
+    if (!this.micAnalyser) return;
+    // Byte time-domain samples, converted to linear RMS 0..1 — same scale as the RFC 6464
+    // audioLevel used for peers above, so both share SPEAKING_THRESHOLD.
+    const samples = new Uint8Array(this.micAnalyser.fftSize);
+    this.micAnalyser.getByteTimeDomainData(samples);
+    let sumSquares = 0;
+    for (let i = 0; i < samples.length; i++) {
+      const normalized = (samples[i] - 128) / 128;
+      sumSquares += normalized * normalized;
+    }
+    const level = Math.sqrt(sumSquares / samples.length);
+    this.applySpeakingLevel(this.localSpeakingState, level, (isSpeaking) =>
+      this.opts.onLocalSpeakingChange(isSpeaking)
+    );
+  }
+
+  private applySpeakingLevel(state: SpeakingState, level: number, onChange: (isSpeaking: boolean) => void): void {
+    const aboveThreshold = level > SPEAKING_THRESHOLD;
+    if (aboveThreshold === state.isSpeaking) {
+      state.consecutive = 0;
+      return;
+    }
+    state.consecutive += 1;
+    if (state.consecutive >= SPEAKING_DEBOUNCE_TICKS) {
+      state.isSpeaking = aboveThreshold;
+      state.consecutive = 0;
+      onChange(state.isSpeaking);
     }
   }
 

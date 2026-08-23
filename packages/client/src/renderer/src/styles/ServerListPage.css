@@ -11,40 +11,13 @@
   background: var(--color-bg-main);
 }
 
-.server-list-page--empty,
-.server-list-page--loading {
-  position: relative;
-}
-
 .server-list-page--loading {
   background: var(--color-bg-main);
 }
 
-.server-list-page__profile-corner {
-  position: absolute;
-  top: 16px;
-  right: 16px;
-  z-index: 10;
-  width: 40px;
-  height: 40px;
-  border: none;
-  border-radius: 50%;
-  background: var(--color-accent);
-  color: #ffffff;
-  font-weight: 700;
-  font-size: 15px;
-  display: flex;
+.server-list-page__main--empty {
   align-items: center;
   justify-content: center;
-  overflow: hidden;
-}
-
-.server-list-page__profile-corner img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.server-list-page__profile-corner:hover {
-  background: var(--color-accent-hover);
+  background: radial-gradient(circle at 50% 20%, #3a3d5c 0%, var(--color-bg-main) 70%);
+  color: var(--color-text-secondary);
 }

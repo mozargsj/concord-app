@@ -40,6 +40,11 @@ declare global {
         load: () => Promise<string | null>;
         clear: () => Promise<void>;
       };
+      app: {
+        onBeforeQuit: (callback: () => void) => () => void;
+        onConfirmCloseRequest: (callback: () => void) => () => void;
+        respondToCloseConfirmation: (confirmed: boolean) => void;
+      };
     };
   }
 }

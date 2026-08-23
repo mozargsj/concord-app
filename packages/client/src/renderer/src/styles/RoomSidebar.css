@@ -1,9 +1,96 @@
 .room-sidebar {
+  position: relative;
   width: 240px;
   flex-shrink: 0;
   background: var(--color-bg-sidebar);
   display: flex;
   flex-direction: column;
+}
+
+/* Voice status + user panel float over the channel list AND the server rail to its left,
+   instead of sharing the column's flex height with the channel list — both get the full
+   remaining height to scroll/lay out, same as Discord's own layout, instead of always
+   losing ~140px to these. Fixed (not absolute) + explicit width so it reaches past this
+   component's own box, over the rail: 72px rail + 240px sidebar (.server-rail,
+   .room-sidebar widths). */
+.room-sidebar__overlay {
+  position: fixed;
+  left: 0;
+  bottom: 0;
+  width: 312px;
+  /* Without an explicit value here, static-flow siblings like the channel/participant
+     list (room-sidebar__rooms) could still paint over this — and anything inside it,
+     like the device menu popup — depending on stacking-context specifics. */
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-bg-sidebar);
+}
+
+.room-sidebar__overlay::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 100%;
+  height: 16px;
+  background: linear-gradient(to bottom, transparent, var(--color-bg-sidebar));
+  pointer-events: none;
+}
+
+/* Single floating card — voice status, quick actions and the user panel all share this
+   one background/border, instead of each being its own separately-toned block. Same
+   background as the sidebar itself now, so the shadow (not a tone shift) is what reads
+   as "floating above" the channel list. */
+.room-sidebar__panel {
+  margin: 0 5px 5px;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-sidebar);
+  box-shadow:
+    0 8px 24px rgba(0, 0, 0, 0.6),
+    0 0 0 1px rgba(255, 255, 255, 0.12);
+  display: flex;
+  flex-direction: column;
+}
+
+.room-sidebar__quick-actions {
+  display: flex;
+  gap: 6px;
+  padding: 6px 8px 10px;
+}
+
+.room-sidebar__quick-action {
+  flex: 1;
+  height: 32px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.room-sidebar__quick-action:hover:not(:disabled) {
+  background: var(--color-bg-elevated-hover);
+}
+
+.room-sidebar__quick-action--off {
+  color: var(--color-text-secondary);
+}
+
+.room-sidebar__quick-action--active {
+  background: var(--color-accent);
+  color: #ffffff;
+}
+
+.room-sidebar__quick-action--active:hover:not(:disabled) {
+  background: var(--color-accent-hover);
+}
+
+.room-sidebar__quick-action:disabled {
+  opacity: 0.35;
+  cursor: default;
 }
 
 .room-sidebar__header {
@@ -33,14 +120,17 @@
 }
 
 .room-sidebar__chevron {
-  width: 12px;
-  height: 12px;
+  width: 24px;
+  height: 24px;
 }
 
 .room-sidebar__rooms {
   flex: 1;
   overflow-y: auto;
-  padding: 8px 8px 12px;
+  /* Bottom padding reserves room for the floating overlay (voice status card + quick-actions
+     row + user panel, ~180px combined) — without it, the last channels would scroll under
+     the overlay with no way to bring them back into view. */
+  padding: 8px 8px 188px;
   display: flex;
   flex-direction: column;
   gap: 1px;
@@ -65,14 +155,14 @@
 }
 
 .room-sidebar__category-chevron {
-  width: 10px;
-  height: 10px;
+  width: 18px;
+  height: 18px;
   opacity: 0.8;
 }
 
 .room-sidebar__icon-button {
-  width: 20px;
-  height: 20px;
+  width: 32px;
+  height: 32px;
   border: none;
   background: transparent;
   color: var(--color-text-secondary);
@@ -87,9 +177,61 @@
   color: var(--color-text-primary);
 }
 
-.room-sidebar__icon-button img {
-  width: 16px;
-  height: 16px;
+.room-sidebar__room-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.room-sidebar__room-row:hover .room-sidebar__room-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.room-sidebar__room-actions {
+  position: absolute;
+  right: 4px;
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.1s ease;
+  background: var(--color-bg-elevated-hover);
+  border-radius: var(--radius-sm);
+  padding: 2px;
+}
+
+.room-sidebar__room-action {
+  border: none;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  padding: 3px 6px;
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+}
+
+.room-sidebar__room-action:hover {
+  background: var(--color-bg-rail);
+  color: var(--color-text-primary);
+}
+
+.room-sidebar__room-input {
+  width: 100%;
+  height: 30px;
+  margin: 2px 0;
+  padding: 0 8px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-rail);
+  color: var(--color-text-primary);
+  font-size: 13px;
+  box-sizing: border-box;
+}
+
+.room-sidebar__room-input:focus {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
 }
 
 .room-sidebar__room {
@@ -195,9 +337,20 @@
   white-space: nowrap;
 }
 
+.room-sidebar__live-badge {
+  padding: 1px 5px;
+  font-size: 9px;
+  gap: 3px;
+}
+
+.room-sidebar__live-badge .live-badge__dot {
+  width: 6px;
+  height: 6px;
+}
+
 .room-sidebar__host-star {
-  width: 12px;
-  height: 12px;
+  width: 16px;
+  height: 16px;
   flex-shrink: 0;
   color: var(--color-warning);
 }

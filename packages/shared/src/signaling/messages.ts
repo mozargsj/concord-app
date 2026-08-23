@@ -40,13 +40,29 @@ export interface HostCandidateConfirmMessage {
   epoch: number;
 }
 
+/** Generic RTT probe, independent of host-heartbeat (which is only sent by the host, for migration timing) — every peer needs its own latency reading. */
+export interface PingMessage {
+  type: 'ping';
+  nonce: string;
+}
+
+export type DeviceKind = 'mic' | 'speaker';
+
+/** Device switches leave no observable trace for other peers (same track, or an invisible replaceTrack) — broadcast explicitly so everyone can play the notification sound. */
+export interface DeviceSwitchedMessage {
+  type: 'device-switched';
+  kind: DeviceKind;
+}
+
 export type ClientToServerMessage =
   | JoinRoomMessage
   | SdpOfferMessage
   | SdpAnswerMessage
   | IceCandidateMessage
   | HostHeartbeatMessage
-  | HostCandidateConfirmMessage;
+  | HostCandidateConfirmMessage
+  | PingMessage
+  | DeviceSwitchedMessage;
 
 /** Relayed to the target peer with the sender's id attached, since the client-to-server shape has no envelope. */
 export interface SdpOfferRelayMessage extends SdpOfferMessage {
@@ -102,6 +118,18 @@ export interface RoomClosedMessage {
   roomId: string;
 }
 
+export interface PongMessage {
+  type: 'pong';
+  nonce: string;
+}
+
+export interface PeerDeviceSwitchedMessage {
+  type: 'peer-device-switched';
+  roomId: string;
+  peerId: string;
+  kind: DeviceKind;
+}
+
 export type ServerToClientMessage =
   | RoomJoinedMessage
   | JoinRejectedMessage
@@ -112,4 +140,6 @@ export type ServerToClientMessage =
   | PeerLeftMessage
   | HostCandidateNotifyMessage
   | HostChangedMessage
-  | RoomClosedMessage;
+  | RoomClosedMessage
+  | PongMessage
+  | PeerDeviceSwitchedMessage;

@@ -86,11 +86,6 @@
   background: rgba(0, 0, 0, 0.8);
 }
 
-.room-view__focus-close img {
-  width: 14px;
-  height: 14px;
-}
-
 .room-view__avatar {
   width: 45%;
   max-width: 220px;
@@ -130,40 +125,13 @@
 
 /* "Recording"-style live indicator on any tile that's actively transmitting
    (screen share) — blinking red dot, same visual language as OBS/streaming
-   software, so it reads as "this is going out live" at a glance. */
-.room-view__live-indicator {
+   software, so it reads as "this is going out live" at a glance. Appearance
+   lives in LiveBadge.css; this just pins it to the tile corner. */
+.room-view__live-badge {
   position: absolute;
   top: 8px;
   left: 8px;
   z-index: 21;
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  padding: 3px 8px;
-  border-radius: var(--radius-sm);
-  background: rgba(0, 0, 0, 0.55);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  color: var(--color-danger);
-}
-
-.room-view__live-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--color-danger);
-  animation: room-view-live-blink 1.2s ease-in-out infinite;
-}
-
-@keyframes room-view-live-blink {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.25;
-  }
 }
 
 /* Second layer: status overlay pinned over the tile, on top of the
@@ -197,8 +165,8 @@
 }
 
 .room-view__host-star {
-  width: 13px;
-  height: 13px;
+  width: 16px;
+  height: 16px;
   flex-shrink: 0;
   color: var(--color-warning);
 }

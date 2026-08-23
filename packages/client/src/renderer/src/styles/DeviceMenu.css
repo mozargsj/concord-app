@@ -6,6 +6,7 @@
 
 .device-menu {
   position: absolute;
+  left: 0;
   bottom: calc(100% + 8px);
   min-width: 200px;
   max-width: 280px;
@@ -17,14 +18,6 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
-}
-
-.device-menu--left {
-  left: 0;
-}
-
-.device-menu--right {
-  right: 0;
 }
 
 .device-menu__empty {

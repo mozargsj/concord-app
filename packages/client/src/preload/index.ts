@@ -23,5 +23,20 @@ contextBridge.exposeInMainWorld('concord', {
     save: (token: string) => ipcRenderer.invoke('session:save', token),
     load: () => ipcRenderer.invoke('session:load'),
     clear: () => ipcRenderer.invoke('session:clear')
+  },
+  app: {
+    onBeforeQuit: (callback: () => void) => {
+      const listener = () => callback();
+      ipcRenderer.on('app:before-quit', listener);
+      return () => ipcRenderer.removeListener('app:before-quit', listener);
+    },
+    onConfirmCloseRequest: (callback: () => void) => {
+      const listener = () => callback();
+      ipcRenderer.on('app:confirm-close-request', listener);
+      return () => ipcRenderer.removeListener('app:confirm-close-request', listener);
+    },
+    respondToCloseConfirmation: (confirmed: boolean) => {
+      ipcRenderer.send('app:confirm-close-response', confirmed);
+    }
   }
 });

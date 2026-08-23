@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { UserProfile } from '@concord/shared';
 import TitleBar from './components/TitleBar';
+import ConfirmModal from './components/ConfirmModal';
 import LoginPage from './pages/LoginPage';
 import ServerListPage from './pages/ServerListPage';
 import { getCurrentUser, setSessionToken } from './lib/api';
@@ -13,6 +14,11 @@ export default function App() {
   const [view, setView] = useState<View>('loading');
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
   const [activeServerName, setActiveServerName] = useState('Concord');
+  const [isCloseConfirmOpen, setIsCloseConfirmOpen] = useState(false);
+
+  useEffect(() => {
+    return window.concord?.app.onConfirmCloseRequest(() => setIsCloseConfirmOpen(true));
+  }, []);
 
   useEffect(() => {
     getStoredSessionToken().then((token) => {
@@ -55,6 +61,22 @@ export default function App() {
           />
         )}
       </div>
+
+      {isCloseConfirmOpen && (
+        <ConfirmModal
+          title="Fechar Concord"
+          message="Tem certeza que deseja fechar o Concord? Isso encerra qualquer chamada em andamento."
+          confirmLabel="Fechar"
+          onCancel={() => {
+            window.concord?.app.respondToCloseConfirmation(false);
+            setIsCloseConfirmOpen(false);
+          }}
+          onConfirm={() => {
+            window.concord?.app.respondToCloseConfirmation(true);
+            setIsCloseConfirmOpen(false);
+          }}
+        />
+      )}
     </div>
   );
 }

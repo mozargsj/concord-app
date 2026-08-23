@@ -1,80 +1,102 @@
 import { useEffect, useRef, useState } from 'react';
 import type { RoomSummary } from '@concord/shared';
-import type { ScreenSource } from '../types/window';
 import type { RoomPeer } from '../hooks/useRoomConnection';
-import micOffIcon from '../assets/icons/mic-off.svg';
-import closeIcon from '../assets/icons/window-close.svg';
+import { MicOff, X } from 'lucide-react';
 import CallControls from './CallControls';
-import ScreenSharePicker from './ScreenSharePicker';
 import MediaStreamVideo from './MediaStreamVideo';
 import HostStarBadge from './HostStarBadge';
+import LiveBadge from './LiveBadge';
 import { getAvatarColor } from '../lib/avatarColor';
 import { getGridContainerStyle, getGridItemStyle } from '../lib/participantGrid';
-import { getPreferredDeviceId } from '../lib/devicePreferences';
+import { playCameraStart, playTransmissionEnter, playTransmissionExit } from '../lib/soundEffects';
 import '../styles/RoomView.css';
 
 interface RoomViewProps {
   room: RoomSummary | null;
   isMicMuted: boolean;
   onToggleMic: () => void;
+  onSelectMic: (deviceId: string) => void;
   isSpeaking: boolean;
   onLeave: () => void;
   isDeafened: boolean;
   selfPeerId: string | null;
   hostPeerId: string | null;
   peers: RoomPeer[];
-  setLocalCameraTrack: (track: MediaStreamTrack | null) => void;
-  setLocalScreenTrack: (stream: MediaStream | null) => void;
   currentUserDisplayName: string;
+  // Camera/screen capture is owned by ServerListPage (not this component) — RoomSidebar's
+  // quick-action row needs to toggle and reflect the same state, same "elevated to feed two
+  // places at once" pattern as selfIsSpeaking/latencyMs in useRoomConnection.
+  cameraStream: MediaStream | null;
+  screenStream: MediaStream | null;
+  mediaError: string | null;
+  onToggleCamera: () => void;
+  onSelectCamera: (deviceId: string) => void;
+  onToggleScreenShare: () => void;
 }
 
 type Tile =
-  | { kind: 'participant'; key: string; name: string; isSelf: boolean; isHost: boolean; stream: MediaStream | null }
+  | {
+      kind: 'participant';
+      key: string;
+      name: string;
+      isSelf: boolean;
+      isHost: boolean;
+      stream: MediaStream | null;
+      isSpeaking: boolean;
+    }
   | { kind: 'screen'; key: string; name: string; stream: MediaStream };
 
 export default function RoomView({
   room,
   isMicMuted,
   onToggleMic,
+  onSelectMic,
   isSpeaking,
   onLeave,
   isDeafened,
   selfPeerId,
   hostPeerId,
   peers,
-  setLocalCameraTrack,
-  setLocalScreenTrack,
-  currentUserDisplayName
+  currentUserDisplayName,
+  cameraStream,
+  screenStream,
+  mediaError,
+  onToggleCamera,
+  onSelectCamera,
+  onToggleScreenShare
 }: RoomViewProps) {
-  const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
-  const [screenStream, setScreenStream] = useState<MediaStream | null>(null);
-  const [isPickerOpen, setIsPickerOpen] = useState(false);
-  const [mediaError, setMediaError] = useState<string | null>(null);
   const [focusedTileKey, setFocusedTileKey] = useState<string | null>(null);
 
-  const cameraStreamRef = useRef<MediaStream | null>(null);
-  const screenStreamRef = useRef<MediaStream | null>(null);
+  const peerMediaRef = useRef<Map<string, { hasVideo: boolean; hasScreen: boolean }>>(new Map());
 
-  // Stop every local track on unmount / leaving the room — real local capture,
-  // never sent anywhere (no RTCPeerConnection yet), but the hardware indicator
-  // light must still turn off like it would for any other app.
+  // Sound cues for peers' camera/screen state changing — no protocol message needed, each
+  // client already observes the transition directly from the mesh's own stream state (works
+  // identically whether a peer just started sharing, or I just joined mid-transmission).
   useEffect(() => {
-    if (room) return;
-    cameraStreamRef.current?.getTracks().forEach((track) => track.stop());
-    screenStreamRef.current?.getTracks().forEach((track) => track.stop());
-    cameraStreamRef.current = null;
-    screenStreamRef.current = null;
-    setCameraStream(null);
-    setScreenStream(null);
-    setFocusedTileKey(null);
+    if (!room) return;
+    const previous = peerMediaRef.current;
+    const next = new Map<string, { hasVideo: boolean; hasScreen: boolean }>();
+
+    for (const peer of peers) {
+      const hasVideo = !!peer.personalStream && peer.personalStream.getVideoTracks().length > 0;
+      const hasScreen = !!peer.screenStream;
+      const prevState = previous.get(peer.peerId);
+
+      if (hasVideo && !prevState?.hasVideo) playCameraStart();
+      if (hasScreen && !prevState?.hasScreen) playTransmissionEnter();
+      if (!hasScreen && prevState?.hasScreen) playTransmissionExit();
+
+      next.set(peer.peerId, { hasVideo, hasScreen });
+    }
+
+    peerMediaRef.current = next;
+  }, [room, peers]);
+
+  // Camera/screen tracks themselves are stopped by ServerListPage (which owns them) — this
+  // just resets this component's own local UI state when the room goes away.
+  useEffect(() => {
+    if (!room) setFocusedTileKey(null);
   }, [room]);
-
-  useEffect(() => {
-    return () => {
-      cameraStreamRef.current?.getTracks().forEach((track) => track.stop());
-      screenStreamRef.current?.getTracks().forEach((track) => track.stop());
-    };
-  }, []);
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -89,83 +111,6 @@ export default function RoomView({
     if (focusedTileKey && focusedTileKey !== 'self-screen') return;
     if (focusedTileKey === 'self-screen' && !screenStream) setFocusedTileKey(null);
   }, [focusedTileKey, screenStream]);
-
-  async function startCamera(deviceId?: string) {
-    const preferred = deviceId ?? getPreferredDeviceId('videoinput') ?? undefined;
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: false,
-        video: preferred ? { deviceId: { exact: preferred } } : true
-      });
-      cameraStreamRef.current = stream;
-      setCameraStream(stream);
-      setMediaError(null);
-      setLocalCameraTrack(stream.getVideoTracks()[0] ?? null);
-    } catch (error) {
-      setMediaError(error instanceof Error ? error.message : 'Não foi possível acessar a câmera.');
-    }
-  }
-
-  async function handleToggleCamera() {
-    if (cameraStream) {
-      cameraStream.getTracks().forEach((track) => track.stop());
-      cameraStreamRef.current = null;
-      setCameraStream(null);
-      setLocalCameraTrack(null);
-      return;
-    }
-    await startCamera();
-  }
-
-  async function handleSelectCamera(deviceId: string) {
-    if (cameraStream) {
-      const previousStream = cameraStream;
-      // startCamera() below calls setLocalCameraTrack with the new track while the old
-      // sender is still attached — the mesh swaps it via replaceTrack (no renegotiation).
-      // Stopping the previous device only after that keeps a picture on screen the whole time.
-      await startCamera(deviceId);
-      previousStream.getTracks().forEach((track) => track.stop());
-    }
-  }
-
-  function handleToggleScreenShare() {
-    if (screenStream) {
-      screenStream.getTracks().forEach((track) => track.stop());
-      screenStreamRef.current = null;
-      setScreenStream(null);
-      setFocusedTileKey(null);
-      setLocalScreenTrack(null);
-      return;
-    }
-    setIsPickerOpen(true);
-  }
-
-  async function handlePickSource(source: ScreenSource, includeAudio: boolean) {
-    setIsPickerOpen(false);
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        // Electron's documented desktopCapturer pattern — legacy constraint
-        // shape is still how Chromium wires a specific screen/window id in.
-        // System-audio loopback via chromeMediaSource:'desktop' is Windows-only
-        // and only reliable for whole-screen sources, not individual windows.
-        audio: includeAudio ? ({ mandatory: { chromeMediaSource: 'desktop' } } as MediaTrackConstraints) : false,
-        video: {
-          mandatory: {
-            chromeMediaSource: 'desktop',
-            chromeMediaSourceId: source.id
-          }
-        } as MediaTrackConstraints
-      });
-      screenStreamRef.current = stream;
-      setScreenStream(stream);
-      setMediaError(null);
-      setLocalScreenTrack(stream);
-    } catch (error) {
-      setMediaError(
-        error instanceof Error ? error.message : 'Não foi possível capturar a tela escolhida.'
-      );
-    }
-  }
 
   if (!room) {
     return (
@@ -183,7 +128,8 @@ export default function RoomView({
       name: currentUserDisplayName,
       isSelf: true,
       isHost: isSelfHost,
-      stream: null
+      stream: null,
+      isSpeaking: isSpeaking && !isMicMuted
     },
     ...peers.map(
       (peer): Tile => ({
@@ -192,7 +138,8 @@ export default function RoomView({
         name: peer.displayName,
         isSelf: false,
         isHost: peer.peerId === hostPeerId,
-        stream: peer.personalStream
+        stream: peer.personalStream,
+        isSpeaking: peer.isSpeaking
       })
     )
   ];
@@ -221,7 +168,7 @@ export default function RoomView({
 
       <div className="room-view__participants" style={getGridContainerStyle(tiles.length)}>
         {tiles.map((tile, index) => {
-          const speaking = tile.kind === 'participant' && tile.isSelf && isSpeaking && !isMicMuted;
+          const speaking = tile.kind === 'participant' && tile.isSpeaking;
           const muted = tile.kind === 'participant' && tile.isSelf && isMicMuted;
           const showCamera = tile.kind === 'participant' && tile.isSelf && cameraStream;
           const remoteStream = tile.kind === 'participant' && !tile.isSelf ? tile.stream : null;
@@ -251,18 +198,13 @@ export default function RoomView({
 
           const status = (
             <div className="room-view__participant-status">
-              {muted && <img src={micOffIcon} alt="" className="room-view__participant-status-icon" />}
+              {muted && <MicOff size={13} className="room-view__participant-status-icon" />}
               <span>{tile.name}</span>
               {isHost && <HostStarBadge className="room-view__host-star" />}
             </div>
           );
 
-          const liveIndicator = tile.kind === 'screen' && (
-            <div className="room-view__live-indicator" title="Transmitindo">
-              <span className="room-view__live-dot" />
-              AO VIVO
-            </div>
-          );
+          const liveIndicator = tile.kind === 'screen' && <LiveBadge className="room-view__live-badge" />;
 
           return (
             <div
@@ -289,7 +231,7 @@ export default function RoomView({
                       setFocusedTileKey(null);
                     }}
                   >
-                    <img src={closeIcon} alt="" />
+                    <X size={14} />
                   </button>
                   {liveIndicator}
                   {status}
@@ -309,17 +251,14 @@ export default function RoomView({
       <CallControls
         isMicMuted={isMicMuted}
         onToggleMic={onToggleMic}
+        onSelectMic={onSelectMic}
         isCameraOn={!!cameraStream}
-        onToggleCamera={handleToggleCamera}
-        onSelectCamera={handleSelectCamera}
+        onToggleCamera={onToggleCamera}
+        onSelectCamera={onSelectCamera}
         isSharingScreen={!!screenStream}
-        onToggleScreenShare={handleToggleScreenShare}
+        onToggleScreenShare={onToggleScreenShare}
         onLeave={onLeave}
       />
-
-      {isPickerOpen && (
-        <ScreenSharePicker onSelect={handlePickSource} onClose={() => setIsPickerOpen(false)} />
-      )}
     </div>
   );
 }

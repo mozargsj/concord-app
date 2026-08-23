@@ -3,7 +3,8 @@ import { env, hasSessionSecret } from '../config/env.js';
 
 const SESSION_TTL = '90d';
 
-function secretKey(): Uint8Array {
+/** Shared HMAC key — also used to sign/verify invite tokens (auth/invite.ts), distinguished by the `typ` claim. */
+export function secretKey(): Uint8Array {
   if (!hasSessionSecret()) {
     throw new Error('Session token requested but SESSION_SECRET is not configured. Set SESSION_SECRET in packages/server/.env.');
   }

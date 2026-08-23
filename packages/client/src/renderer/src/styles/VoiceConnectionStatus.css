@@ -2,10 +2,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 10px;
-  margin: 0 8px;
-  border-radius: var(--radius-sm);
-  background: var(--color-bg-elevated);
+  padding: 10px 12px;
 }
 
 .voice-status__signal {
@@ -47,6 +44,13 @@
   text-overflow: ellipsis;
 }
 
+.voice-status__latency {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 700;
+  color: inherit;
+}
+
 .voice-status__hangup {
   width: 28px;
   height: 28px;
@@ -61,10 +65,7 @@
 }
 
 .voice-status__hangup:hover {
-  background: rgba(242, 63, 66, 0.18);
+  background: var(--color-danger);
+  color: #ffffff;
 }
 
-.voice-status__hangup img {
-  width: 16px;
-  height: 16px;
-}

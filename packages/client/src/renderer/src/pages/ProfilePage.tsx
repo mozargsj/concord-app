@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { UserProfile } from '@concord/shared';
 import Button from '../components/Button';
 import { updateProfile } from '../lib/api';
@@ -15,7 +15,14 @@ export default function ProfilePage({ user, onClose, onUserChange }: ProfilePage
   const [displayName, setDisplayName] = useState(user.displayName);
   const [isSavingName, setIsSavingName] = useState(false);
   const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+    };
+  }, [previewUrl]);
 
   async function handleSaveName() {
     const trimmed = displayName.trim();
@@ -36,7 +43,7 @@ export default function ProfilePage({ user, onClose, onUserChange }: ProfilePage
     setIsUploadingAvatar(true);
     setError(null);
     try {
-      const key = await pickAndUploadImage('user-avatar', user.id);
+      const key = await pickAndUploadImage('user-avatar', user.id, setPreviewUrl);
       if (!key) return;
       const updated = await updateProfile({ avatarKey: key });
       onUserChange(updated);
@@ -63,8 +70,8 @@ export default function ProfilePage({ user, onClose, onUserChange }: ProfilePage
           disabled={isUploadingAvatar}
           title="Alterar foto"
         >
-          {user.avatarUrl ? (
-            <img src={user.avatarUrl} alt="" className="profile-page__avatar-image" />
+          {previewUrl || user.avatarUrl ? (
+            <img src={previewUrl ?? user.avatarUrl ?? undefined} alt="" className="profile-page__avatar-image" />
           ) : (
             <span>{displayName.charAt(0).toUpperCase()}</span>
           )}

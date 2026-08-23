@@ -78,11 +78,6 @@
   background: var(--color-accent);
 }
 
-.server-rail__item--home {
-  background: var(--color-accent);
-  font-size: 20px;
-}
-
 .server-rail__badge {
   position: absolute;
   bottom: -4px;
@@ -99,12 +94,6 @@
   align-items: center;
   justify-content: center;
   color: #ffffff;
-}
-
-.server-rail__item--add img,
-.server-rail__item--explore img {
-  width: 20px;
-  height: 20px;
 }
 
 .server-rail__item-icon {

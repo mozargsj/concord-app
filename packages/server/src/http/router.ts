@@ -1,24 +1,38 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type {
   ApiErrorResponse,
+  CreateInviteResponse,
+  CreateRoomRequest,
   CreateServerRequest,
   CreateServerResponse,
+  JoinServerRequest,
   LoginRequest,
   LoginResponse,
   PresignUploadRequest,
   PresignUploadResponse,
+  RoomListResponse,
+  RoomResponse,
+  RoomSummary,
+  ServerDetailsResponse,
+  ServerListResponse,
   ServerSummary,
   UpdateProfileRequest,
+  UpdateRoomRequest,
   UserProfile
 } from '@concord/shared';
+import { Role, hasAtLeastRole } from '@concord/shared';
 import * as usersRepo from '../db/usersRepo.js';
 import * as serversRepo from '../db/serversRepo.js';
+import * as roomsRepo from '../db/roomsRepo.js';
+import * as rolesRepo from '../db/rolesRepo.js';
+import * as authorizedUsersRepo from '../db/authorizedUsersRepo.js';
 import { createPresignedGetUrl, createPresignedUploadUrl, putObject } from '../aws/s3Client.js';
 import { signSessionToken, verifySessionToken } from '../auth/session.js';
+import { signInviteToken, verifyInviteToken } from '../auth/invite.js';
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET,POST,PATCH,OPTIONS',
+  'Access-Control-Allow-Methods': 'GET,POST,PATCH,DELETE,OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type,Authorization'
 };
 
@@ -54,6 +68,30 @@ async function requireSession(req: IncomingMessage, res: ServerResponse): Promis
   return userId;
 }
 
+/** Owner is Role.Dono implicitly (not necessarily mirrored in concord_roles for pre-existing data); everyone else's rank comes from concord_roles. null = not a member at all. */
+async function getEffectiveRank(serverId: string, userId: string, ownerUserId: string): Promise<Role | null> {
+  if (userId === ownerUserId) return Role.Dono;
+  const rank = await rolesRepo.getRank(serverId, userId);
+  return (rank as Role | null) ?? null;
+}
+
+/** Combines requireSession with a minimum-rank check for a specific server. Sends 401/403 and returns null on failure. */
+async function requireRank(
+  req: IncomingMessage,
+  res: ServerResponse,
+  server: serversRepo.ServerRecord,
+  minRank: Role
+): Promise<string | null> {
+  const userId = await requireSession(req, res);
+  if (!userId) return null;
+  const rank = await getEffectiveRank(server.server_id, userId, server.owner_user_id);
+  if (rank === null || !hasAtLeastRole(rank, minRank)) {
+    sendError(res, 403, 'forbidden');
+    return null;
+  }
+  return userId;
+}
+
 async function toUserProfile(record: usersRepo.UserRecord): Promise<UserProfile> {
   return {
     id: record.user_id,
@@ -71,6 +109,11 @@ async function toServerSummary(record: serversRepo.ServerRecord): Promise<Server
     iconUrl: record.icon_key ? await createPresignedGetUrl(record.icon_key) : null,
     ownerUserId: record.owner_user_id
   };
+}
+
+function toRoomSummary(record: roomsRepo.RoomRecord): RoomSummary {
+  // Real-time member count is a signaling-server (WS) concern, not tracked in DynamoDB.
+  return { id: record.room_id, serverId: record.server_id, name: record.name, memberCount: 0, maxMembers: 10 };
 }
 
 /** Best-effort: downloads the Google profile picture and stores it under the new user's own avatar key. */
@@ -113,12 +156,51 @@ export async function handleHttpRequest(req: IncomingMessage, res: ServerRespons
       await handleUpdateMe(req, res);
       return;
     }
+    if (
+      method === 'GET' &&
+      segments.length === 3 &&
+      segments[0] === 'users' &&
+      segments[1] === 'me' &&
+      segments[2] === 'servers'
+    ) {
+      await handleListMyServers(req, res);
+      return;
+    }
     if (method === 'POST' && segments.length === 1 && segments[0] === 'servers') {
       await handleCreateServer(req, res);
       return;
     }
+    if (method === 'POST' && segments.length === 2 && segments[0] === 'servers' && segments[1] === 'join') {
+      await handleJoinServer(req, res);
+      return;
+    }
     if (method === 'GET' && segments.length === 2 && segments[0] === 'servers') {
       await handleGetServer(req, res, segments[1]);
+      return;
+    }
+    if (
+      method === 'POST' &&
+      segments.length === 3 &&
+      segments[0] === 'servers' &&
+      segments[2] === 'invites'
+    ) {
+      await handleCreateInvite(req, res, segments[1]);
+      return;
+    }
+    if (method === 'GET' && segments.length === 3 && segments[0] === 'servers' && segments[2] === 'rooms') {
+      await handleListRooms(req, res, segments[1]);
+      return;
+    }
+    if (method === 'POST' && segments.length === 3 && segments[0] === 'servers' && segments[2] === 'rooms') {
+      await handleCreateRoom(req, res, segments[1]);
+      return;
+    }
+    if (method === 'PATCH' && segments.length === 4 && segments[0] === 'servers' && segments[2] === 'rooms') {
+      await handleUpdateRoom(req, res, segments[1], segments[3]);
+      return;
+    }
+    if (method === 'DELETE' && segments.length === 4 && segments[0] === 'servers' && segments[2] === 'rooms') {
+      await handleDeleteRoom(req, res, segments[1], segments[3]);
       return;
     }
     if (method === 'POST' && segments.length === 2 && segments[0] === 'uploads' && segments[1] === 'presign') {
@@ -182,6 +264,19 @@ async function handleUpdateMe(req: IncomingMessage, res: ServerResponse): Promis
   sendJson(res, 200, { user: await toUserProfile(updated!) });
 }
 
+async function handleListMyServers(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const userId = await requireSession(req, res);
+  if (!userId) return;
+
+  const serverIds = await authorizedUsersRepo.listServerIdsForUser(userId);
+  const records = await Promise.all(serverIds.map((id) => serversRepo.findById(id)));
+  const servers = await Promise.all(
+    records.filter((record): record is serversRepo.ServerRecord => record !== null).map(toServerSummary)
+  );
+  const response: ServerListResponse = { servers };
+  sendJson(res, 200, response);
+}
+
 async function handleCreateServer(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const userId = await requireSession(req, res);
   if (!userId) return;
@@ -199,9 +294,35 @@ async function handleCreateServer(req: IncomingMessage, res: ServerResponse): Pr
 
   const record = await serversRepo.create({ name, iconKey: body?.iconKey ?? null, ownerUserId: userId });
   await usersRepo.setOwnedServer(userId, record.server_id);
+  await authorizedUsersRepo.authorize(record.server_id, userId);
+  await rolesRepo.setRank(record.server_id, userId, Role.Dono);
 
   const response: CreateServerResponse = { server: await toServerSummary(record) };
   sendJson(res, 201, response);
+}
+
+async function handleJoinServer(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const userId = await requireSession(req, res);
+  if (!userId) return;
+
+  const body = await readJsonBody<JoinServerRequest>(req);
+  const code = body?.code?.trim();
+  if (!code) return sendError(res, 400, 'code-required');
+
+  const serverId = await verifyInviteToken(code);
+  if (!serverId) return sendError(res, 400, 'invalid-code');
+
+  const server = await serversRepo.findById(serverId);
+  if (!server) return sendError(res, 404, 'server-not-found');
+
+  await authorizedUsersRepo.authorize(serverId, userId);
+  const existingRank = await rolesRepo.getRank(serverId, userId);
+  if (existingRank === null && server.owner_user_id !== userId) {
+    await rolesRepo.setRank(serverId, userId, Role.Usuario);
+  }
+
+  const response: CreateServerResponse = { server: await toServerSummary(server) };
+  sendJson(res, 200, response);
 }
 
 async function handleGetServer(req: IncomingMessage, res: ServerResponse, serverId: string): Promise<void> {
@@ -210,10 +331,88 @@ async function handleGetServer(req: IncomingMessage, res: ServerResponse, server
 
   const record = await serversRepo.findById(serverId);
   if (!record) return sendError(res, 404, 'server-not-found');
-  // No cross-server visibility yet (no invite/join flow) — only the owner may look up their own server.
-  if (record.owner_user_id !== userId) return sendError(res, 403, 'forbidden');
 
-  sendJson(res, 200, { server: await toServerSummary(record) });
+  const myRole = await getEffectiveRank(serverId, userId, record.owner_user_id);
+  if (myRole === null) return sendError(res, 403, 'forbidden');
+
+  const response: ServerDetailsResponse = { server: await toServerSummary(record), myRole };
+  sendJson(res, 200, response);
+}
+
+async function handleCreateInvite(req: IncomingMessage, res: ServerResponse, serverId: string): Promise<void> {
+  const server = await serversRepo.findById(serverId);
+  if (!server) return sendError(res, 404, 'server-not-found');
+  const userId = await requireRank(req, res, server, Role.Admin);
+  if (!userId) return;
+
+  const code = await signInviteToken(serverId);
+  const response: CreateInviteResponse = { code };
+  sendJson(res, 200, response);
+}
+
+async function handleListRooms(req: IncomingMessage, res: ServerResponse, serverId: string): Promise<void> {
+  const server = await serversRepo.findById(serverId);
+  if (!server) return sendError(res, 404, 'server-not-found');
+  const userId = await requireRank(req, res, server, Role.Usuario);
+  if (!userId) return;
+
+  const records = await roomsRepo.listByServer(serverId);
+  const response: RoomListResponse = { rooms: records.map(toRoomSummary) };
+  sendJson(res, 200, response);
+}
+
+async function handleCreateRoom(req: IncomingMessage, res: ServerResponse, serverId: string): Promise<void> {
+  const server = await serversRepo.findById(serverId);
+  if (!server) return sendError(res, 404, 'server-not-found');
+  const userId = await requireRank(req, res, server, Role.Dono);
+  if (!userId) return;
+
+  const body = await readJsonBody<CreateRoomRequest>(req);
+  const name = body?.name?.trim();
+  if (!name) return sendError(res, 400, 'name-required');
+
+  const record = await roomsRepo.create({ serverId, name });
+  const response: RoomResponse = { room: toRoomSummary(record) };
+  sendJson(res, 201, response);
+}
+
+async function handleUpdateRoom(
+  req: IncomingMessage,
+  res: ServerResponse,
+  serverId: string,
+  roomId: string
+): Promise<void> {
+  const server = await serversRepo.findById(serverId);
+  if (!server) return sendError(res, 404, 'server-not-found');
+  const userId = await requireRank(req, res, server, Role.Admin);
+  if (!userId) return;
+
+  const existing = await roomsRepo.findById(serverId, roomId);
+  if (!existing) return sendError(res, 404, 'room-not-found');
+
+  const body = await readJsonBody<UpdateRoomRequest>(req);
+  const name = body?.name?.trim();
+  if (!name) return sendError(res, 400, 'name-required');
+
+  await roomsRepo.updateName(serverId, roomId, name);
+  const updated = await roomsRepo.findById(serverId, roomId);
+  const response: RoomResponse = { room: toRoomSummary(updated!) };
+  sendJson(res, 200, response);
+}
+
+async function handleDeleteRoom(
+  req: IncomingMessage,
+  res: ServerResponse,
+  serverId: string,
+  roomId: string
+): Promise<void> {
+  const server = await serversRepo.findById(serverId);
+  if (!server) return sendError(res, 404, 'server-not-found');
+  const userId = await requireRank(req, res, server, Role.Dono);
+  if (!userId) return;
+
+  await roomsRepo.remove(serverId, roomId);
+  sendJson(res, 200, {});
 }
 
 async function handlePresignUpload(req: IncomingMessage, res: ServerResponse): Promise<void> {

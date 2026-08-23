@@ -2,6 +2,7 @@ import type { WebSocket } from 'ws';
 import type { ClientToServerMessage } from '@concord/shared';
 import {
   handleCandidateConfirm,
+  handleDeviceSwitched,
   handleDisconnect,
   handleHeartbeat,
   joinRoom,
@@ -31,6 +32,12 @@ export function handleConnection(socket: WebSocket): void {
         break;
       case 'host-candidate-confirm':
         handleCandidateConfirm(socket, message.roomId, message.epoch);
+        break;
+      case 'ping':
+        socket.send(JSON.stringify({ type: 'pong', nonce: message.nonce }));
+        break;
+      case 'device-switched':
+        handleDeviceSwitched(socket, message.kind);
         break;
     }
   });

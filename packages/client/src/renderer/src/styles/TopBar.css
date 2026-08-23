@@ -18,9 +18,8 @@
 }
 
 .top-bar__room-icon {
-  width: 18px;
-  height: 18px;
   color: var(--color-text-secondary);
+  flex-shrink: 0;
 }
 
 .top-bar__icon-button {
@@ -39,7 +38,3 @@
   color: var(--color-text-primary);
 }
 
-.top-bar__icon-button img {
-  width: 18px;
-  height: 18px;
-}

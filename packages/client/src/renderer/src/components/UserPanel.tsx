@@ -1,10 +1,5 @@
 import { useState } from 'react';
-import micIcon from '../assets/icons/mic.svg';
-import micOffIcon from '../assets/icons/mic-off.svg';
-import headphonesIcon from '../assets/icons/headphones.svg';
-import headphonesOffIcon from '../assets/icons/headphones-off.svg';
-import settingsIcon from '../assets/icons/settings.svg';
-import chevronDownIcon from '../assets/icons/chevron-down.svg';
+import { Mic, MicOff, Headphones, HeadphoneOff, Settings, ChevronDown } from 'lucide-react';
 import SettingsModal from './SettingsModal';
 import DeviceMenu from './DeviceMenu';
 import '../styles/UserPanel.css';
@@ -14,6 +9,8 @@ interface UserPanelProps {
   isDeafened: boolean;
   onToggleMic: () => void;
   onToggleDeafen: () => void;
+  onSelectMic: (deviceId: string) => void;
+  onSelectSpeaker: (deviceId: string) => void;
   displayName: string;
   avatarUrl: string | null;
   onOpenProfile: () => void;
@@ -24,6 +21,8 @@ export default function UserPanel({
   isDeafened,
   onToggleMic,
   onToggleDeafen,
+  onSelectMic,
+  onSelectSpeaker,
   displayName,
   avatarUrl,
   onOpenProfile
@@ -54,17 +53,17 @@ export default function UserPanel({
             title={isMicMuted ? 'Ativar microfone' : 'Mutar microfone'}
             onClick={onToggleMic}
           >
-            <img src={isMicMuted ? micOffIcon : micIcon} alt="" />
+            {isMicMuted ? <MicOff size={18} /> : <Mic size={18} />}
           </button>
           <button
             className="user-panel__device-chevron-button"
             title="Escolher microfone"
             onClick={() => setOpenMenu((prev) => (prev === 'mic' ? null : 'mic'))}
           >
-            <img src={chevronDownIcon} alt="" className="user-panel__device-chevron" />
+            <ChevronDown size={20} className="user-panel__device-chevron" />
           </button>
           {openMenu === 'mic' && (
-            <DeviceMenu kind="audioinput" onSelect={() => {}} onClose={() => setOpenMenu(null)} />
+            <DeviceMenu kind="audioinput" onSelect={onSelectMic} onClose={() => setOpenMenu(null)} />
           )}
         </div>
 
@@ -76,22 +75,21 @@ export default function UserPanel({
             title={isDeafened ? 'Reativar áudio' : 'Silenciar tudo'}
             onClick={onToggleDeafen}
           >
-            <img src={isDeafened ? headphonesOffIcon : headphonesIcon} alt="" />
+            {isDeafened ? <HeadphoneOff size={18} /> : <Headphones size={18} />}
           </button>
           <button
             className="user-panel__device-chevron-button"
             title="Escolher saída de áudio"
             onClick={() => setOpenMenu((prev) => (prev === 'speaker' ? null : 'speaker'))}
           >
-            <img src={chevronDownIcon} alt="" className="user-panel__device-chevron" />
+            <ChevronDown size={20} className="user-panel__device-chevron" />
           </button>
           {openMenu === 'speaker' && (
-            <DeviceMenu
-              kind="audiooutput"
-              onSelect={() => {}}
-              onClose={() => setOpenMenu(null)}
-              align="right"
-            />
+            // Left-aligned like the mic menu (not right) — this sits in the narrow sidebar,
+            // where opening rightward into the spacious main content area never clips against
+            // the window edge; opening leftward from a button already near the panel's right
+            // side does.
+            <DeviceMenu kind="audiooutput" onSelect={onSelectSpeaker} onClose={() => setOpenMenu(null)} />
           )}
         </div>
 
@@ -100,7 +98,7 @@ export default function UserPanel({
           title="Configurações"
           onClick={() => setIsSettingsOpen(true)}
         >
-          <img src={settingsIcon} alt="" />
+          <Settings size={18} />
         </button>
       </div>
 

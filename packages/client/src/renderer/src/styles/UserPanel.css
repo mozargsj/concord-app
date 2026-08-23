@@ -5,7 +5,8 @@
   align-items: center;
   gap: 8px;
   padding: 0 8px;
-  background: var(--color-bg-rail);
+  /* Background comes from the shared .room-sidebar__panel wrapper — same tone as the
+     voice status card and quick-actions row above it, not its own. */
 }
 
 .user-panel__identity {
@@ -22,7 +23,7 @@
 }
 
 .user-panel__identity:hover {
-  background: var(--color-bg-elevated);
+  background: var(--color-bg-elevated-hover);
 }
 
 .user-panel__avatar {
@@ -54,7 +55,7 @@
   height: 10px;
   border-radius: 50%;
   background: var(--color-online);
-  border: 2px solid var(--color-bg-rail);
+  border: 2px solid var(--color-bg-sidebar);
 }
 
 .user-panel__info {
@@ -67,6 +68,7 @@
 .user-panel__name {
   font-size: 13px;
   font-weight: 600;
+  color: #ffffff;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -110,29 +112,17 @@
 }
 
 .user-panel__device-chevron-button {
-  width: 14px;
+  width: 24px;
 }
 
 .user-panel__icon-button:hover,
 .user-panel__device-button:hover,
 .user-panel__device-chevron-button:hover {
-  background: var(--color-bg-elevated);
+  background: var(--color-bg-elevated-hover);
   color: var(--color-text-primary);
 }
 
-.user-panel__icon-button img {
-  width: 18px;
-  height: 18px;
-}
-
-.user-panel__device-button img {
-  width: 18px;
-  height: 18px;
-}
-
 .user-panel__device-chevron {
-  width: 10px;
-  height: 10px;
   opacity: 0.8;
 }
 

@@ -1,4 +1,8 @@
 import { useEffect, useRef } from 'react';
+import { getPreferredDeviceId, onOutputDeviceChange } from '../lib/devicePreferences';
+
+/** setSinkId isn't in the standard DOM typings yet (Audio Output Devices API is still experimental). */
+type MediaElementWithSink = HTMLVideoElement & { setSinkId?: (deviceId: string) => Promise<void> };
 
 interface MediaStreamVideoProps {
   stream: MediaStream;
@@ -26,6 +30,22 @@ export default function MediaStreamVideo({
       video.srcObject = null;
     };
   }, [stream]);
+
+  useEffect(() => {
+    const video = videoRef.current as MediaElementWithSink | null;
+    if (!video?.setSinkId) return;
+
+    const applyPreferred = (deviceId: string) => {
+      video.setSinkId?.(deviceId).catch(() => {
+        // some outputs (e.g. default) can't be set as a sink on every platform — ignore
+      });
+    };
+
+    const preferred = getPreferredDeviceId('audiooutput');
+    if (preferred) applyPreferred(preferred);
+
+    return onOutputDeviceChange(applyPreferred);
+  }, []);
 
   return (
     <video

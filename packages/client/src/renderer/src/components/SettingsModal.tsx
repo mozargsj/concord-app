@@ -23,11 +23,17 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
     setThreshold(getMicSensitivity());
   }, []);
 
+  // Ties updates to the display's own refresh rate instead of a fixed interval — the
+  // fastest a change can ever be visible, and any faster (e.g. 1ms) would just coalesce
+  // into the same paint frame while burning CPU. Was 250ms, which read as laggy.
   useEffect(() => {
-    const interval = setInterval(() => {
+    let frameId: number;
+    function tick() {
       setMockLevel(Math.round(30 + Math.random() * 55));
-    }, 250);
-    return () => clearInterval(interval);
+      frameId = requestAnimationFrame(tick);
+    }
+    frameId = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frameId);
   }, []);
 
   useEffect(() => {

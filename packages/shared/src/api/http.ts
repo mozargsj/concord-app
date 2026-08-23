@@ -1,4 +1,4 @@
-import type { ServerSummary } from '../domain/room.js';
+import type { RoomSummary, ServerSummary } from '../domain/room.js';
 import type { UserProfile } from '../domain/user.js';
 
 export interface LoginRequest {
@@ -27,6 +27,40 @@ export interface CreateServerRequest {
 
 export interface CreateServerResponse {
   server: ServerSummary;
+}
+
+/** The caller's own rank (1=dono..4=usuário, see packages/shared/src/domain/roles.ts) for this server — kept as a plain number on the wire so the client never has to import the const enum (esbuild/isolatedModules risk, see decisions.md). */
+export interface ServerDetailsResponse {
+  server: ServerSummary;
+  myRole: number;
+}
+
+export interface ServerListResponse {
+  servers: ServerSummary[];
+}
+
+export interface CreateRoomRequest {
+  name: string;
+}
+
+export interface UpdateRoomRequest {
+  name: string;
+}
+
+export interface RoomListResponse {
+  rooms: RoomSummary[];
+}
+
+export interface RoomResponse {
+  room: RoomSummary;
+}
+
+export interface CreateInviteResponse {
+  code: string;
+}
+
+export interface JoinServerRequest {
+  code: string;
 }
 
 export type UploadKind = 'user-avatar' | 'server-icon';

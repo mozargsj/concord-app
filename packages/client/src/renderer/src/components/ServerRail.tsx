@@ -1,22 +1,49 @@
-import type { ServerSummary } from '@concord/shared';
-import plusIcon from '../assets/icons/plus.svg';
-import compassIcon from '../assets/icons/compass.svg';
+import type { ServerSummary, UserProfile } from '@concord/shared';
+import { Plus, UserPlus, Compass } from 'lucide-react';
 import '../styles/ServerRail.css';
 
 interface ServerRailProps {
+  currentUser: UserProfile;
+  hasOwnServer: boolean;
   servers: ServerSummary[];
-  selectedServerId: string;
+  selectedServerId: string | null;
   onSelectServer: (serverId: string) => void;
+  onOpenProfile: () => void;
+  onOpenInvite: () => void;
+  onOpenCreateServer: () => void;
 }
 
-export default function ServerRail({ servers, selectedServerId, onSelectServer }: ServerRailProps) {
+export default function ServerRail({
+  currentUser,
+  hasOwnServer,
+  servers,
+  selectedServerId,
+  onSelectServer,
+  onOpenProfile,
+  onOpenInvite,
+  onOpenCreateServer
+}: ServerRailProps) {
   return (
     <nav className="server-rail">
-      <button className="server-rail__item server-rail__item--home" title="Início">
-        C
+      <button className="server-rail__item server-rail__item--profile" onClick={onOpenProfile} title="Seu perfil">
+        {currentUser.avatarUrl ? (
+          <img src={currentUser.avatarUrl} alt="" className="server-rail__item-icon" />
+        ) : (
+          currentUser.displayName.charAt(0).toUpperCase()
+        )}
       </button>
 
-      <div className="server-rail__divider" />
+      <button className="server-rail__item server-rail__item--invite" onClick={onOpenInvite} title="Entrar com convite">
+        <UserPlus size={20} />
+      </button>
+
+      {!hasOwnServer && (
+        <button className="server-rail__item server-rail__item--add" onClick={onOpenCreateServer} title="Criar servidor">
+          <Plus size={20} />
+        </button>
+      )}
+
+      {servers.length > 0 && <div className="server-rail__divider" />}
 
       <div className="server-rail__list">
         {servers.map((server) => {
@@ -40,16 +67,8 @@ export default function ServerRail({ servers, selectedServerId, onSelectServer }
         })}
       </div>
 
-      {/* "1 dono : 1 servidor" já decidido — sem fluxo de entrar em servidor de terceiros ainda. */}
-      <button
-        className="server-rail__item server-rail__item--add"
-        title="Você já tem um servidor"
-        disabled
-      >
-        <img src={plusIcon} alt="" />
-      </button>
       <button className="server-rail__item server-rail__item--explore" title="Explorar servidores" disabled>
-        <img src={compassIcon} alt="" />
+        <Compass size={20} />
       </button>
     </nav>
   );

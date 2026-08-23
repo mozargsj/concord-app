@@ -25,3 +25,12 @@
   background: var(--color-bg-elevated);
   color: var(--color-text-primary);
 }
+
+.button--danger {
+  background: var(--color-danger);
+  color: #ffffff;
+}
+
+.button--danger:hover {
+  opacity: 0.85;
+}

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { WebSocket } from 'ws';
 import type {
+  DeviceKind,
   IceCandidateMessage,
   SdpAnswerMessage,
   SdpOfferMessage,
@@ -117,6 +118,15 @@ export function handleCandidateConfirm(socket: WebSocket, roomId: string, epoch:
   room.pendingMigration = null;
   room.hostPeerId = peer.id;
   broadcast(room, { type: 'host-changed', roomId, hostPeerId: peer.id, epoch });
+}
+
+export function handleDeviceSwitched(socket: WebSocket, kind: DeviceKind): void {
+  const peer = peersBySocket.get(socket);
+  if (!peer) return;
+  const room = rooms.get(peer.roomId);
+  if (!room) return;
+  // The switcher already plays the sound locally, no round-trip needed for their own feedback.
+  broadcast(room, { type: 'peer-device-switched', roomId: room.id, peerId: peer.id, kind }, peer.id);
 }
 
 export function handleDisconnect(socket: WebSocket): void {

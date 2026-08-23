@@ -1,13 +1,32 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { RoomSummary, ServerSummary, UserProfile } from '@concord/shared';
+import type { ScreenSource } from '../types/window';
 import ServerRail from '../components/ServerRail';
 import RoomSidebar from '../components/RoomSidebar';
 import TopBar from '../components/TopBar';
 import RoomView from '../components/RoomView';
-import EmptyServerState from './EmptyServerState';
+import ServerActionsModal from '../components/ServerActionsModal';
+import InviteCodeModal from '../components/InviteCodeModal';
+import ScreenSharePicker from '../components/ScreenSharePicker';
 import ProfilePage from './ProfilePage';
-import { getServer } from '../lib/api';
+import {
+  ApiError,
+  createInvite,
+  createRoom,
+  deleteRoom,
+  getServer,
+  listMyServers,
+  listRooms,
+  renameRoom
+} from '../lib/api';
 import { useRoomConnection } from '../hooks/useRoomConnection';
+import { getPreferredDeviceId } from '../lib/devicePreferences';
+import {
+  playCameraStart,
+  playTransmissionEnter,
+  playTransmissionExit,
+  setDeafened as setSoundsDeafened
+} from '../lib/soundEffects';
 import '../styles/ServerListPage.css';
 
 interface ServerListPageProps {
@@ -16,55 +35,90 @@ interface ServerListPageProps {
   onActiveServerChange: (serverName: string) => void;
 }
 
-// No room-creation feature yet — the owned server always starts empty.
-const rooms: RoomSummary[] = [];
+interface InviteState {
+  code: string | null;
+  isLoading: boolean;
+  error: string | null;
+}
 
 export default function ServerListPage({
   currentUser,
   onCurrentUserChange,
   onActiveServerChange
 }: ServerListPageProps) {
-  const [ownedServer, setOwnedServer] = useState<ServerSummary | null>(null);
+  const [myServers, setMyServers] = useState<ServerSummary[] | null>(null);
+  const [selectedServerId, setSelectedServerId] = useState<string | null>(null);
+  const [selectedServer, setSelectedServer] = useState<ServerSummary | null>(null);
+  const [myRole, setMyRole] = useState<number>(4);
+  const [rooms, setRooms] = useState<RoomSummary[]>([]);
   const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
   const [isMicMuted, setIsMicMuted] = useState(false);
   const [isDeafened, setIsDeafened] = useState(false);
+  const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
+  const [screenStream, setScreenStream] = useState<MediaStream | null>(null);
+  const [isScreenPickerOpen, setIsScreenPickerOpen] = useState(false);
+  const [mediaError, setMediaError] = useState<string | null>(null);
   const [isProfileOpen, setIsProfileOpen] = useState(false);
-  // Placeholder for the real signal: once WebRTC audio is wired, this will be
-  // replaced by a getStats() poll reading each track's audioLevel (RFC 6464)
-  // against a threshold, per the "Detecção de atividade de voz" stack decision.
-  // Slowed down (~4s) so the effect is easy to observe during manual testing.
-  const [isSpeaking, setIsSpeaking] = useState(false);
-  // Same mock debt as isSpeaking above: real latency will come from the signaling
-  // connection (RTT of the host-heartbeat round trip) once it exists. Cycles through
-  // all three bands so the color-coding is visible without real network data.
-  const [latencyMs, setLatencyMs] = useState(80);
+  const [serverActionsMode, setServerActionsMode] = useState<'create' | 'join' | null>(null);
+  const [inviteState, setInviteState] = useState<InviteState | null>(null);
 
   const {
     connectionStatus,
     selfPeerId,
     hostPeerId,
     peers,
+    latencyMs,
+    selfIsSpeaking,
     setLocalCameraTrack,
-    setLocalScreenTrack
+    setLocalScreenTrack,
+    switchMicDevice,
+    sendDeviceSwitched
   } = useRoomConnection(selectedRoomId, currentUser.displayName, isMicMuted);
 
+  const cameraStreamRef = useRef<MediaStream | null>(null);
+  const screenStreamRef = useRef<MediaStream | null>(null);
+
   useEffect(() => {
-    if (!currentUser.ownedServerId) {
-      setOwnedServer(null);
+    listMyServers().then((servers) => {
+      setMyServers(servers);
+      if (servers.length > 0) setSelectedServerId((prev) => prev ?? servers[0].id);
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!selectedServerId) {
+      setSelectedServer(null);
       return;
     }
     let cancelled = false;
-    getServer(currentUser.ownedServerId).then((server) => {
-      if (!cancelled) setOwnedServer(server);
+    getServer(selectedServerId).then(({ server, myRole: role }) => {
+      if (cancelled) return;
+      setSelectedServer(server);
+      setMyRole(role);
     });
+    listRooms(selectedServerId).then((list) => {
+      if (!cancelled) setRooms(list);
+    });
+    setSelectedRoomId(null);
     return () => {
       cancelled = true;
     };
-  }, [currentUser.ownedServerId]);
+  }, [selectedServerId]);
 
   useEffect(() => {
-    onActiveServerChange(ownedServer?.name ?? 'Concord');
-  }, [ownedServer, onActiveServerChange]);
+    onActiveServerChange(selectedServer?.name ?? 'Concord');
+  }, [selectedServer, onActiveServerChange]);
+
+  // Before the window actually closes, drop out of the room the same way "Sair" does — reuses
+  // useRoomConnection's existing cleanup (stop mic/camera, close mesh + signaling socket) so
+  // other participants see the disconnect right away instead of a TCP timeout.
+  useEffect(() => {
+    return window.concord.app.onBeforeQuit(() => setSelectedRoomId(null));
+  }, []);
+
+  useEffect(() => {
+    setSoundsDeafened(isDeafened);
+  }, [isDeafened]);
 
   // Unexpected drop (not a manual "leave") — fall back to "Ninguém está em voz" instead of
   // showing a dead room view. No reconnect attempt in this pass, kept intentionally minimal.
@@ -72,22 +126,102 @@ export default function ServerListPage({
     if (selectedRoomId && connectionStatus === 'disconnected') setSelectedRoomId(null);
   }, [connectionStatus, selectedRoomId]);
 
+  // Stop every local track on leaving the room — real local capture, never sent anywhere
+  // once the room changes (no RTCPeerConnection yet for it), but the hardware indicator
+  // light must still turn off like it would for any other app.
   useEffect(() => {
-    if (!selectedRoomId) return;
-    const interval = setInterval(() => setIsSpeaking((prev) => !prev), 4000);
-    return () => clearInterval(interval);
+    if (selectedRoomId) return;
+    cameraStreamRef.current?.getTracks().forEach((track) => track.stop());
+    screenStreamRef.current?.getTracks().forEach((track) => track.stop());
+    cameraStreamRef.current = null;
+    screenStreamRef.current = null;
+    setCameraStream(null);
+    setScreenStream(null);
   }, [selectedRoomId]);
 
   useEffect(() => {
-    if (!selectedRoomId) return;
-    const bandsMs = [80, 175, 230];
-    let index = 0;
-    const interval = setInterval(() => {
-      index = (index + 1) % bandsMs.length;
-      setLatencyMs(bandsMs[index]);
-    }, 3000);
-    return () => clearInterval(interval);
-  }, [selectedRoomId]);
+    return () => {
+      cameraStreamRef.current?.getTracks().forEach((track) => track.stop());
+      screenStreamRef.current?.getTracks().forEach((track) => track.stop());
+    };
+  }, []);
+
+  async function startCamera(deviceId?: string) {
+    const preferred = deviceId ?? getPreferredDeviceId('videoinput') ?? undefined;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: preferred ? { deviceId: { exact: preferred } } : true
+      });
+      cameraStreamRef.current = stream;
+      setCameraStream(stream);
+      setMediaError(null);
+      setLocalCameraTrack(stream.getVideoTracks()[0] ?? null);
+    } catch (error) {
+      setMediaError(error instanceof Error ? error.message : 'Não foi possível acessar a câmera.');
+    }
+  }
+
+  async function handleToggleCamera() {
+    if (cameraStream) {
+      cameraStream.getTracks().forEach((track) => track.stop());
+      cameraStreamRef.current = null;
+      setCameraStream(null);
+      setLocalCameraTrack(null);
+      return;
+    }
+    await startCamera();
+    if (cameraStreamRef.current) playCameraStart();
+  }
+
+  async function handleSelectCamera(deviceId: string) {
+    if (cameraStream) {
+      const previousStream = cameraStream;
+      // startCamera() below calls setLocalCameraTrack with the new track while the old
+      // sender is still attached — the mesh swaps it via replaceTrack (no renegotiation).
+      // Stopping the previous device only after that keeps a picture on screen the whole time.
+      await startCamera(deviceId);
+      previousStream.getTracks().forEach((track) => track.stop());
+    }
+  }
+
+  function handleToggleScreenShare() {
+    if (screenStream) {
+      screenStream.getTracks().forEach((track) => track.stop());
+      screenStreamRef.current = null;
+      setScreenStream(null);
+      setLocalScreenTrack(null);
+      playTransmissionExit();
+      return;
+    }
+    setIsScreenPickerOpen(true);
+  }
+
+  async function handlePickScreenSource(source: ScreenSource, includeAudio: boolean) {
+    setIsScreenPickerOpen(false);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        // Electron's documented desktopCapturer pattern — legacy constraint shape is still
+        // how Chromium wires a specific screen/window id in. System-audio loopback via
+        // chromeMediaSource:'desktop' is Windows-only and only reliable for whole-screen
+        // sources, not individual windows.
+        audio: includeAudio ? ({ mandatory: { chromeMediaSource: 'desktop' } } as MediaTrackConstraints) : false,
+        video: {
+          mandatory: {
+            chromeMediaSource: 'desktop',
+            chromeMediaSourceId: source.id
+          }
+        } as MediaTrackConstraints
+      });
+      screenStreamRef.current = stream;
+      setScreenStream(stream);
+      setMediaError(null);
+      setLocalScreenTrack(stream);
+      playTransmissionEnter();
+    } catch (error) {
+      setMediaError(error instanceof Error ? error.message : 'Não foi possível capturar a tela escolhida.');
+    }
+  }
 
   function handleToggleMic() {
     setIsMicMuted((prev) => {
@@ -111,28 +245,81 @@ export default function ServerListPage({
     setSelectedRoomId(null);
   }
 
-  if (!currentUser.ownedServerId) {
-    return (
-      <div className="server-list-page server-list-page--empty">
-        <button
-          className="server-list-page__profile-corner"
-          onClick={() => setIsProfileOpen(true)}
-          title="Seu perfil"
-        >
-          {currentUser.avatarUrl ? (
-            <img src={currentUser.avatarUrl} alt="" />
-          ) : (
-            currentUser.displayName.charAt(0).toUpperCase()
-          )}
-        </button>
+  function handleServerCreated(server: ServerSummary) {
+    setServerActionsMode(null);
+    onCurrentUserChange({ ...currentUser, ownedServerId: server.id });
+    setMyServers((prev) => [...(prev ?? []), server]);
+    setSelectedServerId(server.id);
+  }
 
-        <EmptyServerState
+  function handleServerJoined(server: ServerSummary) {
+    setServerActionsMode(null);
+    setMyServers((prev) => (prev?.some((s) => s.id === server.id) ? prev : [...(prev ?? []), server]));
+    setSelectedServerId(server.id);
+  }
+
+  async function refreshRooms() {
+    if (!selectedServerId) return;
+    setRooms(await listRooms(selectedServerId));
+  }
+
+  async function handleCreateRoom(name: string) {
+    if (!selectedServerId) return;
+    await createRoom(selectedServerId, name);
+    await refreshRooms();
+  }
+
+  async function handleRenameRoom(roomId: string, name: string) {
+    if (!selectedServerId) return;
+    await renameRoom(selectedServerId, roomId, name);
+    await refreshRooms();
+  }
+
+  async function handleDeleteRoom(roomId: string) {
+    if (!selectedServerId) return;
+    await deleteRoom(selectedServerId, roomId);
+    if (selectedRoomId === roomId) setSelectedRoomId(null);
+    await refreshRooms();
+  }
+
+  async function handleOpenInvite() {
+    if (!selectedServerId) return;
+    setInviteState({ code: null, isLoading: true, error: null });
+    try {
+      const code = await createInvite(selectedServerId);
+      setInviteState({ code, isLoading: false, error: null });
+    } catch (error) {
+      setInviteState({
+        code: null,
+        isLoading: false,
+        error: error instanceof ApiError ? 'Só admins ou o dono podem gerar convites.' : 'Não foi possível gerar o convite.'
+      });
+    }
+  }
+
+  if (myServers === null) {
+    return <div className="server-list-page server-list-page--loading" />;
+  }
+
+  const hasOwnServer = currentUser.ownedServerId !== null;
+
+  if (myServers.length === 0) {
+    return (
+      <div className="server-list-page">
+        <ServerRail
           currentUser={currentUser}
-          onServerCreated={(server) => {
-            setOwnedServer(server);
-            onCurrentUserChange({ ...currentUser, ownedServerId: server.id });
-          }}
+          hasOwnServer={hasOwnServer}
+          servers={[]}
+          selectedServerId={null}
+          onSelectServer={setSelectedServerId}
+          onOpenProfile={() => setIsProfileOpen(true)}
+          onOpenInvite={() => setServerActionsMode('join')}
+          onOpenCreateServer={() => setServerActionsMode('create')}
         />
+
+        <div className="server-list-page__main server-list-page__main--empty">
+          <p>Crie um servidor ou entre com um código de convite.</p>
+        </div>
 
         {isProfileOpen && (
           <ProfilePage
@@ -141,11 +328,21 @@ export default function ServerListPage({
             onUserChange={onCurrentUserChange}
           />
         )}
+
+        {serverActionsMode && (
+          <ServerActionsModal
+            currentUser={currentUser}
+            mode={serverActionsMode}
+            onClose={() => setServerActionsMode(null)}
+            onServerCreated={handleServerCreated}
+            onServerJoined={handleServerJoined}
+          />
+        )}
       </div>
     );
   }
 
-  if (!ownedServer) {
+  if (!selectedServerId || !selectedServer) {
     return <div className="server-list-page server-list-page--loading" />;
   }
 
@@ -153,18 +350,34 @@ export default function ServerListPage({
 
   return (
     <div className="server-list-page">
-      <ServerRail servers={[ownedServer]} selectedServerId={ownedServer.id} onSelectServer={() => {}} />
+      <ServerRail
+        currentUser={currentUser}
+        hasOwnServer={hasOwnServer}
+        servers={myServers}
+        selectedServerId={selectedServerId}
+        onSelectServer={setSelectedServerId}
+        onOpenProfile={() => setIsProfileOpen(true)}
+        onOpenInvite={() => setServerActionsMode('join')}
+        onOpenCreateServer={() => setServerActionsMode('create')}
+      />
 
       <RoomSidebar
-        server={ownedServer}
+        server={selectedServer}
+        myRole={myRole}
         rooms={rooms}
         selectedRoomId={selectedRoomId}
         onSelectRoom={setSelectedRoomId}
+        onCreateRoom={handleCreateRoom}
+        onRenameRoom={handleRenameRoom}
+        onDeleteRoom={handleDeleteRoom}
+        onOpenInvite={handleOpenInvite}
         isMicMuted={isMicMuted}
         isDeafened={isDeafened}
         onToggleMic={handleToggleMic}
         onToggleDeafen={handleToggleDeafen}
-        isSpeaking={isSpeaking && !isMicMuted}
+        onSelectMic={switchMicDevice}
+        onSelectSpeaker={() => sendDeviceSwitched('speaker')}
+        isSpeaking={selfIsSpeaking && !isMicMuted}
         latencyMs={latencyMs}
         onLeave={handleLeave}
         selfPeerId={selfPeerId}
@@ -172,6 +385,10 @@ export default function ServerListPage({
         peers={peers}
         currentUser={currentUser}
         onOpenProfile={() => setIsProfileOpen(true)}
+        selfCameraOn={!!cameraStream}
+        selfSharingScreen={!!screenStream}
+        onToggleCamera={handleToggleCamera}
+        onToggleScreenShare={handleToggleScreenShare}
       />
 
       <div className="server-list-page__main">
@@ -180,15 +397,20 @@ export default function ServerListPage({
           room={selectedRoom}
           isMicMuted={isMicMuted}
           onToggleMic={handleToggleMic}
-          isSpeaking={isSpeaking}
+          onSelectMic={switchMicDevice}
+          isSpeaking={selfIsSpeaking}
           onLeave={handleLeave}
           isDeafened={isDeafened}
           selfPeerId={selfPeerId}
           hostPeerId={hostPeerId}
           peers={peers}
-          setLocalCameraTrack={setLocalCameraTrack}
-          setLocalScreenTrack={setLocalScreenTrack}
           currentUserDisplayName={currentUser.displayName}
+          cameraStream={cameraStream}
+          screenStream={screenStream}
+          mediaError={mediaError}
+          onToggleCamera={handleToggleCamera}
+          onSelectCamera={handleSelectCamera}
+          onToggleScreenShare={handleToggleScreenShare}
         />
       </div>
 
@@ -198,6 +420,29 @@ export default function ServerListPage({
           onClose={() => setIsProfileOpen(false)}
           onUserChange={onCurrentUserChange}
         />
+      )}
+
+      {serverActionsMode && (
+        <ServerActionsModal
+          currentUser={currentUser}
+          mode={serverActionsMode}
+          onClose={() => setServerActionsMode(null)}
+          onServerCreated={handleServerCreated}
+          onServerJoined={handleServerJoined}
+        />
+      )}
+
+      {inviteState && (
+        <InviteCodeModal
+          code={inviteState.code}
+          isLoading={inviteState.isLoading}
+          error={inviteState.error}
+          onClose={() => setInviteState(null)}
+        />
+      )}
+
+      {isScreenPickerOpen && (
+        <ScreenSharePicker onSelect={handlePickScreenSource} onClose={() => setIsScreenPickerOpen(false)} />
       )}
     </div>
   );

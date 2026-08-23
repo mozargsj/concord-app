@@ -2,6 +2,7 @@ import { randomBytes, createHash } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import { shell } from 'electron';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
+import { getOAuthCallbackHtml } from './oauthCallbackPage';
 
 const AUTH_ENDPOINT = 'https://accounts.google.com/o/oauth2/v2/auth';
 const TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token';
@@ -34,7 +35,7 @@ function waitForCallback(server: Server, expectedState: string): Promise<string>
       const error = url.searchParams.get('error');
 
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-      res.end('<html><body>Pode fechar esta aba e voltar para o Concord.</body></html>');
+      res.end(getOAuthCallbackHtml());
 
       clearTimeout(timer);
       server.close();

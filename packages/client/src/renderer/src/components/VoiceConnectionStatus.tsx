@@ -1,4 +1,4 @@
-import hangupIcon from '../assets/icons/phone-hangup.svg';
+import { PhoneOff } from 'lucide-react';
 import { getLatencyBand } from '../lib/latency';
 import '../styles/VoiceConnectionStatus.css';
 
@@ -46,8 +46,10 @@ export default function VoiceConnectionStatus({
         </span>
       </div>
 
-      <button className="voice-status__hangup" title="Sair da chamada" onClick={onLeave}>
-        <img src={hangupIcon} alt="" />
+      <span className="voice-status__latency">{Math.round(latencyMs)} ms</span>
+
+      <button className="voice-status__hangup" title="Desconectar" onClick={onLeave}>
+        <PhoneOff size={16} />
       </button>
     </div>
   );

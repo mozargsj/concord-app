@@ -1,14 +1,18 @@
 import { useEffect, useRef, useState } from 'react';
-import type { ServerToClientMessage } from '@concord/shared';
+import type { DeviceKind, ServerToClientMessage } from '@concord/shared';
 import { SignalingClient, type SignalingStatus } from '../lib/signalingClient';
 import { MeshManager } from '../lib/webrtcMesh';
 import { getPreferredDeviceId } from '../lib/devicePreferences';
+import { playDeviceSwitch, playRoomJoin } from '../lib/soundEffects';
+
+const PING_INTERVAL_MS = 4000;
 
 export interface RoomPeer {
   peerId: string;
   displayName: string;
   personalStream: MediaStream | null;
   screenStream: MediaStream | null;
+  isSpeaking: boolean;
 }
 
 interface RoomConnectionState {
@@ -16,13 +20,17 @@ interface RoomConnectionState {
   selfPeerId: string | null;
   hostPeerId: string | null;
   peers: RoomPeer[];
+  latencyMs: number | null;
+  selfIsSpeaking: boolean;
 }
 
 const initialState: RoomConnectionState = {
   connectionStatus: 'idle',
   selfPeerId: null,
   hostPeerId: null,
-  peers: []
+  peers: [],
+  latencyMs: null,
+  selfIsSpeaking: false
 };
 
 /**
@@ -34,6 +42,8 @@ const initialState: RoomConnectionState = {
 export function useRoomConnection(roomId: string | null, displayName: string, isMicMuted: boolean) {
   const [state, setState] = useState<RoomConnectionState>(initialState);
   const meshRef = useRef<MeshManager | null>(null);
+  const signalingRef = useRef<SignalingClient | null>(null);
+  const micStreamRef = useRef<MediaStream | null>(null);
 
   useEffect(() => {
     if (!roomId) {
@@ -43,6 +53,8 @@ export function useRoomConnection(roomId: string | null, displayName: string, is
 
     let cancelled = false;
     const signaling = new SignalingClient();
+    signalingRef.current = signaling;
+    const pendingPings = new Map<string, number>();
 
     const mesh = new MeshManager({
       send: (message) => signaling.send(message),
@@ -55,15 +67,31 @@ export function useRoomConnection(roomId: string | null, displayName: string, is
               : peer
           )
         }));
+      },
+      onSpeakingChange: (peerId, isSpeaking) => {
+        setState((prev) => ({
+          ...prev,
+          peers: prev.peers.map((peer) => (peer.peerId === peerId ? { ...peer, isSpeaking } : peer))
+        }));
+      },
+      onLocalSpeakingChange: (isSpeaking) => {
+        setState((prev) => ({ ...prev, selfIsSpeaking: isSpeaking }));
       }
     });
     meshRef.current = mesh;
 
+    // Both guarded by `cancelled` — closing a WebSocket is async (ws.onclose fires on a
+    // later tick), so a leftover event from the room just left can otherwise arrive after
+    // this effect has already torn down and a new one started, stomping the new room's
+    // fresh 'idle'/'connecting' status back to 'disconnected' and tripping ServerListPage's
+    // unexpected-drop effect — kicking you straight back out of the room you just rejoined.
     signaling.onStatusChange((status) => {
+      if (cancelled) return;
       setState((prev) => ({ ...prev, connectionStatus: status }));
     });
 
     signaling.onMessage((message: ServerToClientMessage) => {
+      if (cancelled) return;
       switch (message.type) {
         case 'room-joined':
           setState((prev) => ({
@@ -74,12 +102,14 @@ export function useRoomConnection(roomId: string | null, displayName: string, is
               peerId: peer.peerId,
               displayName: peer.displayName,
               personalStream: null,
-              screenStream: null
+              screenStream: null,
+              isSpeaking: false
             }))
           }));
           for (const peer of message.peers) mesh.addExistingPeer(peer.peerId);
           break;
         case 'peer-joined':
+          playRoomJoin();
           setState((prev) => ({
             ...prev,
             peers: [
@@ -88,7 +118,8 @@ export function useRoomConnection(roomId: string | null, displayName: string, is
                 peerId: message.peerId,
                 displayName: message.displayName,
                 personalStream: null,
-                screenStream: null
+                screenStream: null,
+                isSpeaking: false
               }
             ]
           }));
@@ -114,6 +145,17 @@ export function useRoomConnection(roomId: string | null, displayName: string, is
           mesh.closeAll();
           setState((prev) => ({ ...prev, connectionStatus: 'disconnected' }));
           break;
+        case 'pong': {
+          const sentAt = pendingPings.get(message.nonce);
+          if (sentAt !== undefined) {
+            pendingPings.delete(message.nonce);
+            setState((prev) => ({ ...prev, latencyMs: Math.round(performance.now() - sentAt) }));
+          }
+          break;
+        }
+        case 'peer-device-switched':
+          playDeviceSwitch(message.kind);
+          break;
       }
     });
 
@@ -134,6 +176,7 @@ export function useRoomConnection(roomId: string | null, displayName: string, is
           return;
         }
         localMicStream = stream;
+        micStreamRef.current = stream;
         const track = stream.getAudioTracks()[0] ?? null;
         if (track) track.enabled = !isMicMuted;
         mesh.setLocalMicTrack(track);
@@ -144,12 +187,21 @@ export function useRoomConnection(roomId: string | null, displayName: string, is
 
     signaling.connect(import.meta.env.VITE_SIGNALING_URL, roomId, displayName);
 
+    const pingInterval = setInterval(() => {
+      const nonce = Math.random().toString(36).slice(2);
+      pendingPings.set(nonce, performance.now());
+      signaling.send({ type: 'ping', nonce });
+    }, PING_INTERVAL_MS);
+
     return () => {
       cancelled = true;
+      clearInterval(pingInterval);
       mesh.closeAll();
       localMicStream?.getTracks().forEach((track) => track.stop());
+      micStreamRef.current = null;
       signaling.close();
       meshRef.current = null;
+      signalingRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only roomId should trigger reconnect
   }, [roomId]);
@@ -166,12 +218,47 @@ export function useRoomConnection(roomId: string | null, displayName: string, is
     void meshRef.current?.setLocalScreenTrack(stream);
   }
 
+  /** Broadcasts the switch to the room (everyone else's client plays the sound) and plays it locally right away. */
+  function sendDeviceSwitched(kind: DeviceKind): void {
+    signalingRef.current?.send({ type: 'device-switched', kind });
+    playDeviceSwitch(kind);
+  }
+
+  async function switchMicDevice(deviceId: string): Promise<void> {
+    const mesh = meshRef.current;
+    if (!mesh) return;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          deviceId: { exact: deviceId }
+        }
+      });
+      const newTrack = stream.getAudioTracks()[0] ?? null;
+      if (!newTrack) return;
+      newTrack.enabled = !isMicMuted;
+      const oldStream = micStreamRef.current;
+      micStreamRef.current = stream;
+      mesh.setLocalMicTrack(newTrack);
+      oldStream?.getTracks().forEach((track) => track.stop());
+      sendDeviceSwitched('mic');
+    } catch {
+      // device swap failed — keep using the previous mic track
+    }
+  }
+
   return {
     connectionStatus: state.connectionStatus,
     selfPeerId: state.selfPeerId,
     hostPeerId: state.hostPeerId,
     peers: state.peers,
+    latencyMs: state.latencyMs,
+    selfIsSpeaking: state.selfIsSpeaking,
     setLocalCameraTrack,
-    setLocalScreenTrack
+    setLocalScreenTrack,
+    switchMicDevice,
+    sendDeviceSwitched
   };
 }
