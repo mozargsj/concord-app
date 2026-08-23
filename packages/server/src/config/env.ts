@@ -8,9 +8,14 @@ export const env = {
     region: process.env.AWS_REGION ?? ''
   },
   dynamodbTablePrefix: process.env.DYNAMODB_TABLE_PREFIX ?? 'concord_',
-  s3ServerIconsBucket: process.env.S3_SERVER_ICONS_BUCKET ?? ''
+  s3ServerIconsBucket: process.env.S3_SERVER_ICONS_BUCKET ?? '',
+  sessionSecret: process.env.SESSION_SECRET ?? ''
 };
 
 export function hasAwsRegion(): boolean {
   return Boolean(env.aws.region);
+}
+
+export function hasSessionSecret(): boolean {
+  return Boolean(env.sessionSecret);
 }

@@ -1,10 +1,10 @@
-import type { MockServer } from '../fixtures/mockData';
+import type { ServerSummary } from '@concord/shared';
 import plusIcon from '../assets/icons/plus.svg';
 import compassIcon from '../assets/icons/compass.svg';
 import '../styles/ServerRail.css';
 
 interface ServerRailProps {
-  servers: MockServer[];
+  servers: ServerSummary[];
   selectedServerId: string;
   onSelectServer: (serverId: string) => void;
 }
@@ -29,9 +29,10 @@ export default function ServerRail({ servers, selectedServerId, onSelectServer }
                 onClick={() => onSelectServer(server.id)}
                 title={server.name}
               >
-                {server.name.charAt(0).toUpperCase()}
-                {!!server.unreadCount && (
-                  <span className="server-rail__badge">{server.unreadCount}</span>
+                {server.iconUrl ? (
+                  <img src={server.iconUrl} alt="" className="server-rail__item-icon" />
+                ) : (
+                  server.name.charAt(0).toUpperCase()
                 )}
               </button>
             </div>
@@ -39,10 +40,15 @@ export default function ServerRail({ servers, selectedServerId, onSelectServer }
         })}
       </div>
 
-      <button className="server-rail__item server-rail__item--add" title="Adicionar servidor">
+      {/* "1 dono : 1 servidor" já decidido — sem fluxo de entrar em servidor de terceiros ainda. */}
+      <button
+        className="server-rail__item server-rail__item--add"
+        title="Você já tem um servidor"
+        disabled
+      >
         <img src={plusIcon} alt="" />
       </button>
-      <button className="server-rail__item server-rail__item--explore" title="Explorar servidores">
+      <button className="server-rail__item server-rail__item--explore" title="Explorar servidores" disabled>
         <img src={compassIcon} alt="" />
       </button>
     </nav>

@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import type { RoomSummary } from '@concord/shared';
 import type { ScreenSource } from '../types/window';
+import type { RoomPeer } from '../hooks/useRoomConnection';
 import micOffIcon from '../assets/icons/mic-off.svg';
 import closeIcon from '../assets/icons/window-close.svg';
 import CallControls from './CallControls';
 import ScreenSharePicker from './ScreenSharePicker';
 import MediaStreamVideo from './MediaStreamVideo';
 import HostStarBadge from './HostStarBadge';
-import { mockCurrentUser, mockParticipantsByRoom } from '../fixtures/mockData';
 import { getAvatarColor } from '../lib/avatarColor';
 import { getGridContainerStyle, getGridItemStyle } from '../lib/participantGrid';
 import { getPreferredDeviceId } from '../lib/devicePreferences';
@@ -19,13 +19,33 @@ interface RoomViewProps {
   onToggleMic: () => void;
   isSpeaking: boolean;
   onLeave: () => void;
+  isDeafened: boolean;
+  selfPeerId: string | null;
+  hostPeerId: string | null;
+  peers: RoomPeer[];
+  setLocalCameraTrack: (track: MediaStreamTrack | null) => void;
+  setLocalScreenTrack: (stream: MediaStream | null) => void;
+  currentUserDisplayName: string;
 }
 
 type Tile =
-  | { kind: 'participant'; key: string; name: string; isSelf: boolean }
+  | { kind: 'participant'; key: string; name: string; isSelf: boolean; isHost: boolean; stream: MediaStream | null }
   | { kind: 'screen'; key: string; name: string; stream: MediaStream };
 
-export default function RoomView({ room, isMicMuted, onToggleMic, isSpeaking, onLeave }: RoomViewProps) {
+export default function RoomView({
+  room,
+  isMicMuted,
+  onToggleMic,
+  isSpeaking,
+  onLeave,
+  isDeafened,
+  selfPeerId,
+  hostPeerId,
+  peers,
+  setLocalCameraTrack,
+  setLocalScreenTrack,
+  currentUserDisplayName
+}: RoomViewProps) {
   const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
   const [screenStream, setScreenStream] = useState<MediaStream | null>(null);
   const [isPickerOpen, setIsPickerOpen] = useState(false);
@@ -80,6 +100,7 @@ export default function RoomView({ room, isMicMuted, onToggleMic, isSpeaking, on
       cameraStreamRef.current = stream;
       setCameraStream(stream);
       setMediaError(null);
+      setLocalCameraTrack(stream.getVideoTracks()[0] ?? null);
     } catch (error) {
       setMediaError(error instanceof Error ? error.message : 'Não foi possível acessar a câmera.');
     }
@@ -90,6 +111,7 @@ export default function RoomView({ room, isMicMuted, onToggleMic, isSpeaking, on
       cameraStream.getTracks().forEach((track) => track.stop());
       cameraStreamRef.current = null;
       setCameraStream(null);
+      setLocalCameraTrack(null);
       return;
     }
     await startCamera();
@@ -97,10 +119,12 @@ export default function RoomView({ room, isMicMuted, onToggleMic, isSpeaking, on
 
   async function handleSelectCamera(deviceId: string) {
     if (cameraStream) {
-      cameraStream.getTracks().forEach((track) => track.stop());
-      cameraStreamRef.current = null;
-      setCameraStream(null);
+      const previousStream = cameraStream;
+      // startCamera() below calls setLocalCameraTrack with the new track while the old
+      // sender is still attached — the mesh swaps it via replaceTrack (no renegotiation).
+      // Stopping the previous device only after that keeps a picture on screen the whole time.
       await startCamera(deviceId);
+      previousStream.getTracks().forEach((track) => track.stop());
     }
   }
 
@@ -110,6 +134,7 @@ export default function RoomView({ room, isMicMuted, onToggleMic, isSpeaking, on
       screenStreamRef.current = null;
       setScreenStream(null);
       setFocusedTileKey(null);
+      setLocalScreenTrack(null);
       return;
     }
     setIsPickerOpen(true);
@@ -134,6 +159,7 @@ export default function RoomView({ room, isMicMuted, onToggleMic, isSpeaking, on
       screenStreamRef.current = stream;
       setScreenStream(stream);
       setMediaError(null);
+      setLocalScreenTrack(stream);
     } catch (error) {
       setMediaError(
         error instanceof Error ? error.message : 'Não foi possível capturar a tela escolhida.'
@@ -149,18 +175,44 @@ export default function RoomView({ room, isMicMuted, onToggleMic, isSpeaking, on
     );
   }
 
-  const others = mockParticipantsByRoom[room.id] ?? [];
+  const isSelfHost = selfPeerId !== null && selfPeerId === hostPeerId;
   const tiles: Tile[] = [
-    { kind: 'participant', key: 'self', name: mockCurrentUser.displayName, isSelf: true },
-    ...others.map((name): Tile => ({ kind: 'participant', key: name, name, isSelf: false }))
+    {
+      kind: 'participant',
+      key: 'self',
+      name: currentUserDisplayName,
+      isSelf: true,
+      isHost: isSelfHost,
+      stream: null
+    },
+    ...peers.map(
+      (peer): Tile => ({
+        kind: 'participant',
+        key: peer.peerId,
+        name: peer.displayName,
+        isSelf: false,
+        isHost: peer.peerId === hostPeerId,
+        stream: peer.personalStream
+      })
+    )
   ];
   if (screenStream) {
     tiles.push({
       kind: 'screen',
       key: 'self-screen',
-      name: `${mockCurrentUser.displayName} — Tela`,
+      name: `${currentUserDisplayName} — Tela`,
       stream: screenStream
     });
+  }
+  for (const peer of peers) {
+    if (peer.screenStream) {
+      tiles.push({
+        kind: 'screen',
+        key: `${peer.peerId}-screen`,
+        name: `${peer.displayName} — Tela`,
+        stream: peer.screenStream
+      });
+    }
   }
 
   return (
@@ -172,6 +224,8 @@ export default function RoomView({ room, isMicMuted, onToggleMic, isSpeaking, on
           const speaking = tile.kind === 'participant' && tile.isSelf && isSpeaking && !isMicMuted;
           const muted = tile.kind === 'participant' && tile.isSelf && isMicMuted;
           const showCamera = tile.kind === 'participant' && tile.isSelf && cameraStream;
+          const remoteStream = tile.kind === 'participant' && !tile.isSelf ? tile.stream : null;
+          const hasRemoteVideo = !!remoteStream && remoteStream.getVideoTracks().length > 0;
           const isFocused = tile.key === focusedTileKey;
           const isFocusable = tile.kind === 'screen';
 
@@ -180,16 +234,20 @@ export default function RoomView({ room, isMicMuted, onToggleMic, isSpeaking, on
               <MediaStreamVideo stream={tile.stream} fit="contain" />
             ) : showCamera ? (
               <MediaStreamVideo stream={cameraStream} mirrored fit="cover" />
+            ) : hasRemoteVideo ? (
+              <MediaStreamVideo stream={remoteStream!} muted={isDeafened} fit="cover" />
             ) : (
               <div
                 className={'room-view__avatar' + (speaking ? ' room-view__avatar--speaking' : '')}
                 style={{ background: getAvatarColor(tile.name) }}
               >
                 {tile.name.charAt(0)}
+                {/* No camera track from this peer yet — keep the audio playing invisibly. */}
+                {remoteStream && <MediaStreamVideo stream={remoteStream} muted={isDeafened} hidden />}
               </div>
             );
 
-          const isHost = tile.kind === 'participant' && index === 0; // host = primeiro peer a conectar
+          const isHost = tile.kind === 'participant' && tile.isHost;
 
           const status = (
             <div className="room-view__participant-status">

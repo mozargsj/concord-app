@@ -8,6 +8,23 @@
   background: var(--color-bg-rail);
 }
 
+.user-panel__identity {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  padding: 4px;
+  border-radius: var(--radius-sm);
+  text-align: left;
+}
+
+.user-panel__identity:hover {
+  background: var(--color-bg-elevated);
+}
+
 .user-panel__avatar {
   position: relative;
   width: 32px;
@@ -20,6 +37,13 @@
   font-weight: 700;
   font-size: 13px;
   flex-shrink: 0;
+  overflow: hidden;
+}
+
+.user-panel__avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .user-panel__online-dot {

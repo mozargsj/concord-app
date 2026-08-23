@@ -6,6 +6,18 @@ export interface ScreenSource {
   thumbnailDataUrl: string;
 }
 
+export interface PickedImage {
+  fileName: string;
+  mimeType: string;
+  data: ArrayBuffer;
+}
+
+export interface GoogleLoginResult {
+  email: string;
+  displayName: string;
+  avatarImageUrl?: string;
+}
+
 declare global {
   interface Window {
     concord: {
@@ -18,6 +30,15 @@ declare global {
       };
       media: {
         getScreenSources: () => Promise<ScreenSource[]>;
+        pickImage: () => Promise<PickedImage | null>;
+      };
+      auth: {
+        loginWithGoogle: () => Promise<GoogleLoginResult>;
+      };
+      session: {
+        save: (token: string) => Promise<void>;
+        load: () => Promise<string | null>;
+        clear: () => Promise<void>;
       };
     };
   }

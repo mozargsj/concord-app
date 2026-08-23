@@ -8,3 +8,8 @@
   flex: 1;
   min-height: 0;
 }
+
+.app-shell__loading {
+  height: 100%;
+  background: var(--color-bg-main);
+}

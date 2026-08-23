@@ -16,6 +16,7 @@ interface Peer {
   socket: WebSocket;
   roomId: string;
   joinedAt: number;
+  displayName: string;
 }
 
 interface PendingMigration {
@@ -45,7 +46,7 @@ function broadcast(room: Room, message: ServerToClientMessage, excludePeerId?: s
   }
 }
 
-export function joinRoom(socket: WebSocket, roomId: string): void {
+export function joinRoom(socket: WebSocket, roomId: string, displayName: string): void {
   if (peersBySocket.has(socket)) return; // one room per socket at a time
 
   let room = rooms.get(roomId);
@@ -59,8 +60,11 @@ export function joinRoom(socket: WebSocket, roomId: string): void {
     return;
   }
 
-  const existingPeerIds = [...room.peers.keys()];
-  const peer: Peer = { id: randomUUID(), socket, roomId, joinedAt: Date.now() };
+  const existingPeers = [...room.peers.values()];
+  // displayName comes from an untrusted client and is rebroadcast to strangers in the room —
+  // trim/cap it rather than trusting it verbatim.
+  const safeDisplayName = displayName.trim().slice(0, 60) || 'Peer';
+  const peer: Peer = { id: randomUUID(), socket, roomId, joinedAt: Date.now(), displayName: safeDisplayName };
   room.peers.set(peer.id, peer);
   peersBySocket.set(socket, peer);
 
@@ -74,10 +78,10 @@ export function joinRoom(socket: WebSocket, roomId: string): void {
     peerId: peer.id,
     hostPeerId: room.hostPeerId,
     epoch: room.epoch,
-    peerIds: existingPeerIds
+    peers: existingPeers.map((p) => ({ peerId: p.id, displayName: p.displayName }))
   });
 
-  broadcast(room, { type: 'peer-joined', roomId, peerId: peer.id }, peer.id);
+  broadcast(room, { type: 'peer-joined', roomId, peerId: peer.id, displayName: safeDisplayName }, peer.id);
 }
 
 export function relay(

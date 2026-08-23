@@ -1,4 +1,4 @@
-import type { RoomSummary, ServerSummary } from '@concord/shared';
+import type { RoomSummary, ServerSummary, UserProfile } from '@concord/shared';
 import UserPanel from './UserPanel';
 import VoiceConnectionStatus from './VoiceConnectionStatus';
 import HostStarBadge from './HostStarBadge';
@@ -6,8 +6,8 @@ import chevronDownIcon from '../assets/icons/chevron-down.svg';
 import userPlusIcon from '../assets/icons/user-plus.svg';
 import plusIcon from '../assets/icons/plus.svg';
 import speakerIcon from '../assets/icons/speaker.svg';
-import { mockCurrentUser, mockParticipantsByRoom } from '../fixtures/mockData';
 import { getAvatarColor } from '../lib/avatarColor';
+import type { RoomPeer } from '../hooks/useRoomConnection';
 import '../styles/RoomSidebar.css';
 
 interface RoomSidebarProps {
@@ -22,6 +22,11 @@ interface RoomSidebarProps {
   isSpeaking: boolean;
   latencyMs: number;
   onLeave: () => void;
+  selfPeerId: string | null;
+  hostPeerId: string | null;
+  peers: RoomPeer[];
+  currentUser: UserProfile;
+  onOpenProfile: () => void;
 }
 
 export default function RoomSidebar({
@@ -35,7 +40,12 @@ export default function RoomSidebar({
   onToggleDeafen,
   isSpeaking,
   latencyMs,
-  onLeave
+  onLeave,
+  selfPeerId,
+  hostPeerId,
+  peers,
+  currentUser,
+  onOpenProfile
 }: RoomSidebarProps) {
   const selectedRoom = rooms.find((room) => room.id === selectedRoomId) ?? null;
   return (
@@ -62,9 +72,26 @@ export default function RoomSidebar({
         </div>
 
         {rooms.map((room) => {
-          const others = mockParticipantsByRoom[room.id] ?? [];
           const isJoined = room.id === selectedRoomId;
-          const participants = isJoined ? [mockCurrentUser.displayName, ...others] : others;
+          // Real roster for the joined room, driven by signaling. Rooms the user hasn't
+          // joined have no presence protocol yet (server only tracks membership for the
+          // connected socket's own room), so they show no participant preview.
+          const participants: { key: string; name: string; isSelf: boolean; isHost: boolean }[] = isJoined
+            ? [
+                {
+                  key: 'self',
+                  name: currentUser.displayName,
+                  isSelf: true,
+                  isHost: selfPeerId !== null && selfPeerId === hostPeerId
+                },
+                ...peers.map((peer) => ({
+                  key: peer.peerId,
+                  name: peer.displayName,
+                  isSelf: false,
+                  isHost: peer.peerId === hostPeerId
+                }))
+              ]
+            : [];
 
           return (
             <div key={room.id} className="room-sidebar__room-block">
@@ -81,25 +108,21 @@ export default function RoomSidebar({
 
               {participants.length > 0 && (
                 <div className="room-sidebar__participants">
-                  {participants.map((name, participantIndex) => {
-                    const isSelf = isJoined && participantIndex === 0;
-                    const isHost = participantIndex === 0; // host = primeiro peer a conectar
-                    return (
-                      <div key={name} className="room-sidebar__participant">
-                        <span
-                          className={
-                            'room-sidebar__participant-avatar' +
-                            (isSelf && isSpeaking ? ' room-sidebar__participant-avatar--speaking' : '')
-                          }
-                          style={{ background: getAvatarColor(name) }}
-                        >
-                          {name.charAt(0)}
-                        </span>
-                        <span className="room-sidebar__participant-name">{name}</span>
-                        {isHost && <HostStarBadge className="room-sidebar__host-star" />}
-                      </div>
-                    );
-                  })}
+                  {participants.map((participant) => (
+                    <div key={participant.key} className="room-sidebar__participant">
+                      <span
+                        className={
+                          'room-sidebar__participant-avatar' +
+                          (participant.isSelf && isSpeaking ? ' room-sidebar__participant-avatar--speaking' : '')
+                        }
+                        style={{ background: getAvatarColor(participant.name) }}
+                      >
+                        {participant.name.charAt(0)}
+                      </span>
+                      <span className="room-sidebar__participant-name">{participant.name}</span>
+                      {participant.isHost && <HostStarBadge className="room-sidebar__host-star" />}
+                    </div>
+                  ))}
                 </div>
               )}
             </div>
@@ -121,6 +144,9 @@ export default function RoomSidebar({
         isDeafened={isDeafened}
         onToggleMic={onToggleMic}
         onToggleDeafen={onToggleDeafen}
+        displayName={currentUser.displayName}
+        avatarUrl={currentUser.avatarUrl}
+        onOpenProfile={onOpenProfile}
       />
     </aside>
   );

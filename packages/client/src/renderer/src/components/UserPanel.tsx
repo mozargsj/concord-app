@@ -5,7 +5,6 @@ import headphonesIcon from '../assets/icons/headphones.svg';
 import headphonesOffIcon from '../assets/icons/headphones-off.svg';
 import settingsIcon from '../assets/icons/settings.svg';
 import chevronDownIcon from '../assets/icons/chevron-down.svg';
-import { mockCurrentUser } from '../fixtures/mockData';
 import SettingsModal from './SettingsModal';
 import DeviceMenu from './DeviceMenu';
 import '../styles/UserPanel.css';
@@ -15,28 +14,36 @@ interface UserPanelProps {
   isDeafened: boolean;
   onToggleMic: () => void;
   onToggleDeafen: () => void;
+  displayName: string;
+  avatarUrl: string | null;
+  onOpenProfile: () => void;
 }
 
 export default function UserPanel({
   isMicMuted,
   isDeafened,
   onToggleMic,
-  onToggleDeafen
+  onToggleDeafen,
+  displayName,
+  avatarUrl,
+  onOpenProfile
 }: UserPanelProps) {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [openMenu, setOpenMenu] = useState<'mic' | 'speaker' | null>(null);
 
   return (
     <div className="user-panel">
-      <div className="user-panel__avatar">
-        {mockCurrentUser.displayName.charAt(0)}
-        <span className="user-panel__online-dot" />
-      </div>
+      <button className="user-panel__identity" onClick={onOpenProfile} title="Seu perfil">
+        <div className="user-panel__avatar">
+          {avatarUrl ? <img src={avatarUrl} alt="" /> : displayName.charAt(0).toUpperCase()}
+          <span className="user-panel__online-dot" />
+        </div>
 
-      <div className="user-panel__info">
-        <span className="user-panel__name">{mockCurrentUser.displayName}</span>
-        <span className="user-panel__status">{mockCurrentUser.statusLabel}</span>
-      </div>
+        <div className="user-panel__info">
+          <span className="user-panel__name">{displayName}</span>
+          <span className="user-panel__status">Disponível</span>
+        </div>
+      </button>
 
       <div className="user-panel__actions">
         <div className="user-panel__device-group">

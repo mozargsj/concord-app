@@ -107,15 +107,27 @@
   height: 20px;
 }
 
+.server-rail__item-icon {
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  object-fit: cover;
+}
+
 .server-rail__item--add {
   color: var(--color-online);
 }
 
-.server-rail__item--add:hover {
+.server-rail__item--add:hover:not(:disabled) {
   background: var(--color-online);
   color: #ffffff;
 }
 
-.server-rail__item--explore:hover {
+.server-rail__item--explore:hover:not(:disabled) {
   background: var(--color-accent);
+}
+
+.server-rail__item:disabled {
+  opacity: 0.4;
+  cursor: default;
 }

@@ -1,9 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
 
-/**
- * Window chrome + local screen-source picking only — no auth/AWS calls wired yet.
- * Expand this as real IPC channels (login, room join) come online.
- */
 contextBridge.exposeInMainWorld('concord', {
   platform: process.platform,
   windowControls: {
@@ -17,6 +13,15 @@ contextBridge.exposeInMainWorld('concord', {
     }
   },
   media: {
-    getScreenSources: () => ipcRenderer.invoke('screen:get-sources')
+    getScreenSources: () => ipcRenderer.invoke('screen:get-sources'),
+    pickImage: () => ipcRenderer.invoke('media:pick-image')
+  },
+  auth: {
+    loginWithGoogle: () => ipcRenderer.invoke('auth:login-with-google')
+  },
+  session: {
+    save: (token: string) => ipcRenderer.invoke('session:save', token),
+    load: () => ipcRenderer.invoke('session:load'),
+    clear: () => ipcRenderer.invoke('session:clear')
   }
 });

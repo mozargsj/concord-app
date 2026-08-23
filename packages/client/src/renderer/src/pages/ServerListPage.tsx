@@ -1,20 +1,34 @@
 import { useEffect, useState } from 'react';
+import type { RoomSummary, ServerSummary, UserProfile } from '@concord/shared';
 import ServerRail from '../components/ServerRail';
 import RoomSidebar from '../components/RoomSidebar';
 import TopBar from '../components/TopBar';
 import RoomView from '../components/RoomView';
-import { mockRoomsByServer, mockServers } from '../fixtures/mockData';
+import EmptyServerState from './EmptyServerState';
+import ProfilePage from './ProfilePage';
+import { getServer } from '../lib/api';
+import { useRoomConnection } from '../hooks/useRoomConnection';
 import '../styles/ServerListPage.css';
 
 interface ServerListPageProps {
+  currentUser: UserProfile;
+  onCurrentUserChange: (user: UserProfile) => void;
   onActiveServerChange: (serverName: string) => void;
 }
 
-export default function ServerListPage({ onActiveServerChange }: ServerListPageProps) {
-  const [selectedServerId, setSelectedServerId] = useState(mockServers[0].id);
+// No room-creation feature yet — the owned server always starts empty.
+const rooms: RoomSummary[] = [];
+
+export default function ServerListPage({
+  currentUser,
+  onCurrentUserChange,
+  onActiveServerChange
+}: ServerListPageProps) {
+  const [ownedServer, setOwnedServer] = useState<ServerSummary | null>(null);
   const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
   const [isMicMuted, setIsMicMuted] = useState(false);
   const [isDeafened, setIsDeafened] = useState(false);
+  const [isProfileOpen, setIsProfileOpen] = useState(false);
   // Placeholder for the real signal: once WebRTC audio is wired, this will be
   // replaced by a getStats() poll reading each track's audioLevel (RFC 6464)
   // against a threshold, per the "Detecção de atividade de voz" stack decision.
@@ -25,13 +39,38 @@ export default function ServerListPage({ onActiveServerChange }: ServerListPageP
   // all three bands so the color-coding is visible without real network data.
   const [latencyMs, setLatencyMs] = useState(80);
 
-  const selectedServer = mockServers.find((server) => server.id === selectedServerId)!;
-  const rooms = mockRoomsByServer[selectedServerId] ?? [];
-  const selectedRoom = rooms.find((room) => room.id === selectedRoomId) ?? null;
+  const {
+    connectionStatus,
+    selfPeerId,
+    hostPeerId,
+    peers,
+    setLocalCameraTrack,
+    setLocalScreenTrack
+  } = useRoomConnection(selectedRoomId, currentUser.displayName, isMicMuted);
 
   useEffect(() => {
-    onActiveServerChange(selectedServer.name);
-  }, [selectedServer, onActiveServerChange]);
+    if (!currentUser.ownedServerId) {
+      setOwnedServer(null);
+      return;
+    }
+    let cancelled = false;
+    getServer(currentUser.ownedServerId).then((server) => {
+      if (!cancelled) setOwnedServer(server);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUser.ownedServerId]);
+
+  useEffect(() => {
+    onActiveServerChange(ownedServer?.name ?? 'Concord');
+  }, [ownedServer, onActiveServerChange]);
+
+  // Unexpected drop (not a manual "leave") — fall back to "Ninguém está em voz" instead of
+  // showing a dead room view. No reconnect attempt in this pass, kept intentionally minimal.
+  useEffect(() => {
+    if (selectedRoomId && connectionStatus === 'disconnected') setSelectedRoomId(null);
+  }, [connectionStatus, selectedRoomId]);
 
   useEffect(() => {
     if (!selectedRoomId) return;
@@ -49,11 +88,6 @@ export default function ServerListPage({ onActiveServerChange }: ServerListPageP
     }, 3000);
     return () => clearInterval(interval);
   }, [selectedRoomId]);
-
-  function handleSelectServer(serverId: string) {
-    setSelectedServerId(serverId);
-    setSelectedRoomId(null);
-  }
 
   function handleToggleMic() {
     setIsMicMuted((prev) => {
@@ -77,16 +111,52 @@ export default function ServerListPage({ onActiveServerChange }: ServerListPageP
     setSelectedRoomId(null);
   }
 
+  if (!currentUser.ownedServerId) {
+    return (
+      <div className="server-list-page server-list-page--empty">
+        <button
+          className="server-list-page__profile-corner"
+          onClick={() => setIsProfileOpen(true)}
+          title="Seu perfil"
+        >
+          {currentUser.avatarUrl ? (
+            <img src={currentUser.avatarUrl} alt="" />
+          ) : (
+            currentUser.displayName.charAt(0).toUpperCase()
+          )}
+        </button>
+
+        <EmptyServerState
+          currentUser={currentUser}
+          onServerCreated={(server) => {
+            setOwnedServer(server);
+            onCurrentUserChange({ ...currentUser, ownedServerId: server.id });
+          }}
+        />
+
+        {isProfileOpen && (
+          <ProfilePage
+            user={currentUser}
+            onClose={() => setIsProfileOpen(false)}
+            onUserChange={onCurrentUserChange}
+          />
+        )}
+      </div>
+    );
+  }
+
+  if (!ownedServer) {
+    return <div className="server-list-page server-list-page--loading" />;
+  }
+
+  const selectedRoom = rooms.find((room) => room.id === selectedRoomId) ?? null;
+
   return (
     <div className="server-list-page">
-      <ServerRail
-        servers={mockServers}
-        selectedServerId={selectedServerId}
-        onSelectServer={handleSelectServer}
-      />
+      <ServerRail servers={[ownedServer]} selectedServerId={ownedServer.id} onSelectServer={() => {}} />
 
       <RoomSidebar
-        server={selectedServer}
+        server={ownedServer}
         rooms={rooms}
         selectedRoomId={selectedRoomId}
         onSelectRoom={setSelectedRoomId}
@@ -97,6 +167,11 @@ export default function ServerListPage({ onActiveServerChange }: ServerListPageP
         isSpeaking={isSpeaking && !isMicMuted}
         latencyMs={latencyMs}
         onLeave={handleLeave}
+        selfPeerId={selfPeerId}
+        hostPeerId={hostPeerId}
+        peers={peers}
+        currentUser={currentUser}
+        onOpenProfile={() => setIsProfileOpen(true)}
       />
 
       <div className="server-list-page__main">
@@ -107,8 +182,23 @@ export default function ServerListPage({ onActiveServerChange }: ServerListPageP
           onToggleMic={handleToggleMic}
           isSpeaking={isSpeaking}
           onLeave={handleLeave}
+          isDeafened={isDeafened}
+          selfPeerId={selfPeerId}
+          hostPeerId={hostPeerId}
+          peers={peers}
+          setLocalCameraTrack={setLocalCameraTrack}
+          setLocalScreenTrack={setLocalScreenTrack}
+          currentUserDisplayName={currentUser.displayName}
         />
       </div>
+
+      {isProfileOpen && (
+        <ProfilePage
+          user={currentUser}
+          onClose={() => setIsProfileOpen(false)}
+          onUserChange={onCurrentUserChange}
+        />
+      )}
     </div>
   );
 }

@@ -1,5 +1,17 @@
-import { app, BrowserWindow, desktopCapturer, ipcMain } from 'electron';
+import 'dotenv/config';
+import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, safeStorage } from 'electron';
+import { readFile, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { loginWithGoogle } from './googleAuth';
+
+const sessionFilePath = () => path.join(app.getPath('userData'), 'session.enc');
+
+const IMAGE_MIME_TYPES: Record<string, string> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp'
+};
 
 const isDev = !app.isPackaged;
 
@@ -44,6 +56,51 @@ ipcMain.on('window:maximize-toggle', (event) => {
 
 ipcMain.on('window:close', (event) => {
   BrowserWindow.fromWebContents(event.sender)?.close();
+});
+
+ipcMain.handle('media:pick-image', async (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const options: Electron.OpenDialogOptions = {
+    properties: ['openFile'],
+    filters: [{ name: 'Imagens', extensions: ['png', 'jpg', 'jpeg', 'webp'] }]
+  };
+  const result = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options);
+  if (result.canceled || result.filePaths.length === 0) return null;
+
+  const filePath = result.filePaths[0];
+  const extension = path.extname(filePath).toLowerCase();
+  const mimeType = IMAGE_MIME_TYPES[extension];
+  if (!mimeType) return null;
+
+  const buffer = await readFile(filePath);
+  return {
+    fileName: path.basename(filePath),
+    mimeType,
+    data: buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength)
+  };
+});
+
+ipcMain.handle('auth:login-with-google', async () => {
+  return loginWithGoogle();
+});
+
+ipcMain.handle('session:save', async (_event, token: string) => {
+  if (!safeStorage.isEncryptionAvailable()) return;
+  await writeFile(sessionFilePath(), safeStorage.encryptString(token));
+});
+
+ipcMain.handle('session:load', async () => {
+  if (!safeStorage.isEncryptionAvailable()) return null;
+  try {
+    const encrypted = await readFile(sessionFilePath());
+    return safeStorage.decryptString(encrypted);
+  } catch {
+    return null;
+  }
+});
+
+ipcMain.handle('session:clear', async () => {
+  await unlink(sessionFilePath()).catch(() => {});
 });
 
 ipcMain.handle('screen:get-sources', async () => {

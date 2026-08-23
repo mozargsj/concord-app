@@ -38,8 +38,8 @@
   width: 100%;
 }
 
-.login-page__disclaimer {
+.login-page__error {
   margin: 16px 0 0;
   font-size: 12px;
-  color: var(--color-text-muted);
+  color: var(--color-danger);
 }

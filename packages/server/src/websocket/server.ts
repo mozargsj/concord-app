@@ -3,6 +3,7 @@ import { createServer as createHttpServer, type RequestListener } from 'node:htt
 import { createServer as createHttpsServer } from 'node:https';
 import { WebSocketServer } from 'ws';
 import { handleConnection } from './connectionHandler.js';
+import { handleHttpRequest } from '../http/router.js';
 
 export interface TlsOptions {
   certPath: string;
@@ -15,11 +16,11 @@ export interface TlsOptions {
  * some certificate, not one issued by a trusted CA. Without it, falls back to plain ws.
  */
 export function createSignalingServer(port: number, tls?: TlsOptions): WebSocketServer {
-  // ws only hooks the 'upgrade' event — plain HTTP requests (health checks, sanity curls)
-  // would otherwise hang forever with no response, since Node sends nothing by default.
-  const requestHandler: RequestListener = (_req, res) => {
-    res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('ok');
+  // ws only hooks the 'upgrade' event — plain HTTP requests (health checks, sanity curls,
+  // and now the account/server REST API) would otherwise hang forever with no response,
+  // since Node sends nothing by default.
+  const requestHandler: RequestListener = (req, res) => {
+    void handleHttpRequest(req, res);
   };
 
   const server = tls

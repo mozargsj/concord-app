@@ -10,4 +10,5 @@ export interface ServerSummary {
   id: string;
   name: string;
   iconUrl: string | null;
+  ownerUserId: string;
 }

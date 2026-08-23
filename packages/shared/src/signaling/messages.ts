@@ -1,6 +1,7 @@
 export interface JoinRoomMessage {
   type: 'join-room';
   roomId: string;
+  displayName: string;
 }
 
 export interface SdpOfferMessage {
@@ -67,7 +68,7 @@ export interface RoomJoinedMessage {
   peerId: string;
   hostPeerId: string;
   epoch: number;
-  peerIds: string[];
+  peers: { peerId: string; displayName: string }[];
 }
 
 export interface JoinRejectedMessage {
@@ -80,6 +81,7 @@ export interface PeerJoinedMessage {
   type: 'peer-joined';
   roomId: string;
   peerId: string;
+  displayName: string;
 }
 
 export interface PeerLeftMessage {

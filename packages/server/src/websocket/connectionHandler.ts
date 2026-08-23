@@ -19,7 +19,7 @@ export function handleConnection(socket: WebSocket): void {
 
     switch (message.type) {
       case 'join-room':
-        joinRoom(socket, message.roomId);
+        joinRoom(socket, message.roomId, message.displayName);
         break;
       case 'sdp-offer':
       case 'sdp-answer':
