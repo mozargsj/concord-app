@@ -55,6 +55,7 @@
   background: var(--color-accent-hover);
 }
 
+.call-controls__mic-wrap,
 .call-controls__chevron-wrap {
   position: relative;
 }

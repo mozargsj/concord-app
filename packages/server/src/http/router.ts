@@ -20,6 +20,7 @@ import type {
   ServerSummary,
   UpdateProfileRequest,
   UpdateRoomRequest,
+  UpdateServerRequest,
   UserProfile
 } from '@concord/shared';
 import { Role, hasAtLeastRole } from '@concord/shared';
@@ -208,6 +209,10 @@ export async function handleHttpRequest(req: IncomingMessage, res: ServerRespons
       await handleGetServer(req, res, segments[1]);
       return;
     }
+    if (method === 'PATCH' && segments.length === 2 && segments[0] === 'servers') {
+      await handleUpdateServer(req, res, segments[1]);
+      return;
+    }
     if (
       method === 'POST' &&
       segments.length === 3 &&
@@ -366,6 +371,29 @@ async function handleGetServer(req: IncomingMessage, res: ServerResponse, server
   if (myRole === null) return sendError(res, 403, 'forbidden');
 
   const response: ServerDetailsResponse = { server: await toServerSummary(record), myRole };
+  sendJson(res, 200, response);
+}
+
+async function handleUpdateServer(req: IncomingMessage, res: ServerResponse, serverId: string): Promise<void> {
+  const server = await serversRepo.findById(serverId);
+  if (!server) return sendError(res, 404, 'server-not-found');
+  // Rename is owner-only — same rank as creating/deleting a room (decisions.md §6), no separate
+  // "admin can rename the server" allowance was asked for.
+  const userId = await requireRank(req, res, server, Role.Dono);
+  if (!userId) return;
+
+  const body = await readJsonBody<UpdateServerRequest>(req);
+  const name = body?.name?.trim();
+  if (!name) return sendError(res, 400, 'name-required');
+
+  if (name.toLowerCase() !== server.name_lower) {
+    const existing = await serversRepo.findByNameLower(name.toLowerCase());
+    if (existing && existing.server_id !== serverId) return sendError(res, 409, 'name-taken');
+  }
+
+  await serversRepo.updateName(serverId, name);
+  const updated = await serversRepo.findById(serverId);
+  const response: CreateServerResponse = { server: await toServerSummary(updated!) };
   sendJson(res, 200, response);
 }
 

@@ -1,0 +1,119 @@
+.image-crop-modal__backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+}
+
+.image-crop-modal {
+  width: 440px;
+  background: var(--color-bg-elevated);
+  border-radius: var(--radius-lg);
+  padding: 20px 24px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.image-crop-modal__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.image-crop-modal__header h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.image-crop-modal__close {
+  border: none;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: 20px;
+  line-height: 1;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+}
+
+.image-crop-modal__close:hover {
+  background: var(--color-bg-elevated-hover);
+  color: var(--color-text-primary);
+}
+
+.image-crop-modal__stage {
+  position: relative;
+  width: 400px;
+  height: 280px;
+  overflow: hidden;
+  border-radius: var(--radius-md);
+  background: #000000;
+  cursor: grab;
+  user-select: none;
+}
+
+.image-crop-modal__stage:active {
+  cursor: grabbing;
+}
+
+.image-crop-modal__image {
+  position: absolute;
+  pointer-events: none;
+}
+
+/* The oversized box-shadow darkens everything outside the circle — one ring element instead
+   of a second dimmed copy of the image underneath. */
+.image-crop-modal__ring {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.9);
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.55);
+  pointer-events: none;
+}
+
+.image-crop-modal__zoom-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--color-text-secondary);
+}
+
+.image-crop-modal__zoom-icon {
+  flex-shrink: 0;
+}
+
+.image-crop-modal__zoom-slider {
+  flex: 1;
+  accent-color: var(--color-accent);
+}
+
+.image-crop-modal__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.image-crop-modal__reset {
+  border: none;
+  background: transparent;
+  color: var(--color-accent);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 4px;
+}
+
+.image-crop-modal__reset:hover {
+  text-decoration: underline;
+}
+
+.image-crop-modal__footer-actions {
+  display: flex;
+  gap: 8px;
+}

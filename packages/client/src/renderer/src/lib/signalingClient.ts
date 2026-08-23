@@ -12,14 +12,14 @@ export class SignalingClient {
   private messageHandlers = new Set<(message: ServerToClientMessage) => void>();
   private statusHandlers = new Set<(status: SignalingStatus) => void>();
 
-  connect(url: string, roomId: string, displayName: string): void {
+  connect(url: string, roomId: string, displayName: string, userId: string): void {
     this.setStatus('connecting');
     const ws = new WebSocket(url);
     this.ws = ws;
 
     ws.onopen = () => {
       this.setStatus('connected');
-      this.send({ type: 'join-room', roomId, displayName });
+      this.send({ type: 'join-room', roomId, displayName, userId });
     };
 
     ws.onmessage = (event) => {

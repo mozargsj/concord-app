@@ -1,17 +1,24 @@
 import 'dotenv/config';
 import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, safeStorage } from 'electron';
-import { readFile, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { loginWithGoogle } from './googleAuth';
 import { checkForUpdatesOnStartup } from './autoUpdate';
 
 const sessionFilePath = () => path.join(app.getPath('userData'), 'session.enc');
+const imageCacheDir = () => path.join(app.getPath('userData'), 'imageCache');
 
 const IMAGE_MIME_TYPES: Record<string, string> = {
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
   '.webp': 'image/webp'
+};
+
+const EXTENSION_BY_MIME_TYPE: Record<string, string> = {
+  'image/png': '.png',
+  'image/jpeg': '.jpg',
+  'image/webp': '.webp'
 };
 
 const isDev = !app.isPackaged;
@@ -126,6 +133,46 @@ ipcMain.handle('media:pick-image', async (event) => {
   const buffer = await readFile(filePath);
   return {
     fileName: path.basename(filePath),
+    mimeType,
+    data: buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength)
+  };
+});
+
+// Cache key is derived from a userId/serverId that can arrive over the signaling protocol from
+// an untrusted peer (see roomManager.joinRoom) — sanitized before touching the filesystem so a
+// malicious peer claiming a crafted "userId" can't write outside imageCache/ (path traversal).
+function sanitizeCacheKey(key: string): string {
+  return key.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 200);
+}
+
+ipcMain.handle('image-cache:save', async (_event, key: string, data: ArrayBuffer, mimeType: string) => {
+  const extension = EXTENSION_BY_MIME_TYPE[mimeType];
+  if (!extension) return false;
+  const safeKey = sanitizeCacheKey(key);
+  const dir = imageCacheDir();
+  await mkdir(dir, { recursive: true });
+  // One cached file per key — clear any stale extension from a previous save with a different
+  // mime type before writing the new one, so load() never finds two matches for the same key.
+  const existing = await readdir(dir).catch(() => []);
+  await Promise.all(
+    existing
+      .filter((name) => name.startsWith(`${safeKey}.`))
+      .map((name) => unlink(path.join(dir, name)).catch(() => {}))
+  );
+  await writeFile(path.join(dir, `${safeKey}${extension}`), Buffer.from(data));
+  return true;
+});
+
+ipcMain.handle('image-cache:load', async (_event, key: string) => {
+  const safeKey = sanitizeCacheKey(key);
+  const dir = imageCacheDir();
+  const existing = await readdir(dir).catch(() => []);
+  const match = existing.find((name) => name.startsWith(`${safeKey}.`));
+  if (!match) return null;
+  const mimeType = IMAGE_MIME_TYPES[path.extname(match).toLowerCase()];
+  if (!mimeType) return null;
+  const buffer = await readFile(path.join(dir, match));
+  return {
     mimeType,
     data: buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength)
   };

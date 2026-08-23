@@ -7,8 +7,12 @@
   "main": "out/electron/main/index.js",
   "scripts": {
     "dev:renderer": "vite",
+    "dev:renderer:test-dev": "vite --mode test-dev",
+    "dev:renderer:test-offline": "vite --mode test-offline",
     "dev:electron": "tsc -p tsconfig.electron.json && electron out/electron/main/index.js",
     "dev": "concurrently -k -n renderer,electron -c blue,green \"npm:dev:renderer\" \"wait-on tcp:5173 && npm run dev:electron\"",
+    "dev:test-dev": "concurrently -k -n renderer,electron -c blue,green \"npm:dev:renderer:test-dev\" \"wait-on tcp:5173 && npm run dev:electron\"",
+    "dev:test-offline": "concurrently -k -n renderer,electron -c blue,green \"npm:dev:renderer:test-offline\" \"wait-on tcp:5173 && npm run dev:electron\"",
     "build:renderer": "vite build",
     "build:renderer:test-dev": "vite build --mode test-dev",
     "build:renderer:test-offline": "vite build --mode test-offline",

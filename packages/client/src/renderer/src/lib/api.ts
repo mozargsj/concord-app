@@ -17,6 +17,7 @@ import type {
   ServerSummary,
   UpdateProfileRequest,
   UpdateRoomRequest,
+  UpdateServerRequest,
   UploadKind,
   UserProfile
 } from '@concord/shared';
@@ -148,6 +149,20 @@ export async function createServer(name: string, iconKey?: string): Promise<Serv
   const body: CreateServerRequest = { name, iconKey };
   const result = await request<CreateServerResponse>('/servers', {
     method: 'POST',
+    body: JSON.stringify(body)
+  });
+  return result.server;
+}
+
+export async function updateServer(serverId: string, name: string): Promise<ServerSummary> {
+  if (TEST_MODE) {
+    if (!testState.server || testState.server.id !== serverId) throw new ApiError('server-not-found', 404);
+    testState.server = { ...testState.server, name };
+    return testState.server;
+  }
+  const body: UpdateServerRequest = { name };
+  const result = await request<CreateServerResponse>(`/servers/${serverId}`, {
+    method: 'PATCH',
     body: JSON.stringify(body)
   });
   return result.server;

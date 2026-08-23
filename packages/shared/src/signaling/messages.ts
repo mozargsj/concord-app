@@ -2,6 +2,7 @@ export interface JoinRoomMessage {
   type: 'join-room';
   roomId: string;
   displayName: string;
+  userId: string;
 }
 
 export interface SdpOfferMessage {
@@ -54,6 +55,15 @@ export interface DeviceSwitchedMessage {
   kind: DeviceKind;
 }
 
+/** Mic mute / deafen leave no observable trace for other peers (mute is just track.enabled =
+ * false locally, deafen is local playback suppression) — broadcast explicitly so everyone can
+ * show the right "not listening/speaking" indicator next to that participant's name. */
+export interface MicStateMessage {
+  type: 'mic-state';
+  isMicMuted: boolean;
+  isDeafened: boolean;
+}
+
 export type ClientToServerMessage =
   | JoinRoomMessage
   | SdpOfferMessage
@@ -62,7 +72,8 @@ export type ClientToServerMessage =
   | HostHeartbeatMessage
   | HostCandidateConfirmMessage
   | PingMessage
-  | DeviceSwitchedMessage;
+  | DeviceSwitchedMessage
+  | MicStateMessage;
 
 /** Relayed to the target peer with the sender's id attached, since the client-to-server shape has no envelope. */
 export interface SdpOfferRelayMessage extends SdpOfferMessage {
@@ -84,7 +95,7 @@ export interface RoomJoinedMessage {
   peerId: string;
   hostPeerId: string;
   epoch: number;
-  peers: { peerId: string; displayName: string }[];
+  peers: { peerId: string; displayName: string; userId: string }[];
 }
 
 export interface JoinRejectedMessage {
@@ -98,6 +109,7 @@ export interface PeerJoinedMessage {
   roomId: string;
   peerId: string;
   displayName: string;
+  userId: string;
 }
 
 export interface PeerLeftMessage {
@@ -130,6 +142,14 @@ export interface PeerDeviceSwitchedMessage {
   kind: DeviceKind;
 }
 
+export interface PeerMicStateMessage {
+  type: 'peer-mic-state';
+  roomId: string;
+  peerId: string;
+  isMicMuted: boolean;
+  isDeafened: boolean;
+}
+
 export type ServerToClientMessage =
   | RoomJoinedMessage
   | JoinRejectedMessage
@@ -142,4 +162,5 @@ export type ServerToClientMessage =
   | HostChangedMessage
   | RoomClosedMessage
   | PongMessage
-  | PeerDeviceSwitchedMessage;
+  | PeerDeviceSwitchedMessage
+  | PeerMicStateMessage;

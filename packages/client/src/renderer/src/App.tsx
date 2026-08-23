@@ -8,6 +8,7 @@ import LoginPage from './pages/LoginPage';
 import ServerListPage from './pages/ServerListPage';
 import { getCurrentUser, setSessionToken } from './lib/api';
 import { clearStoredSessionToken, getStoredSessionToken, setStoredSessionToken } from './lib/session';
+import { loadCachedImage } from './lib/imageCache';
 import './styles/App.css';
 
 type View = 'loading' | 'login' | 'app';
@@ -31,6 +32,15 @@ export default function App() {
     return window.concord?.app.onUpdateStatus(setUpdateStatus);
   }, []);
 
+  // The backend's avatarUrl may be null (nothing persisted server-side — avatars are P2P-only
+  // now, see decisions.md) even though this is my own account and the file is sitting right
+  // here in my disk cache from a previous pick.
+  async function hydrateOwnAvatar(user: UserProfile): Promise<UserProfile> {
+    if (user.avatarUrl) return user;
+    const cached = await loadCachedImage('avatar', user.id);
+    return cached ? { ...user, avatarUrl: cached.url } : user;
+  }
+
   useEffect(() => {
     if (updateStatus !== 'done') return;
     getStoredSessionToken().then((token) => {
@@ -40,6 +50,7 @@ export default function App() {
       }
       setSessionToken(token);
       getCurrentUser()
+        .then((user) => hydrateOwnAvatar(user))
         .then((user) => {
           setCurrentUser(user);
           setView('app');
@@ -57,6 +68,7 @@ export default function App() {
     setStoredSessionToken(sessionToken);
     setCurrentUser(user);
     setView('app');
+    void hydrateOwnAvatar(user).then(setCurrentUser);
   }
 
   return (

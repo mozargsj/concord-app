@@ -2,11 +2,13 @@ import { useState } from 'react';
 import { Mic, MicOff, Headphones, HeadphoneOff, Settings, ChevronDown } from 'lucide-react';
 import SettingsModal from './SettingsModal';
 import DeviceMenu from './DeviceMenu';
+import MutedHint from './MutedHint';
 import '../styles/UserPanel.css';
 
 interface UserPanelProps {
   isMicMuted: boolean;
   isDeafened: boolean;
+  showMutedSpeakingHint: boolean;
   onToggleMic: () => void;
   onToggleDeafen: () => void;
   onSelectMic: (deviceId: string) => void;
@@ -19,6 +21,7 @@ interface UserPanelProps {
 export default function UserPanel({
   isMicMuted,
   isDeafened,
+  showMutedSpeakingHint,
   onToggleMic,
   onToggleDeafen,
   onSelectMic,
@@ -65,6 +68,7 @@ export default function UserPanel({
           {openMenu === 'mic' && (
             <DeviceMenu kind="audioinput" onSelect={onSelectMic} onClose={() => setOpenMenu(null)} />
           )}
+          {showMutedSpeakingHint && <MutedHint />}
         </div>
 
         <div className="user-panel__device-group">

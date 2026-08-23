@@ -18,6 +18,7 @@ interface Peer {
   roomId: string;
   joinedAt: number;
   displayName: string;
+  userId: string;
 }
 
 interface PendingMigration {
@@ -47,7 +48,7 @@ function broadcast(room: Room, message: ServerToClientMessage, excludePeerId?: s
   }
 }
 
-export function joinRoom(socket: WebSocket, roomId: string, displayName: string): void {
+export function joinRoom(socket: WebSocket, roomId: string, displayName: string, userId: string): void {
   if (peersBySocket.has(socket)) return; // one room per socket at a time
 
   let room = rooms.get(roomId);
@@ -62,10 +63,21 @@ export function joinRoom(socket: WebSocket, roomId: string, displayName: string)
   }
 
   const existingPeers = [...room.peers.values()];
-  // displayName comes from an untrusted client and is rebroadcast to strangers in the room —
-  // trim/cap it rather than trusting it verbatim.
+  // displayName/userId come from an untrusted client and are rebroadcast to strangers in the
+  // room — trim/cap rather than trusting verbatim. userId lets peers attribute a shared-room
+  // participant to a persistent account (e.g. to fetch their avatar over the mesh's own data
+  // channel) — it's not used for any authorization decision, so a spoofed value only misleads
+  // other clients' local caches, never grants access to anything.
   const safeDisplayName = displayName.trim().slice(0, 60) || 'Peer';
-  const peer: Peer = { id: randomUUID(), socket, roomId, joinedAt: Date.now(), displayName: safeDisplayName };
+  const safeUserId = userId.trim().slice(0, 100) || randomUUID();
+  const peer: Peer = {
+    id: randomUUID(),
+    socket,
+    roomId,
+    joinedAt: Date.now(),
+    displayName: safeDisplayName,
+    userId: safeUserId
+  };
   room.peers.set(peer.id, peer);
   peersBySocket.set(socket, peer);
 
@@ -79,10 +91,14 @@ export function joinRoom(socket: WebSocket, roomId: string, displayName: string)
     peerId: peer.id,
     hostPeerId: room.hostPeerId,
     epoch: room.epoch,
-    peers: existingPeers.map((p) => ({ peerId: p.id, displayName: p.displayName }))
+    peers: existingPeers.map((p) => ({ peerId: p.id, displayName: p.displayName, userId: p.userId }))
   });
 
-  broadcast(room, { type: 'peer-joined', roomId, peerId: peer.id, displayName: safeDisplayName }, peer.id);
+  broadcast(
+    room,
+    { type: 'peer-joined', roomId, peerId: peer.id, displayName: safeDisplayName, userId: safeUserId },
+    peer.id
+  );
 }
 
 export function relay(
@@ -127,6 +143,16 @@ export function handleDeviceSwitched(socket: WebSocket, kind: DeviceKind): void 
   if (!room) return;
   // The switcher already plays the sound locally, no round-trip needed for their own feedback.
   broadcast(room, { type: 'peer-device-switched', roomId: room.id, peerId: peer.id, kind }, peer.id);
+}
+
+export function handleMicState(socket: WebSocket, isMicMuted: boolean, isDeafened: boolean): void {
+  const peer = peersBySocket.get(socket);
+  if (!peer) return;
+  const room = rooms.get(peer.roomId);
+  if (!room) return;
+  // Not excluding the sender here (unlike peer-device-switched) — this drives a persistent
+  // UI indicator next to the sender's own name too, on every other client, not a one-off sound.
+  broadcast(room, { type: 'peer-mic-state', roomId: room.id, peerId: peer.id, isMicMuted, isDeafened });
 }
 
 export function handleDisconnect(socket: WebSocket): void {

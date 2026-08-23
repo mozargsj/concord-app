@@ -5,7 +5,19 @@ import VoiceConnectionStatus from './VoiceConnectionStatus';
 import HostStarBadge from './HostStarBadge';
 import LiveBadge from './LiveBadge';
 import ConfirmModal from './ConfirmModal';
-import { ChevronDown, UserPlus, Plus, Volume2, Video, VideoOff, ScreenShare, LayoutGrid, Megaphone } from 'lucide-react';
+import {
+  ChevronDown,
+  UserPlus,
+  Plus,
+  Volume2,
+  Video,
+  VideoOff,
+  ScreenShare,
+  LayoutGrid,
+  Megaphone,
+  MicOff,
+  HeadphoneOff
+} from 'lucide-react';
 import { getAvatarColor } from '../lib/avatarColor';
 import type { RoomPeer } from '../hooks/useRoomConnection';
 import '../styles/RoomSidebar.css';
@@ -30,6 +42,7 @@ interface RoomSidebarProps {
   onSelectMic: (deviceId: string) => void;
   onSelectSpeaker: (deviceId: string) => void;
   isSpeaking: boolean;
+  showMutedSpeakingHint: boolean;
   latencyMs: number | null;
   onLeave: () => void;
   selfPeerId: string | null;
@@ -60,6 +73,7 @@ export default function RoomSidebar({
   onSelectMic,
   onSelectSpeaker,
   isSpeaking,
+  showMutedSpeakingHint,
   latencyMs,
   onLeave,
   selfPeerId,
@@ -170,29 +184,41 @@ export default function RoomSidebar({
           const participants: {
             key: string;
             name: string;
+            avatarUrl: string | null;
             isSelf: boolean;
             isHost: boolean;
             isSpeaking: boolean;
             isBroadcasting: boolean;
+            isMicMuted: boolean;
+            isDeafened: boolean;
           }[] = isJoined
             ? [
                 {
                   key: 'self',
                   name: currentUser.displayName,
+                  avatarUrl: currentUser.avatarUrl,
                   isSelf: true,
                   isHost: selfPeerId !== null && selfPeerId === hostPeerId,
                   isSpeaking,
-                  isBroadcasting: selfCameraOn || selfSharingScreen
+                  isBroadcasting: selfCameraOn || selfSharingScreen,
+                  isMicMuted,
+                  isDeafened
                 },
                 ...peers.map((peer) => ({
                   key: peer.peerId,
                   name: peer.displayName,
+                  // Only ever populated after a P2P fetch from this peer succeeds — see
+                  // useRoomConnection's onImageReceived. Falls back to the initial letter below
+                  // until then, same as it did before P2P avatars existed at all.
+                  avatarUrl: peer.avatarUrl,
                   isSelf: false,
                   isHost: peer.peerId === hostPeerId,
                   isSpeaking: peer.isSpeaking,
                   isBroadcasting:
                     (!!peer.personalStream && peer.personalStream.getVideoTracks().length > 0) ||
-                    !!peer.screenStream
+                    !!peer.screenStream,
+                  isMicMuted: peer.isMicMuted,
+                  isDeafened: peer.isDeafened
                 }))
               ]
             : [];
@@ -256,11 +282,28 @@ export default function RoomSidebar({
                           'room-sidebar__participant-avatar' +
                           (participant.isSpeaking ? ' room-sidebar__participant-avatar--speaking' : '')
                         }
-                        style={{ background: getAvatarColor(participant.name) }}
+                        style={participant.avatarUrl ? undefined : { background: getAvatarColor(participant.name) }}
                       >
-                        {participant.name.charAt(0)}
+                        {participant.avatarUrl ? (
+                          <img
+                            src={participant.avatarUrl}
+                            alt=""
+                            className="room-sidebar__participant-avatar-image"
+                          />
+                        ) : (
+                          participant.name.charAt(0)
+                        )}
                       </span>
                       <span className="room-sidebar__participant-name">{participant.name}</span>
+                      {participant.isMicMuted && (
+                        <span
+                          className="room-sidebar__mic-status"
+                          title={participant.isDeafened ? 'Não está ouvindo nem falando' : 'Microfone desativado'}
+                        >
+                          <MicOff size={12} />
+                          {participant.isDeafened && <HeadphoneOff size={12} />}
+                        </span>
+                      )}
                       {participant.isBroadcasting && <LiveBadge className="room-sidebar__live-badge" />}
                       {participant.isHost && <HostStarBadge className="room-sidebar__host-star" />}
                     </div>
@@ -315,6 +358,7 @@ export default function RoomSidebar({
           <UserPanel
             isMicMuted={isMicMuted}
             isDeafened={isDeafened}
+            showMutedSpeakingHint={showMutedSpeakingHint}
             onToggleMic={onToggleMic}
             onToggleDeafen={onToggleDeafen}
             onSelectMic={onSelectMic}

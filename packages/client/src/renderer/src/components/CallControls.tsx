@@ -1,12 +1,14 @@
 import { useState } from 'react';
 import { Mic, MicOff, Video, VideoOff, ChevronDown, ScreenShare, MoreHorizontal, PhoneOff } from 'lucide-react';
 import DeviceMenu from './DeviceMenu';
+import MutedHint from './MutedHint';
 import '../styles/CallControls.css';
 
 interface CallControlsProps {
   isMicMuted: boolean;
   onToggleMic: () => void;
   onSelectMic: (deviceId: string) => void;
+  showMutedSpeakingHint: boolean;
   isCameraOn: boolean;
   onToggleCamera: () => void;
   onSelectCamera: (deviceId: string) => void;
@@ -19,6 +21,7 @@ export default function CallControls({
   isMicMuted,
   onToggleMic,
   onSelectMic,
+  showMutedSpeakingHint,
   isCameraOn,
   onToggleCamera,
   onSelectCamera,
@@ -31,13 +34,16 @@ export default function CallControls({
   return (
     <div className="call-controls">
       <div className="call-controls__group">
-        <button
-          className={'call-controls__button' + (isMicMuted ? ' call-controls__button--muted' : '')}
-          title={isMicMuted ? 'Ativar microfone' : 'Mutar microfone'}
-          onClick={onToggleMic}
-        >
-          {isMicMuted ? <MicOff size={18} /> : <Mic size={18} />}
-        </button>
+        <div className="call-controls__mic-wrap">
+          <button
+            className={'call-controls__button' + (isMicMuted ? ' call-controls__button--muted' : '')}
+            title={isMicMuted ? 'Ativar microfone' : 'Mutar microfone'}
+            onClick={onToggleMic}
+          >
+            {isMicMuted ? <MicOff size={18} /> : <Mic size={18} />}
+          </button>
+          {showMutedSpeakingHint && <MutedHint />}
+        </div>
         <div className="call-controls__chevron-wrap">
           <button
             className="call-controls__chevron"

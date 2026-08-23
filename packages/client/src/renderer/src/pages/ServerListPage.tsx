@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { RoomSummary, ServerSummary, UserProfile } from '@concord/shared';
 import type { ScreenSource } from '../types/window';
 import ServerRail from '../components/ServerRail';
@@ -23,9 +23,16 @@ import {
 } from '../lib/api';
 import { useRoomConnection } from '../hooks/useRoomConnection';
 import { getPreferredDeviceId } from '../lib/devicePreferences';
+import { loadCachedImage } from '../lib/imageCache';
 import {
   playCameraStart,
+  playCameraStop,
+  playDeafenMuted,
+  playDeafenUnmuted,
+  playMicMuted,
+  playMicUnmuted,
   playRoomJoin,
+  playRoomLeave,
   playTransmissionEnter,
   playTransmissionExit,
   setDeafened as setSoundsDeafened
@@ -65,6 +72,27 @@ export default function ServerListPage({
   const [serverActionsMode, setServerActionsMode] = useState<'create' | 'join' | null>(null);
   const [inviteState, setInviteState] = useState<InviteState | null>(null);
 
+  // Just enough of selectedServer for useRoomConnection to know who to ask for the room's
+  // server icon (its owner) and what to answer with if that owner is me — memoized so the
+  // hook's ref-sync effect doesn't re-run every render over an equivalent-but-new object.
+  const roomServerInfo = useMemo(
+    () =>
+      selectedServer
+        ? { id: selectedServer.id, ownerUserId: selectedServer.ownerUserId, iconUrl: selectedServer.iconUrl }
+        : null,
+    [selectedServer]
+  );
+
+  function handleServerIconReceived(serverId: string, url: string): void {
+    setSelectedServer((prev) => (prev && prev.id === serverId ? { ...prev, iconUrl: url } : prev));
+    setMyServers((prev) => prev?.map((server) => (server.id === serverId ? { ...server, iconUrl: url } : server)) ?? prev);
+  }
+
+  function handleServerUpdated(updated: ServerSummary): void {
+    setSelectedServer((prev) => (prev && prev.id === updated.id ? updated : prev));
+    setMyServers((prev) => prev?.map((server) => (server.id === updated.id ? updated : server)) ?? prev);
+  }
+
   const {
     connectionStatus,
     selfPeerId,
@@ -76,7 +104,16 @@ export default function ServerListPage({
     setLocalScreenTrack,
     switchMicDevice,
     sendDeviceSwitched
-  } = useRoomConnection(selectedRoomId, currentUser.displayName, isMicMuted);
+  } = useRoomConnection(
+    selectedRoomId,
+    currentUser.displayName,
+    currentUser.id,
+    isMicMuted,
+    isDeafened,
+    currentUser.avatarUrl,
+    roomServerInfo,
+    handleServerIconReceived
+  );
 
   const cameraStreamRef = useRef<MediaStream | null>(null);
   const screenStreamRef = useRef<MediaStream | null>(null);
@@ -98,6 +135,14 @@ export default function ServerListPage({
       if (cancelled) return;
       setSelectedServer(server);
       setMyRole(role);
+      // The backend's iconUrl may be null (nothing persisted server-side for it — see
+      // decisions.md, images are P2P-only now) even though *I* am the one who set this icon
+      // and it's sitting right here in my own disk cache from having picked it.
+      if (!server.iconUrl && server.ownerUserId === currentUser.id) {
+        loadCachedImage('server-icon', server.id).then((cached) => {
+          if (!cancelled && cached) setSelectedServer((prev) => (prev ? { ...prev, iconUrl: cached.url } : prev));
+        });
+      }
     });
     listRooms(selectedServerId).then((list) => {
       if (!cancelled) setRooms(list);
@@ -171,6 +216,7 @@ export default function ServerListPage({
       cameraStreamRef.current = null;
       setCameraStream(null);
       setLocalCameraTrack(null);
+      playCameraStop();
       return;
     }
     await startCamera();
@@ -231,6 +277,8 @@ export default function ServerListPage({
       const next = !prev;
       // Unmuting manually also lifts deafen — matches how Discord's headset behaves.
       if (!next && isDeafened) setIsDeafened(false);
+      if (next) playMicMuted();
+      else playMicUnmuted();
       return next;
     });
   }
@@ -238,13 +286,18 @@ export default function ServerListPage({
   function handleToggleDeafen() {
     setIsDeafened((prev) => {
       const next = !prev;
-      // Deafening also mutes the mic; un-deafening does not auto-unmute.
-      if (next) setIsMicMuted(true);
+      // Mic mirrors deafen both ways — deafening mutes it, un-deafening unmutes it too.
+      setIsMicMuted(next);
+      // One combined sound for "headset + mic together" — sets isMicMuted directly rather
+      // than calling handleToggleMic, so its mic-only sound never fires alongside this one.
+      if (next) playDeafenMuted();
+      else playDeafenUnmuted();
       return next;
     });
   }
 
   function handleLeave() {
+    playRoomLeave();
     setSelectedRoomId(null);
   }
 
@@ -331,6 +384,7 @@ export default function ServerListPage({
           onOpenProfile={() => setIsProfileOpen(true)}
           onOpenInvite={() => setServerActionsMode('join')}
           onOpenCreateServer={() => setServerActionsMode('create')}
+          onServerUpdated={handleServerUpdated}
         />
 
         <div className="server-list-page__main server-list-page__main--empty">
@@ -347,7 +401,6 @@ export default function ServerListPage({
 
         {serverActionsMode && (
           <ServerActionsModal
-            currentUser={currentUser}
             mode={serverActionsMode}
             onClose={() => setServerActionsMode(null)}
             onServerCreated={handleServerCreated}
@@ -379,6 +432,7 @@ export default function ServerListPage({
         onOpenProfile={() => setIsProfileOpen(true)}
         onOpenInvite={() => setServerActionsMode('join')}
         onOpenCreateServer={() => setServerActionsMode('create')}
+        onServerUpdated={handleServerUpdated}
       />
 
       <RoomSidebar
@@ -398,6 +452,7 @@ export default function ServerListPage({
         onSelectMic={switchMicDevice}
         onSelectSpeaker={() => sendDeviceSwitched('speaker')}
         isSpeaking={selfIsSpeaking && !isMicMuted}
+        showMutedSpeakingHint={isMicMuted && selfIsSpeaking}
         latencyMs={latencyMs}
         onLeave={handleLeave}
         selfPeerId={selfPeerId}
@@ -419,12 +474,14 @@ export default function ServerListPage({
           onToggleMic={handleToggleMic}
           onSelectMic={switchMicDevice}
           isSpeaking={selfIsSpeaking}
+          showMutedSpeakingHint={isMicMuted && selfIsSpeaking}
           onLeave={handleLeave}
           isDeafened={isDeafened}
           selfPeerId={selfPeerId}
           hostPeerId={hostPeerId}
           peers={peers}
           currentUserDisplayName={currentUser.displayName}
+          currentUserAvatarUrl={currentUser.avatarUrl}
           cameraStream={cameraStream}
           screenStream={screenStream}
           mediaError={mediaError}
@@ -444,7 +501,6 @@ export default function ServerListPage({
 
       {serverActionsMode && (
         <ServerActionsModal
-          currentUser={currentUser}
           mode={serverActionsMode}
           onClose={() => setServerActionsMode(null)}
           onServerCreated={handleServerCreated}

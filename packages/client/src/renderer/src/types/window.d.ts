@@ -20,6 +20,11 @@ export interface GoogleLoginResult {
 
 export type UpdateStatus = 'checking' | 'updating' | 'done';
 
+export interface CachedImage {
+  mimeType: string;
+  data: ArrayBuffer;
+}
+
 declare global {
   interface Window {
     concord: {
@@ -33,6 +38,10 @@ declare global {
       media: {
         getScreenSources: () => Promise<ScreenSource[]>;
         pickImage: () => Promise<PickedImage | null>;
+      };
+      imageCache: {
+        save: (key: string, data: ArrayBuffer, mimeType: string) => Promise<boolean>;
+        load: (key: string) => Promise<CachedImage | null>;
       };
       auth: {
         loginWithGoogle: () => Promise<GoogleLoginResult>;

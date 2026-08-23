@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { GetCommand, PutCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
+import { GetCommand, PutCommand, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { getDynamoClient } from '../aws/dynamoClient.js';
 import { env } from '../config/env.js';
 
@@ -51,4 +51,17 @@ export async function create(params: {
   };
   await getDynamoClient().send(new PutCommand({ TableName: tableName(), Item: record }));
   return record;
+}
+
+export async function updateName(serverId: string, name: string): Promise<void> {
+  const trimmed = name.trim();
+  await getDynamoClient().send(
+    new UpdateCommand({
+      TableName: tableName(),
+      Key: { server_id: serverId },
+      UpdateExpression: 'SET #name = :name, name_lower = :name_lower',
+      ExpressionAttributeNames: { '#name': 'name' },
+      ExpressionAttributeValues: { ':name': trimmed, ':name_lower': trimmed.toLowerCase() }
+    })
+  );
 }

@@ -3,8 +3,17 @@ import type { DeviceKind, ServerToClientMessage } from '@concord/shared';
 import { SignalingClient, type SignalingStatus } from '../lib/signalingClient';
 import { MeshManager } from '../lib/webrtcMesh';
 import { getPreferredDeviceId } from '../lib/devicePreferences';
-import { playDeviceSwitch, playRoomJoin } from '../lib/soundEffects';
+import { playDeviceSwitch, playRoomJoin, playRoomLeave } from '../lib/soundEffects';
 import { TEST_OFFLINE } from '../lib/api';
+import { fetchImageBytes, loadCachedImage, saveCachedImage, type ImageCacheKind } from '../lib/imageCache';
+
+/** The server the joined room belongs to — just enough to know who to ask for its icon (its
+ * owner) and, if that owner happens to be me, what to answer with. */
+interface RoomServerInfo {
+  id: string;
+  ownerUserId: string;
+  iconUrl: string | null;
+}
 
 const MIC_CONSTRAINTS = (preferredDeviceId: string | null): MediaTrackConstraints => ({
   echoCancellation: true,
@@ -17,10 +26,17 @@ const PING_INTERVAL_MS = 4000;
 
 export interface RoomPeer {
   peerId: string;
+  userId: string;
   displayName: string;
   personalStream: MediaStream | null;
   screenStream: MediaStream | null;
   isSpeaking: boolean;
+  isMicMuted: boolean;
+  isDeafened: boolean;
+  /** Only ever set after a successful P2P fetch from this peer (see requestImage in
+   * webrtcMesh.ts) — null until then, even if the peer has an avatar set, since there's no
+   * central store this could come from otherwise (decisions.md). */
+  avatarUrl: string | null;
 }
 
 interface RoomConnectionState {
@@ -47,11 +63,90 @@ const initialState: RoomConnectionState = {
  * hostPeerId for the joined room — same "elevated to feed two places at once" pattern
  * already used for isSpeaking/latencyMs.
  */
-export function useRoomConnection(roomId: string | null, displayName: string, isMicMuted: boolean) {
+export function useRoomConnection(
+  roomId: string | null,
+  displayName: string,
+  userId: string,
+  isMicMuted: boolean,
+  isDeafened: boolean,
+  myAvatarUrl: string | null,
+  server: RoomServerInfo | null,
+  onServerIconReceived: (serverId: string, url: string) => void
+) {
   const [state, setState] = useState<RoomConnectionState>(initialState);
   const meshRef = useRef<MeshManager | null>(null);
   const signalingRef = useRef<SignalingClient | null>(null);
   const micStreamRef = useRef<MediaStream | null>(null);
+  // Read inside the onImageRequest/requestPeerImages callbacks (created once per room
+  // connection) — refs keep them seeing the latest value without needing to recreate the mesh
+  // every time one changes, same trick as every other prop this hook watches via a side effect.
+  const myAvatarUrlRef = useRef(myAvatarUrl);
+  const serverRef = useRef(server);
+  const onServerIconReceivedRef = useRef(onServerIconReceived);
+
+  useEffect(() => {
+    myAvatarUrlRef.current = myAvatarUrl;
+  }, [myAvatarUrl]);
+  useEffect(() => {
+    serverRef.current = server;
+  }, [server]);
+  useEffect(() => {
+    onServerIconReceivedRef.current = onServerIconReceived;
+  }, [onServerIconReceived]);
+
+  /** Answers another peer's request for my avatar, or my server's icon if the request's
+   * ownerId is a server I actually own — shared by both the offline-test and real mesh below. */
+  async function onImageRequest(
+    kind: ImageCacheKind,
+    ownerId: string,
+    knownHash: string | null
+  ): Promise<
+    { status: 'unchanged' } | { status: 'missing' } | { status: 'data'; data: ArrayBuffer; mimeType: string; hash: string }
+  > {
+    const server = serverRef.current;
+    const url =
+      kind === 'avatar'
+        ? ownerId === userId
+          ? myAvatarUrlRef.current
+          : null
+        : server && server.id === ownerId && server.ownerUserId === userId
+          ? server.iconUrl
+          : null;
+    if (!url) return { status: 'missing' };
+    const fetched = await fetchImageBytes(url);
+    if (!fetched) return { status: 'missing' };
+    if (knownHash && knownHash === fetched.hash) return { status: 'unchanged' };
+    return { status: 'data', ...fetched };
+  }
+
+  /** A P2P download finished — cache it to disk and fold it into whichever piece of UI state
+   * cares (a peer's roster entry, or the joined room's server icon). */
+  function onImageReceived(kind: ImageCacheKind, ownerId: string, data: ArrayBuffer, mimeType: string): void {
+    void saveCachedImage(kind, ownerId, data, mimeType).then(({ url }) => {
+      if (kind === 'avatar') {
+        setState((prev) => ({
+          ...prev,
+          peers: prev.peers.map((peer) => (peer.userId === ownerId ? { ...peer, avatarUrl: url } : peer))
+        }));
+      } else {
+        onServerIconReceivedRef.current(ownerId, url);
+      }
+    });
+  }
+
+  /** Fires once per newly-known peer — asks them for their own avatar, and (if they're the
+   * joined room's server owner) for the server's icon too. requestImage no-ops harmlessly if
+   * the peer never answers (e.g. they have no avatar, or aren't really the owner). */
+  function requestPeerImages(mesh: MeshManager, peerId: string, peerUserId: string): void {
+    void loadCachedImage('avatar', peerUserId).then((cached) => {
+      mesh.requestImage(peerId, 'avatar', peerUserId, cached?.hash ?? null);
+    });
+    const server = serverRef.current;
+    if (!server || server.ownerUserId !== peerUserId) return;
+    void loadCachedImage('server-icon', server.id).then((cached) => {
+      mesh.requestImage(peerId, 'server-icon', server.id, cached?.hash ?? null);
+    });
+  }
 
   useEffect(() => {
     if (!roomId) {
@@ -73,7 +168,9 @@ export function useRoomConnection(roomId: string | null, displayName: string, is
         onSpeakingChange: () => {},
         onLocalSpeakingChange: (isSpeaking) => {
           setState((prev) => ({ ...prev, selfIsSpeaking: isSpeaking }));
-        }
+        },
+        onImageRequest,
+        onImageReceived
       });
       meshRef.current = mesh;
 
@@ -99,7 +196,6 @@ export function useRoomConnection(roomId: string | null, displayName: string, is
           localMicStream = stream;
           micStreamRef.current = stream;
           const track = stream.getAudioTracks()[0] ?? null;
-          if (track) track.enabled = !isMicMuted;
           mesh.setLocalMicTrack(track);
         })
         .catch(() => {
@@ -139,7 +235,9 @@ export function useRoomConnection(roomId: string | null, displayName: string, is
       },
       onLocalSpeakingChange: (isSpeaking) => {
         setState((prev) => ({ ...prev, selfIsSpeaking: isSpeaking }));
-      }
+      },
+      onImageRequest,
+      onImageReceived
     });
     meshRef.current = mesh;
 
@@ -163,13 +261,20 @@ export function useRoomConnection(roomId: string | null, displayName: string, is
             hostPeerId: message.hostPeerId,
             peers: message.peers.map((peer) => ({
               peerId: peer.peerId,
+              userId: peer.userId,
               displayName: peer.displayName,
               personalStream: null,
               screenStream: null,
-              isSpeaking: false
+              isSpeaking: false,
+              isMicMuted: false,
+              isDeafened: false,
+              avatarUrl: null
             }))
           }));
-          for (const peer of message.peers) mesh.addExistingPeer(peer.peerId);
+          for (const peer of message.peers) {
+            mesh.addExistingPeer(peer.peerId);
+            requestPeerImages(mesh, peer.peerId, peer.userId);
+          }
           break;
         case 'peer-joined':
           playRoomJoin();
@@ -179,15 +284,21 @@ export function useRoomConnection(roomId: string | null, displayName: string, is
               ...prev.peers,
               {
                 peerId: message.peerId,
+                userId: message.userId,
                 displayName: message.displayName,
                 personalStream: null,
                 screenStream: null,
-                isSpeaking: false
+                isSpeaking: false,
+                isMicMuted: false,
+                isDeafened: false,
+                avatarUrl: null
               }
             ]
           }));
+          requestPeerImages(mesh, message.peerId, message.userId);
           break;
         case 'peer-left':
+          playRoomLeave();
           mesh.removePeer(message.peerId);
           setState((prev) => ({ ...prev, peers: prev.peers.filter((peer) => peer.peerId !== message.peerId) }));
           break;
@@ -219,6 +330,16 @@ export function useRoomConnection(roomId: string | null, displayName: string, is
         case 'peer-device-switched':
           playDeviceSwitch(message.kind);
           break;
+        case 'peer-mic-state':
+          setState((prev) => ({
+            ...prev,
+            peers: prev.peers.map((peer) =>
+              peer.peerId === message.peerId
+                ? { ...peer, isMicMuted: message.isMicMuted, isDeafened: message.isDeafened }
+                : peer
+            )
+          }));
+          break;
       }
     });
 
@@ -234,14 +355,13 @@ export function useRoomConnection(roomId: string | null, displayName: string, is
         localMicStream = stream;
         micStreamRef.current = stream;
         const track = stream.getAudioTracks()[0] ?? null;
-        if (track) track.enabled = !isMicMuted;
         mesh.setLocalMicTrack(track);
       })
       .catch(() => {
         // No mic available/denied — proceed without local audio (video-only participation).
       });
 
-    signaling.connect(import.meta.env.VITE_SIGNALING_URL, roomId, displayName);
+    signaling.connect(import.meta.env.VITE_SIGNALING_URL, roomId, displayName, userId);
 
     const pingInterval = setInterval(() => {
       const nonce = Math.random().toString(36).slice(2);
@@ -263,8 +383,15 @@ export function useRoomConnection(roomId: string | null, displayName: string, is
   }, [roomId]);
 
   useEffect(() => {
-    meshRef.current?.setMicEnabled(!isMicMuted);
+    meshRef.current?.setMicMuted(isMicMuted);
   }, [isMicMuted]);
+
+  // Lets every other client show a "not listening/speaking" indicator next to this peer's
+  // name, same spot as the live-broadcast badge — no-op (send is null) outside a room or in
+  // the offline test profile, same as everything else signaling-dependent.
+  useEffect(() => {
+    signalingRef.current?.send({ type: 'mic-state', isMicMuted, isDeafened });
+  }, [isMicMuted, isDeafened]);
 
   function setLocalCameraTrack(track: MediaStreamTrack | null): void {
     void meshRef.current?.setLocalCameraTrack(track);
@@ -287,7 +414,6 @@ export function useRoomConnection(roomId: string | null, displayName: string, is
       const stream = await navigator.mediaDevices.getUserMedia({ audio: MIC_CONSTRAINTS(deviceId) });
       const newTrack = stream.getAudioTracks()[0] ?? null;
       if (!newTrack) return;
-      newTrack.enabled = !isMicMuted;
       const oldStream = micStreamRef.current;
       micStreamRef.current = stream;
       mesh.setLocalMicTrack(newTrack);

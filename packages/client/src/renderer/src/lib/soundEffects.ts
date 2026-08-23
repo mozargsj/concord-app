@@ -18,8 +18,7 @@ function getAudioContext(): AudioContext {
 }
 
 /** Short synthesized tones (no audio asset files, no licensing concerns) — a quiet, quick beep sequence per event. */
-function playTone(notes: Note[]): void {
-  if (deafened) return;
+function playToneRaw(notes: Note[]): void {
   const ctx = getAudioContext();
   let startTime = ctx.currentTime;
 
@@ -38,10 +37,23 @@ function playTone(notes: Note[]): void {
   }
 }
 
+function playTone(notes: Note[]): void {
+  if (deafened) return;
+  playToneRaw(notes);
+}
+
 export function playRoomJoin(): void {
   playTone([
     { freq: 440, duration: 0.08 },
     { freq: 660, duration: 0.1 }
+  ]);
+}
+
+/** Mirrors playRoomJoin — same two notes, descending instead of ascending. */
+export function playRoomLeave(): void {
+  playTone([
+    { freq: 660, duration: 0.08 },
+    { freq: 440, duration: 0.1 }
   ]);
 }
 
@@ -53,6 +65,14 @@ export function playCameraStart(): void {
   playTone([
     { freq: 587, duration: 0.07 },
     { freq: 784, duration: 0.09 }
+  ]);
+}
+
+/** Mirrors playCameraStart — same two notes, descending instead of ascending. */
+export function playCameraStop(): void {
+  playTone([
+    { freq: 784, duration: 0.07 },
+    { freq: 587, duration: 0.09 }
   ]);
 }
 
@@ -68,5 +88,38 @@ export function playTransmissionExit(): void {
     { freq: 880, duration: 0.07 },
     { freq: 660, duration: 0.07 },
     { freq: 440, duration: 0.09 }
+  ]);
+}
+
+// Self mute/deafen feedback — uses playToneRaw (not playTone) deliberately: this is
+// confirmation of the user's own action, not an ambient notification, so it must play even
+// the instant deafen turns on (when the deafened-suppression flag would otherwise swallow it).
+export function playMicMuted(): void {
+  playToneRaw([
+    { freq: 494, duration: 0.08 },
+    { freq: 330, duration: 0.1 }
+  ]);
+}
+
+export function playMicUnmuted(): void {
+  playToneRaw([
+    { freq: 330, duration: 0.08 },
+    { freq: 494, duration: 0.1 }
+  ]);
+}
+
+export function playDeafenMuted(): void {
+  playToneRaw([
+    { freq: 587, duration: 0.06 },
+    { freq: 440, duration: 0.06 },
+    { freq: 294, duration: 0.1 }
+  ]);
+}
+
+export function playDeafenUnmuted(): void {
+  playToneRaw([
+    { freq: 294, duration: 0.06 },
+    { freq: 440, duration: 0.06 },
+    { freq: 587, duration: 0.1 }
   ]);
 }

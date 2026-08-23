@@ -1,8 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import type { UserProfile } from '@concord/shared';
 import Button from '../components/Button';
+import ImageCropModal from '../components/ImageCropModal';
 import { updateProfile } from '../lib/api';
-import { pickAndUploadImage } from '../lib/imageUpload';
+import { pickImageFile, type PickedImageFile } from '../lib/imagePicker';
+import { saveCachedImage } from '../lib/imageCache';
 import '../styles/ProfilePage.css';
 
 interface ProfilePageProps {
@@ -15,14 +17,8 @@ export default function ProfilePage({ user, onClose, onUserChange }: ProfilePage
   const [displayName, setDisplayName] = useState(user.displayName);
   const [isSavingName, setIsSavingName] = useState(false);
   const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [pendingCrop, setPendingCrop] = useState<PickedImageFile | null>(null);
   const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    return () => {
-      if (previewUrl) URL.revokeObjectURL(previewUrl);
-    };
-  }, [previewUrl]);
 
   async function handleSaveName() {
     const trimmed = displayName.trim();
@@ -40,13 +36,26 @@ export default function ProfilePage({ user, onClose, onUserChange }: ProfilePage
   }
 
   async function handleChangeAvatar() {
+    setError(null);
+    try {
+      const picked = await pickImageFile();
+      if (picked) setPendingCrop(picked);
+    } catch {
+      setError('Não foi possível ler a imagem.');
+    }
+  }
+
+  // The image never leaves this machine — it's cached to disk under the user's own id and
+  // shown immediately; other peers only ever see it by fetching it directly over the WebRTC
+  // mesh while sharing a room with this user (useRoomConnection's image-request handling), so
+  // there's no upload/URL round-trip to wait on here at all.
+  async function handleApplyCrop(cropped: { data: ArrayBuffer; mimeType: string }) {
+    setPendingCrop(null);
     setIsUploadingAvatar(true);
     setError(null);
     try {
-      const key = await pickAndUploadImage('user-avatar', user.id, setPreviewUrl);
-      if (!key) return;
-      const updated = await updateProfile({ avatarKey: key });
-      onUserChange(updated);
+      const { url } = await saveCachedImage('avatar', user.id, cropped.data, cropped.mimeType);
+      onUserChange({ ...user, avatarUrl: url });
     } catch {
       setError('Não foi possível atualizar a foto.');
     } finally {
@@ -70,8 +79,8 @@ export default function ProfilePage({ user, onClose, onUserChange }: ProfilePage
           disabled={isUploadingAvatar}
           title="Alterar foto"
         >
-          {previewUrl || user.avatarUrl ? (
-            <img src={previewUrl ?? user.avatarUrl ?? undefined} alt="" className="profile-page__avatar-image" />
+          {user.avatarUrl ? (
+            <img src={user.avatarUrl} alt="" className="profile-page__avatar-image" />
           ) : (
             <span>{displayName.charAt(0).toUpperCase()}</span>
           )}
@@ -106,6 +115,15 @@ export default function ProfilePage({ user, onClose, onUserChange }: ProfilePage
 
         {error && <p className="profile-page__error">{error}</p>}
       </div>
+
+      {pendingCrop && (
+        <ImageCropModal
+          data={pendingCrop.data}
+          mimeType={pendingCrop.mimeType}
+          onCancel={() => setPendingCrop(null)}
+          onApply={handleApplyCrop}
+        />
+      )}
     </div>
   );
 }

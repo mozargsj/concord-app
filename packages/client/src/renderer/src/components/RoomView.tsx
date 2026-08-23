@@ -1,14 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import type { RoomSummary } from '@concord/shared';
 import type { RoomPeer } from '../hooks/useRoomConnection';
-import { MicOff, X } from 'lucide-react';
+import { HeadphoneOff, MicOff, X } from 'lucide-react';
 import CallControls from './CallControls';
 import MediaStreamVideo from './MediaStreamVideo';
 import HostStarBadge from './HostStarBadge';
 import LiveBadge from './LiveBadge';
 import { getAvatarColor } from '../lib/avatarColor';
 import { getGridContainerStyle, getGridItemStyle } from '../lib/participantGrid';
-import { playCameraStart, playTransmissionEnter, playTransmissionExit } from '../lib/soundEffects';
+import { playCameraStart, playCameraStop, playTransmissionEnter, playTransmissionExit } from '../lib/soundEffects';
 import '../styles/RoomView.css';
 
 interface RoomViewProps {
@@ -17,12 +17,14 @@ interface RoomViewProps {
   onToggleMic: () => void;
   onSelectMic: (deviceId: string) => void;
   isSpeaking: boolean;
+  showMutedSpeakingHint: boolean;
   onLeave: () => void;
   isDeafened: boolean;
   selfPeerId: string | null;
   hostPeerId: string | null;
   peers: RoomPeer[];
   currentUserDisplayName: string;
+  currentUserAvatarUrl: string | null;
   // Camera/screen capture is owned by ServerListPage (not this component) — RoomSidebar's
   // quick-action row needs to toggle and reflect the same state, same "elevated to feed two
   // places at once" pattern as selfIsSpeaking/latencyMs in useRoomConnection.
@@ -39,10 +41,13 @@ type Tile =
       kind: 'participant';
       key: string;
       name: string;
+      avatarUrl: string | null;
       isSelf: boolean;
       isHost: boolean;
       stream: MediaStream | null;
       isSpeaking: boolean;
+      isMicMuted: boolean;
+      isDeafened: boolean;
     }
   | { kind: 'screen'; key: string; name: string; stream: MediaStream };
 
@@ -52,12 +57,14 @@ export default function RoomView({
   onToggleMic,
   onSelectMic,
   isSpeaking,
+  showMutedSpeakingHint,
   onLeave,
   isDeafened,
   selfPeerId,
   hostPeerId,
   peers,
   currentUserDisplayName,
+  currentUserAvatarUrl,
   cameraStream,
   screenStream,
   mediaError,
@@ -83,6 +90,7 @@ export default function RoomView({
       const prevState = previous.get(peer.peerId);
 
       if (hasVideo && !prevState?.hasVideo) playCameraStart();
+      if (!hasVideo && prevState?.hasVideo) playCameraStop();
       if (hasScreen && !prevState?.hasScreen) playTransmissionEnter();
       if (!hasScreen && prevState?.hasScreen) playTransmissionExit();
 
@@ -126,20 +134,26 @@ export default function RoomView({
       kind: 'participant',
       key: 'self',
       name: currentUserDisplayName,
+      avatarUrl: currentUserAvatarUrl,
       isSelf: true,
       isHost: isSelfHost,
       stream: null,
-      isSpeaking: isSpeaking && !isMicMuted
+      isSpeaking: isSpeaking && !isMicMuted,
+      isMicMuted,
+      isDeafened
     },
     ...peers.map(
       (peer): Tile => ({
         kind: 'participant',
         key: peer.peerId,
         name: peer.displayName,
+        avatarUrl: peer.avatarUrl,
         isSelf: false,
         isHost: peer.peerId === hostPeerId,
         stream: peer.personalStream,
-        isSpeaking: peer.isSpeaking
+        isSpeaking: peer.isSpeaking,
+        isMicMuted: peer.isMicMuted,
+        isDeafened: peer.isDeafened
       })
     )
   ];
@@ -169,7 +183,9 @@ export default function RoomView({
       <div className="room-view__participants" style={getGridContainerStyle(tiles.length)}>
         {tiles.map((tile, index) => {
           const speaking = tile.kind === 'participant' && tile.isSpeaking;
-          const muted = tile.kind === 'participant' && tile.isSelf && isMicMuted;
+          const muted = tile.kind === 'participant' && tile.isMicMuted;
+          const tileIsDeafened = tile.kind === 'participant' && tile.isDeafened;
+          const tileAvatarUrl = tile.kind === 'participant' ? tile.avatarUrl : null;
           const showCamera = tile.kind === 'participant' && tile.isSelf && cameraStream;
           const remoteStream = tile.kind === 'participant' && !tile.isSelf ? tile.stream : null;
           const hasRemoteVideo = !!remoteStream && remoteStream.getVideoTracks().length > 0;
@@ -186,9 +202,13 @@ export default function RoomView({
             ) : (
               <div
                 className={'room-view__avatar' + (speaking ? ' room-view__avatar--speaking' : '')}
-                style={{ background: getAvatarColor(tile.name) }}
+                style={tileAvatarUrl ? undefined : { background: getAvatarColor(tile.name) }}
               >
-                {tile.name.charAt(0)}
+                {tileAvatarUrl ? (
+                  <img src={tileAvatarUrl} alt="" className="room-view__avatar-image" />
+                ) : (
+                  tile.name.charAt(0)
+                )}
                 {/* No camera track from this peer yet — keep the audio playing invisibly. */}
                 {remoteStream && <MediaStreamVideo stream={remoteStream} muted={isDeafened} hidden />}
               </div>
@@ -199,6 +219,7 @@ export default function RoomView({
           const status = (
             <div className="room-view__participant-status">
               {muted && <MicOff size={13} className="room-view__participant-status-icon" />}
+              {tileIsDeafened && <HeadphoneOff size={13} className="room-view__participant-status-icon" />}
               <span>{tile.name}</span>
               {isHost && <HostStarBadge className="room-view__host-star" />}
             </div>
@@ -252,6 +273,7 @@ export default function RoomView({
         isMicMuted={isMicMuted}
         onToggleMic={onToggleMic}
         onSelectMic={onSelectMic}
+        showMutedSpeakingHint={showMutedSpeakingHint}
         isCameraOn={!!cameraStream}
         onToggleCamera={onToggleCamera}
         onSelectCamera={onSelectCamera}

@@ -5,6 +5,7 @@ import {
   handleDeviceSwitched,
   handleDisconnect,
   handleHeartbeat,
+  handleMicState,
   joinRoom,
   relay
 } from '../rooms/roomManager.js';
@@ -20,7 +21,7 @@ export function handleConnection(socket: WebSocket): void {
 
     switch (message.type) {
       case 'join-room':
-        joinRoom(socket, message.roomId, message.displayName);
+        joinRoom(socket, message.roomId, message.displayName, message.userId);
         break;
       case 'sdp-offer':
       case 'sdp-answer':
@@ -38,6 +39,9 @@ export function handleConnection(socket: WebSocket): void {
         break;
       case 'device-switched':
         handleDeviceSwitched(socket, message.kind);
+        break;
+      case 'mic-state':
+        handleMicState(socket, message.isMicMuted, message.isDeafened);
         break;
     }
   });

@@ -29,6 +29,10 @@ export interface CreateServerResponse {
   server: ServerSummary;
 }
 
+export interface UpdateServerRequest {
+  name: string;
+}
+
 /** The caller's own rank (1=dono..4=usuário, see packages/shared/src/domain/roles.ts) for this server — kept as a plain number on the wire so the client never has to import the const enum (esbuild/isolatedModules risk, see decisions.md). */
 export interface ServerDetailsResponse {
   server: ServerSummary;

@@ -1,27 +1,23 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import type { ServerSummary, UserProfile } from '@concord/shared';
+import type { ServerSummary } from '@concord/shared';
 import Button from './Button';
+import ImageCropModal from './ImageCropModal';
 import { ApiError, createServer, joinServerWithCode } from '../lib/api';
-import { pickAndUploadImage } from '../lib/imageUpload';
+import { pickImageFile, type PickedImageFile } from '../lib/imagePicker';
+import { saveCachedImage } from '../lib/imageCache';
 import '../styles/ServerActionsModal.css';
 
 interface ServerActionsModalProps {
-  currentUser: UserProfile;
   mode: 'create' | 'join';
   onClose: () => void;
   onServerCreated: (server: ServerSummary) => void;
   onServerJoined: (server: ServerSummary) => void;
 }
 
-export default function ServerActionsModal({
-  currentUser,
-  mode,
-  onClose,
-  onServerCreated,
-  onServerJoined
-}: ServerActionsModalProps) {
+export default function ServerActionsModal({ mode, onClose, onServerCreated, onServerJoined }: ServerActionsModalProps) {
   const [name, setName] = useState('');
-  const [pendingIconKey, setPendingIconKey] = useState<string | null>(null);
+  const [pendingCropSource, setPendingCropSource] = useState<PickedImageFile | null>(null);
+  const [pendingIcon, setPendingIcon] = useState<PickedImageFile | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [isPickingImage, setIsPickingImage] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
@@ -42,13 +38,23 @@ export default function ServerActionsModal({
     setIsPickingImage(true);
     setCreateError(null);
     try {
-      const key = await pickAndUploadImage('server-icon', currentUser.id, setPreviewUrl);
-      if (key) setPendingIconKey(key);
+      const picked = await pickImageFile();
+      if (picked) setPendingCropSource(picked);
     } catch {
-      setCreateError('Não foi possível enviar a imagem.');
+      setCreateError('Não foi possível ler a imagem.');
     } finally {
       setIsPickingImage(false);
     }
+  }
+
+  // No serverId exists yet at pick time, so this only builds a preview + holds the cropped
+  // bytes — the actual disk cache write (keyed by the real serverId) happens in handleCreate,
+  // once creation succeeds and that id exists (see imageCache.ts's saveCachedImage).
+  function handleApplyCrop(cropped: { data: ArrayBuffer; mimeType: string }) {
+    setPendingCropSource(null);
+    setPendingIcon(cropped);
+    // The cleanup effect below (keyed on previewUrl) revokes the previous object URL, if any.
+    setPreviewUrl(URL.createObjectURL(new Blob([cropped.data], { type: cropped.mimeType })));
   }
 
   async function handleCreate(event: FormEvent<HTMLFormElement>) {
@@ -61,8 +67,13 @@ export default function ServerActionsModal({
     setIsCreating(true);
     setCreateError(null);
     try {
-      const server = await createServer(trimmed, pendingIconKey ?? undefined);
-      onServerCreated(server);
+      const server = await createServer(trimmed);
+      if (pendingIcon) {
+        const { url } = await saveCachedImage('server-icon', server.id, pendingIcon.data, pendingIcon.mimeType);
+        onServerCreated({ ...server, iconUrl: url });
+      } else {
+        onServerCreated(server);
+      }
     } catch (err) {
       setCreateError(err instanceof ApiError && err.code === 'name-taken' ? 'Esse nome já está em uso.' : 'Não foi possível criar o servidor.');
     } finally {
@@ -112,7 +123,7 @@ export default function ServerActionsModal({
               {previewUrl ? (
                 <img src={previewUrl} alt="" className="server-actions-modal__icon-preview" />
               ) : isPickingImage ? (
-                'Enviando…'
+                'Lendo…'
               ) : (
                 'Escolher imagem (opcional)'
               )}
@@ -145,6 +156,15 @@ export default function ServerActionsModal({
           </form>
         )}
       </div>
+
+      {pendingCropSource && (
+        <ImageCropModal
+          data={pendingCropSource.data}
+          mimeType={pendingCropSource.mimeType}
+          onCancel={() => setPendingCropSource(null)}
+          onApply={handleApplyCrop}
+        />
+      )}
     </div>
   );
 }

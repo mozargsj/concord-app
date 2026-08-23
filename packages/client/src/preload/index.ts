@@ -16,6 +16,11 @@ contextBridge.exposeInMainWorld('concord', {
     getScreenSources: () => ipcRenderer.invoke('screen:get-sources'),
     pickImage: () => ipcRenderer.invoke('media:pick-image')
   },
+  imageCache: {
+    save: (key: string, data: ArrayBuffer, mimeType: string) =>
+      ipcRenderer.invoke('image-cache:save', key, data, mimeType),
+    load: (key: string) => ipcRenderer.invoke('image-cache:load', key)
+  },
   auth: {
     loginWithGoogle: () => ipcRenderer.invoke('auth:login-with-google')
   },
