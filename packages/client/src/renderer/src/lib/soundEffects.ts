@@ -17,6 +17,22 @@ function getAudioContext(): AudioContext {
   return audioContext;
 }
 
+/**
+ * Chromium suspends a freshly created AudioContext unless it's resumed from directly inside a
+ * user-gesture call stack — once resumed, it stays running for the rest of the page's lifetime,
+ * no gesture needed again. Every OTHER sound in this file already happens to run inside a click
+ * handler (mute, camera toggle, leave...), so it never surfaced — but `peer-joined`/`peer-left`
+ * fire from an async WebSocket message with no gesture attached, and if that's the very first
+ * sound of the session, the tone plays into a suspended context and nobody hears anything. Call
+ * this once on the app's first real interaction (main.tsx) so the context is already unlocked by
+ * the time a peer-triggered sound needs it.
+ */
+export function primeAudioContext(): void {
+  getAudioContext()
+    .resume()
+    .catch(() => {});
+}
+
 /** Short synthesized tones (no audio asset files, no licensing concerns) — a quiet, quick beep sequence per event. */
 function playToneRaw(notes: Note[]): void {
   const ctx = getAudioContext();

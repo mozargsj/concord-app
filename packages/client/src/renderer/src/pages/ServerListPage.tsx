@@ -12,7 +12,7 @@ import LoadingSpinner from '../components/LoadingSpinner';
 import ProfilePage from './ProfilePage';
 import {
   ApiError,
-  TEST_MODE,
+  TEST_OFFLINE,
   createInvite,
   createRoom,
   deleteRoom,
@@ -315,13 +315,13 @@ export default function ServerListPage({
     setSelectedRoomId(null);
   }
 
-  // [MODO TESTE — TEMPORÁRIO] Fora do modo teste, esse som só toca via peer-joined real (a
-  // sinalização confirmando que outra pessoa entrou) — sozinho numa sala nunca dá pra ouvir.
-  // Em teste, dispara também ao clicar pra entrar, sem esperar validação real do servidor, só
-  // pra dar pra conferir o som sem precisar de uma segunda janela/peer.
+  // [MODO TESTE OFFLINE — TEMPORÁRIO] `useRoomConnection` agora toca o som de entrar de verdade
+  // via `room-joined` (evento real de sinalização, funciona sozinho numa sala vazia e em produção
+  // — não é mais exclusivo de teste). Só o modo 100% offline não tem nenhum WebSocket real, então
+  // nunca recebe esse evento — mantém o disparo direto no clique só pra esse caso específico.
   function handleSelectRoom(roomId: string) {
     setSelectedRoomId(roomId);
-    if (TEST_MODE) playRoomJoin();
+    if (TEST_OFFLINE) playRoomJoin();
   }
 
   function handleServerCreated(server: ServerSummary) {

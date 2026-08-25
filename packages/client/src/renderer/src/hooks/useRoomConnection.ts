@@ -393,6 +393,11 @@ export function useRoomConnection(
       if (cancelled) return;
       switch (message.type) {
         case 'room-joined':
+          // Confirms my own join — plays even alone in an empty room, unlike 'peer-joined' below
+          // (which only ever fires for someone ELSE arriving). Previously this side of "entrar
+          // na sala" only had sound in TEST_MODE (a click-triggered stand-in, ServerListPage.tsx)
+          // since production had no real event to hang it on — this is that real event.
+          playRoomJoin();
           setState((prev) => ({
             ...prev,
             selfPeerId: message.peerId,
