@@ -11,6 +11,14 @@ files:
   - out/electron/**/*
   - out/renderer/**/*
   - package.json
+# Packaged main process reads GOOGLE_OAUTH_CLIENT_ID/SECRET from a .env sitting next to the
+# installed .exe (main/index.ts) — process.cwd()-based dotenv resolution silently found nothing
+# there, since cwd is wherever the user launched the .exe from, never the install directory.
+# Copies whatever packages/client/.env already has at build time (same file dev mode already
+# requires for Google login to work locally).
+extraFiles:
+  - from: .env
+    to: .env
 win:
   target: nsis
   icon: build/icon.ico

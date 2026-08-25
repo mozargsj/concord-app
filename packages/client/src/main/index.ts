@@ -1,9 +1,21 @@
-import 'dotenv/config';
 import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, safeStorage } from 'electron';
+import dotenv from 'dotenv';
 import { mkdir, readdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { loginWithGoogle } from './googleAuth';
 import { checkForUpdatesOnStartup } from './autoUpdate';
+
+const isDev = !app.isPackaged;
+
+// Bare `import 'dotenv/config'` resolves `.env` relative to process.cwd() — for a packaged app
+// that's wherever the user launched the .exe FROM (Desktop, Downloads...), never the install
+// directory, so GOOGLE_OAUTH_CLIENT_ID/SECRET came back silently empty and loginWithGoogle threw
+// before ever opening a browser. Dev mode keeps reading packages/client/.env like before;
+// packaged mode reads a .env sitting next to the installed .exe itself (app.getPath('exe') is
+// cwd-independent), so real credentials can be dropped in post-install without rebuilding.
+dotenv.config({
+  path: isDev ? path.join(__dirname, '../../../.env') : path.join(path.dirname(app.getPath('exe')), '.env')
+});
 
 const sessionFilePath = () => path.join(app.getPath('userData'), 'session.enc');
 const imageCacheDir = () => path.join(app.getPath('userData'), 'imageCache');
@@ -71,8 +83,6 @@ const EXTENSION_BY_MIME_TYPE: Record<string, string> = {
   'image/jpeg': '.jpg',
   'image/webp': '.webp'
 };
-
-const isDev = !app.isPackaged;
 
 // Single-instance lock — only enforced for the packaged app. Dev mode deliberately allows
 // multiple windows/processes: that's how two peers are tested locally (npm run dev:electron
