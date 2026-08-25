@@ -136,3 +136,14 @@
   font-size: 12px;
   color: var(--color-danger);
 }
+
+.profile-page__logout-section {
+  width: 100%;
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--color-bg-elevated-hover);
+}
+
+.profile-page__logout {
+  width: 100%;
+}

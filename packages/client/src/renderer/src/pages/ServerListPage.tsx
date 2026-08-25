@@ -44,6 +44,7 @@ interface ServerListPageProps {
   currentUser: UserProfile;
   onCurrentUserChange: (user: UserProfile) => void;
   onActiveServerChange: (serverName: string) => void;
+  onLogout: () => void;
 }
 
 interface InviteState {
@@ -55,7 +56,8 @@ interface InviteState {
 export default function ServerListPage({
   currentUser,
   onCurrentUserChange,
-  onActiveServerChange
+  onActiveServerChange,
+  onLogout
 }: ServerListPageProps) {
   const [myServers, setMyServers] = useState<ServerSummary[] | null>(null);
   const [selectedServerId, setSelectedServerId] = useState<string | null>(null);
@@ -416,6 +418,7 @@ export default function ServerListPage({
             user={currentUser}
             onClose={() => setIsProfileOpen(false)}
             onUserChange={onCurrentUserChange}
+            onLogout={onLogout}
           />
         )}
 
@@ -522,6 +525,7 @@ export default function ServerListPage({
           user={currentUser}
           onClose={() => setIsProfileOpen(false)}
           onUserChange={onCurrentUserChange}
+          onLogout={onLogout}
         />
       )}
 

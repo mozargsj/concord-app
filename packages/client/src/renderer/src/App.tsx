@@ -87,6 +87,16 @@ export default function App() {
     void hydrateOwnAvatar(user).then(setCurrentUser);
   }
 
+  // Unmounting ServerListPage (view leaving 'app') tears down any active room connection through
+  // its own effect cleanup (stops mic/camera, closes the mesh + signaling socket) — same cleanup
+  // path already relied on for the close-app flow, nothing extra needed here for that part.
+  function handleLogout(): void {
+    setSessionToken(null);
+    void clearStoredSessionToken();
+    setCurrentUser(null);
+    setView('login');
+  }
+
   return (
     <div className="app-shell">
       <TitleBar title={activeServerName} />
@@ -105,6 +115,7 @@ export default function App() {
             currentUser={currentUser}
             onCurrentUserChange={setCurrentUser}
             onActiveServerChange={setActiveServerName}
+            onLogout={handleLogout}
           />
         )}
       </div>
