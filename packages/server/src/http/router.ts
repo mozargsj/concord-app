@@ -64,15 +64,30 @@ function contentTypeForUpdateFile(filePath: string): string {
   return 'application/octet-stream';
 }
 
+// Cloudflare proxies this domain (same as production, decisions.md §2) and caches responses —
+// including 404s — by default. Discovered locally: a stale-cached 404 from hitting this route
+// before a release finished uploading kept blocking a real, already-published update artifact
+// for hours. no-store on every response here (hit or miss) keeps the edge from ever caching a
+// transient state for this endpoint.
 function handleServeUpdateFile(req: IncomingMessage, res: ServerResponse, segments: string[]): void {
-  if (req.method !== 'GET' || segments.length < 2) return sendError(res, 404, 'not-found');
+  if (req.method !== 'GET' || segments.length < 2) {
+    res.writeHead(404, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...CORS_HEADERS });
+    res.end(JSON.stringify({ error: 'not-found' } satisfies ApiErrorResponse));
+    return;
+  }
 
   const filePath = resolve(join(UPDATES_DIR, ...segments.slice(1)));
   if (!filePath.startsWith(UPDATES_DIR) || !existsSync(filePath) || !statSync(filePath).isFile()) {
-    return sendError(res, 404, 'not-found');
+    res.writeHead(404, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...CORS_HEADERS });
+    res.end(JSON.stringify({ error: 'not-found' } satisfies ApiErrorResponse));
+    return;
   }
 
-  res.writeHead(200, { 'Content-Type': contentTypeForUpdateFile(filePath), ...CORS_HEADERS });
+  res.writeHead(200, {
+    'Content-Type': contentTypeForUpdateFile(filePath),
+    'Cache-Control': 'no-store',
+    ...CORS_HEADERS
+  });
   createReadStream(filePath).pipe(res);
 }
 
@@ -180,7 +195,9 @@ async function importAvatarFromUrl(userId: string, imageUrl: string): Promise<st
 /** Hand-rolled router — no framework, matches the project's minimal-dependency style (plain `ws` over Socket.io). */
 export async function handleHttpRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const url = new URL(req.url ?? '/', 'http://internal');
-  const segments = url.pathname.split('/').filter(Boolean);
+  // url.pathname keeps percent-encoding as-is (e.g. a space in an update artifact's filename
+  // arrives as %20) — decode once here so every route/handler gets the real segment value.
+  const segments = url.pathname.split('/').filter(Boolean).map(decodeURIComponent);
   const method = req.method ?? 'GET';
 
   if (method === 'OPTIONS') {

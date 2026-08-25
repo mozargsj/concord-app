@@ -27,7 +27,7 @@
     "package": "npm run build && electron-builder",
     "package:test-dev": "npm run build:test-dev && electron-builder --config.productName=ConcordTest --config.appId=com.concord.app.test",
     "package:test-offline": "npm run build:test-offline && electron-builder --config.productName=ConcordTest --config.appId=com.concord.app.test",
-    "package:test-real": "npm run build:test-real && electron-builder --config.productName=ConcordTestReal --config.appId=com.concord.app.test-real",
+    "package:test-real": "npm run build:test-real && electron-builder --config.productName=ConcordTestReal --config.appId=com.concord.app.test-real --config.publish.url=https://test-local.undersoft.tec.br/updates/",
     "typecheck": "tsc -p tsconfig.renderer.json --noEmit && tsc -p tsconfig.electron.json --noEmit"
   },
   "dependencies": {

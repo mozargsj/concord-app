@@ -22,11 +22,32 @@ export function checkForUpdatesOnStartup(window: BrowserWindow, isDev: boolean):
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = false;
 
-  autoUpdater.on('update-available', () => send('updating'));
-  autoUpdater.on('update-not-available', () => send('done'));
-  autoUpdater.on('error', () => send('done'));
-  // quitAndInstall()'s isSilent defaults to true — installs and relaunches with no installer UI.
-  autoUpdater.on('update-downloaded', () => autoUpdater.quitAndInstall());
+  autoUpdater.on('update-available', (info) => {
+    console.log('[autoUpdate] update-available', info);
+    send('updating');
+  });
+  autoUpdater.on('update-not-available', (info) => {
+    console.log('[autoUpdate] update-not-available', info);
+    send('done');
+  });
+  autoUpdater.on('error', (err) => {
+    console.error('[autoUpdate] error', err);
+    send('done');
+  });
+  autoUpdater.on('download-progress', (progress) => {
+    console.log('[autoUpdate] download-progress', progress.percent);
+  });
+  // quitAndInstall()'s isSilent param defaults to FALSE (confirmed by testing — the doc comment
+  // this replaced had it backwards) — without explicitly passing true, the downloaded NSIS
+  // installer runs its full GUI wizard instead of applying silently, contradicting the whole
+  // point of an unattended background update. isForceRunAfter=true relaunches Concord after.
+  autoUpdater.on('update-downloaded', (info) => {
+    console.log('[autoUpdate] update-downloaded', info);
+    autoUpdater.quitAndInstall(true, true);
+  });
 
-  autoUpdater.checkForUpdates().catch(() => send('done'));
+  autoUpdater.checkForUpdates().catch((err) => {
+    console.error('[autoUpdate] checkForUpdates rejected', err);
+    send('done');
+  });
 }

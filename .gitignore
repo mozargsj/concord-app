@@ -4,6 +4,7 @@ out/
 build/
 release/
 tools/
+packages/server/updates/
 .claude/
 *.log
 .env
