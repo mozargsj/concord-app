@@ -87,8 +87,12 @@
 }
 
 .room-view__avatar {
-  width: 45%;
-  max-width: 220px;
+  /* cqmin (not a plain % of width) — picks the smaller of the tile's own width/height, so the
+     circle grows to fill as much of the tile as it can in *either* orientation without ever
+     overflowing the shorter axis and getting clipped by the tile's overflow:hidden. Old 45%
+     width capped at 220px left most of a large tile empty around a comparatively tiny avatar. */
+  width: 70cqmin;
+  height: 70cqmin;
   aspect-ratio: 1;
   border-radius: 50%;
   background: var(--color-accent);
@@ -96,7 +100,7 @@
   align-items: center;
   justify-content: center;
   font-weight: 700;
-  font-size: 18cqmin;
+  font-size: 28cqmin;
   color: #ffffff;
   box-shadow: 0 0 0 3px transparent;
   transition: box-shadow 0.1s ease;

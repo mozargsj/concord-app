@@ -1,0 +1,91 @@
+.soundboard-popover__backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+}
+
+.soundboard-popover {
+  position: fixed;
+  width: 260px;
+  max-height: 320px;
+  background: var(--color-bg-elevated);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  z-index: 91;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.soundboard-popover__title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.soundboard-popover__hint {
+  margin: 0;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+
+.soundboard-popover__list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow-y: auto;
+}
+
+.soundboard-popover__sound {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: none;
+  background: transparent;
+  color: var(--color-text-primary);
+  padding: 8px;
+  border-radius: var(--radius-sm);
+  text-align: left;
+}
+
+.soundboard-popover__sound:hover {
+  background: var(--color-bg-elevated-hover);
+}
+
+.soundboard-popover__emoji {
+  font-size: 16px;
+}
+
+.soundboard-popover__sound-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.soundboard-popover__sound svg {
+  flex-shrink: 0;
+  color: var(--color-text-secondary);
+}
+
+.soundboard-popover__slider {
+  width: 100%;
+  accent-color: var(--color-accent);
+}
+
+.soundboard-popover__manage-button {
+  border: none;
+  background: var(--color-bg-rail);
+  color: var(--color-text-primary);
+  padding: 8px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  text-align: left;
+}
+
+.soundboard-popover__manage-button:hover {
+  background: var(--color-bg-elevated-hover);
+}

@@ -8,6 +8,7 @@ import '../styles/UserPanel.css';
 interface UserPanelProps {
   isMicMuted: boolean;
   isDeafened: boolean;
+  isSpeaking: boolean;
   showMutedSpeakingHint: boolean;
   onToggleMic: () => void;
   onToggleDeafen: () => void;
@@ -21,6 +22,7 @@ interface UserPanelProps {
 export default function UserPanel({
   isMicMuted,
   isDeafened,
+  isSpeaking,
   showMutedSpeakingHint,
   onToggleMic,
   onToggleDeafen,
@@ -36,7 +38,7 @@ export default function UserPanel({
   return (
     <div className="user-panel">
       <button className="user-panel__identity" onClick={onOpenProfile} title="Seu perfil">
-        <div className="user-panel__avatar">
+        <div className={'user-panel__avatar' + (isSpeaking ? ' user-panel__avatar--speaking' : '')}>
           {avatarUrl ? <img src={avatarUrl} alt="" /> : displayName.charAt(0).toUpperCase()}
           <span className="user-panel__online-dot" />
         </div>

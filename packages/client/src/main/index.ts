@@ -7,6 +7,17 @@ import { checkForUpdatesOnStartup } from './autoUpdate';
 
 const sessionFilePath = () => path.join(app.getPath('userData'), 'session.enc');
 const imageCacheDir = () => path.join(app.getPath('userData'), 'imageCache');
+const soundCacheDir = () => path.join(app.getPath('userData'), 'soundCache');
+
+interface SoundMetaFile {
+  id: string;
+  name: string;
+  emoji: string;
+  volume: number;
+  durationMs: number;
+  hash: string;
+  mimeType: string;
+}
 
 const IMAGE_MIME_TYPES: Record<string, string> = {
   '.png': 'image/png',
@@ -176,6 +187,98 @@ ipcMain.handle('image-cache:load', async (_event, key: string) => {
     mimeType,
     data: buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength)
   };
+});
+
+ipcMain.handle('media:pick-audio', async (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const options: Electron.OpenDialogOptions = {
+    properties: ['openFile'],
+    // No format allowlist tied to a conversion library — decisions.md deliberately accepts
+    // whatever Chromium's decodeAudioData can decode natively, this filter is just a UX
+    // shortlist of common containers, not the real acceptance check (that happens on decode).
+    filters: [{ name: 'Áudio', extensions: ['mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac', 'webm'] }]
+  };
+  const result = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options);
+  if (result.canceled || result.filePaths.length === 0) return null;
+
+  const filePath = result.filePaths[0];
+  const buffer = await readFile(filePath);
+  return {
+    fileName: path.basename(filePath),
+    data: buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength)
+  };
+});
+
+// Same id-sanitizing rationale as sanitizeCacheKey above — soundIds stay local-only for now
+// (Fase A, no P2P transfer yet), but the id is still user-provided (crypto.randomUUID() from
+// the renderer), so this costs nothing and avoids diverging from the established pattern.
+function sanitizeSoundId(id: string): string {
+  return id.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 200);
+}
+
+ipcMain.handle('sound-cache:list', async () => {
+  const dir = soundCacheDir();
+  const entries = await readdir(dir).catch(() => []);
+  const jsonNames = entries.filter((name) => name.endsWith('.json'));
+  const sounds = await Promise.all(
+    jsonNames.map(async (name) => {
+      try {
+        const meta = JSON.parse(await readFile(path.join(dir, name), 'utf8')) as SoundMetaFile;
+        const audio = await readFile(path.join(dir, `${meta.id}.bin`));
+        return {
+          ...meta,
+          data: audio.buffer.slice(audio.byteOffset, audio.byteOffset + audio.byteLength)
+        };
+      } catch {
+        return null; // metadata without a matching .bin (or corrupt json) — skip rather than crash the list
+      }
+    })
+  );
+  return sounds.filter((sound): sound is NonNullable<typeof sound> => sound !== null);
+});
+
+ipcMain.handle('sound-cache:load-bytes', async (_event, id: string) => {
+  const safeId = sanitizeSoundId(id);
+  const dir = soundCacheDir();
+  try {
+    const meta = JSON.parse(await readFile(path.join(dir, `${safeId}.json`), 'utf8')) as SoundMetaFile;
+    const audio = await readFile(path.join(dir, `${safeId}.bin`));
+    return { mimeType: meta.mimeType, data: audio.buffer.slice(audio.byteOffset, audio.byteOffset + audio.byteLength) };
+  } catch {
+    return null;
+  }
+});
+
+ipcMain.handle('sound-cache:save', async (_event, meta: SoundMetaFile, data: ArrayBuffer) => {
+  const safeId = sanitizeSoundId(meta.id);
+  const dir = soundCacheDir();
+  await mkdir(dir, { recursive: true });
+  await writeFile(path.join(dir, `${safeId}.bin`), Buffer.from(data));
+  await writeFile(path.join(dir, `${safeId}.json`), JSON.stringify({ ...meta, id: safeId }));
+  return true;
+});
+
+ipcMain.handle(
+  'sound-cache:update-meta',
+  async (_event, id: string, patch: Partial<Pick<SoundMetaFile, 'name' | 'emoji' | 'volume'>>) => {
+    const safeId = sanitizeSoundId(id);
+    const filePath = path.join(soundCacheDir(), `${safeId}.json`);
+    try {
+      const meta = JSON.parse(await readFile(filePath, 'utf8')) as SoundMetaFile;
+      await writeFile(filePath, JSON.stringify({ ...meta, ...patch }));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+);
+
+ipcMain.handle('sound-cache:delete', async (_event, id: string) => {
+  const safeId = sanitizeSoundId(id);
+  const dir = soundCacheDir();
+  await unlink(path.join(dir, `${safeId}.bin`)).catch(() => {});
+  await unlink(path.join(dir, `${safeId}.json`)).catch(() => {});
+  return true;
 });
 
 ipcMain.handle('auth:login-with-google', async () => {

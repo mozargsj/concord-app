@@ -124,6 +124,18 @@ export class MeshManager {
   // Instead it's enforced per-connection via RTCRtpSender.replaceTrack(null), same mechanism
   // already used for device swaps, so it needs no renegotiation either.
   private micMuted = false;
+  // Soundboard mix (see playSoundboardClip) — a MediaStreamDestination shared by every
+  // concurrently-playing clip, reference-counted so the sender only reverts to the plain mic
+  // track once the last overlapping clip finishes.
+  private soundboardMixDestination: MediaStreamAudioDestinationNode | null = null;
+  private soundboardMicGain: GainNode | null = null;
+  private soundboardActiveCount = 0;
+  // Separate from soundboardActiveCount (which only tracks the broadcast half, skipped while
+  // muted) — this counts every clip that's audible *locally*, muted or not, since it drives the
+  // local "está falando" indicator: the AnalyserNode below only ever sees the dry mic track, so
+  // without this a playing clip would otherwise light up peers' copy of your ring (they hear the
+  // real mixed track) while your own local ring stays dark.
+  private soundboardLocalPlaybackCount = 0;
   // Buffers a requestImage() call that arrives before the connection entry itself exists yet —
   // e.g. right after a fresh 'peer-joined' event, before their SDP offer has even arrived.
   // Flushed into the entry's own pendingImageRequests as soon as getOrCreateConnection makes one.
@@ -250,10 +262,100 @@ export class MeshManager {
    * running either way, so a muted user who's still talking can be flagged locally. */
   setMicMuted(muted: boolean): void {
     this.micMuted = muted;
-    const sendTrack = muted ? null : this.micTrack;
+    const sendTrack = this.currentMicSendTrack();
     for (const entry of this.connections.values()) {
       void entry.senders.mic?.replaceTrack(sendTrack);
     }
+  }
+
+  /** What should actually be riding the 'mic' sender right now — the soundboard mix while a
+   * clip is playing (see playSoundboardClip), otherwise the raw mic track, or null while muted.
+   * Muted always wins: decisions.md is explicit that a muted user sends nothing at all, soundboard
+   * included, so this never has to special-case "muted but a clip happens to be playing". */
+  private currentMicSendTrack(): MediaStreamTrack | null {
+    if (this.micMuted) return null;
+    if (this.soundboardActiveCount > 0 && this.soundboardMixDestination) {
+      return this.soundboardMixDestination.stream.getAudioTracks()[0] ?? this.micTrack;
+    }
+    return this.micTrack;
+  }
+
+  /**
+   * Plays a soundboard clip two ways at once: locally, straight to this machine's own speakers
+   * (so whoever triggered it hears it too — that's independent of anything below), and, unless
+   * muted, broadcast to every connected peer as if it were the microphone — mixed with the live
+   * mic signal (if any) via a Web Audio graph, on the same sender/track slot the raw mic normally
+   * occupies (RTCRtpSender.replaceTrack, no renegotiation, same mechanism as mute/device-swap).
+   * Muted only skips the broadcast half (decisions.md: a muted user sends nothing to others, no
+   * soundboard bypass) — local monitoring still plays either way. Reference-counted so overlapping
+   * clips share one mix destination and the sender only reverts to the plain mic track once every
+   * concurrent broadcasting clip has finished. Returns a `stop()` handle so a caller can cut
+   * playback short (e.g. a play/pause toggle) — stopping a source fires the same 'onended' path
+   * as playing to completion, so `onEnded` fires either way and callers don't need to tell the
+   * two cases apart.
+   */
+  playSoundboardClip(buffer: AudioBuffer, volume: number, onEnded?: () => void): { stop: () => void } {
+    if (!this.audioContext) this.audioContext = new AudioContext();
+    const ctx = this.audioContext;
+    void ctx.resume().catch(() => {});
+
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+    const gain = ctx.createGain();
+    gain.gain.value = Math.max(0, Math.min(1, volume));
+    source.connect(gain);
+    gain.connect(ctx.destination); // local monitoring — always on, regardless of mute
+    this.soundboardLocalPlaybackCount += 1;
+
+    const shouldBroadcast = !this.micMuted;
+    if (shouldBroadcast) {
+      if (!this.soundboardMixDestination) this.soundboardMixDestination = ctx.createMediaStreamDestination();
+      const mixDestination = this.soundboardMixDestination;
+      gain.connect(mixDestination);
+
+      if (this.soundboardActiveCount === 0) {
+        // First broadcasting clip of a burst — route the live mic signal into the mix too (so
+        // speaking while a sound plays sends both), then swap every peer's sender onto it.
+        if (this.micAnalyserSource) {
+          this.soundboardMicGain = ctx.createGain();
+          this.micAnalyserSource.connect(this.soundboardMicGain);
+          this.soundboardMicGain.connect(mixDestination);
+        }
+        const mixedTrack = mixDestination.stream.getAudioTracks()[0] ?? null;
+        for (const entry of this.connections.values()) {
+          void entry.senders.mic?.replaceTrack(mixedTrack);
+        }
+      }
+      this.soundboardActiveCount += 1;
+    }
+
+    source.onended = () => {
+      source.disconnect();
+      gain.disconnect();
+      this.soundboardLocalPlaybackCount -= 1;
+      onEnded?.();
+      if (!shouldBroadcast) return;
+
+      this.soundboardActiveCount -= 1;
+      if (this.soundboardActiveCount > 0) return;
+
+      this.soundboardMicGain?.disconnect();
+      this.soundboardMicGain = null;
+      const restoreTrack = this.currentMicSendTrack();
+      for (const entry of this.connections.values()) {
+        void entry.senders.mic?.replaceTrack(restoreTrack);
+      }
+    };
+    source.start();
+    return {
+      stop: () => {
+        try {
+          source.stop();
+        } catch {
+          // already stopped/ended — onended already ran, nothing left to do
+        }
+      }
+    };
   }
 
   async setLocalCameraTrack(track: MediaStreamTrack | null): Promise<void> {
@@ -294,6 +396,11 @@ export class MeshManager {
     this.micAnalyserSource?.disconnect();
     this.micAnalyserSource = null;
     this.micAnalyser = null;
+    this.soundboardMicGain?.disconnect();
+    this.soundboardMicGain = null;
+    this.soundboardMixDestination = null;
+    this.soundboardActiveCount = 0;
+    this.soundboardLocalPlaybackCount = 0;
     void this.audioContext?.close().catch(() => {});
     this.audioContext = null;
   }
@@ -552,17 +659,28 @@ export class MeshManager {
       }
     }
 
-    if (!this.micAnalyser) return;
-    // Byte time-domain samples, converted to linear RMS 0..1 — same scale as the RFC 6464
-    // audioLevel used for peers above, so both share SPEAKING_THRESHOLD.
-    const samples = new Uint8Array(this.micAnalyser.fftSize);
-    this.micAnalyser.getByteTimeDomainData(samples);
-    let sumSquares = 0;
-    for (let i = 0; i < samples.length; i++) {
-      const normalized = (samples[i] - 128) / 128;
-      sumSquares += normalized * normalized;
+    // Bail out only if there's neither a mic to poll nor a clip playing — a user with no mic at
+    // all (micAnalyser never set up) can still trigger a soundboard clip and should still see
+    // their own ring light up for it.
+    if (!this.micAnalyser && this.soundboardLocalPlaybackCount === 0) return;
+
+    let level = 0;
+    if (this.micAnalyser) {
+      // Byte time-domain samples, converted to linear RMS 0..1 — same scale as the RFC 6464
+      // audioLevel used for peers above, so both share SPEAKING_THRESHOLD.
+      const samples = new Uint8Array(this.micAnalyser.fftSize);
+      this.micAnalyser.getByteTimeDomainData(samples);
+      let sumSquares = 0;
+      for (let i = 0; i < samples.length; i++) {
+        const normalized = (samples[i] - 128) / 128;
+        sumSquares += normalized * normalized;
+      }
+      level = Math.sqrt(sumSquares / samples.length);
     }
-    const level = Math.sqrt(sumSquares / samples.length);
+    // The AnalyserNode only ever listens to the dry mic track (see rewireMicAnalyser) — it never
+    // sees the soundboard mix, so a playing clip is forced in here instead of being picked up
+    // naturally the way it already is on every remote peer's own copy of getStats().
+    if (this.soundboardLocalPlaybackCount > 0) level = Math.max(level, 1);
     this.applySpeakingLevel(this.localSpeakingState, level, (isSpeaking) =>
       this.opts.onLocalSpeakingChange(isSpeaking)
     );

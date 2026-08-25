@@ -25,6 +25,26 @@ export interface CachedImage {
   data: ArrayBuffer;
 }
 
+export interface PickedAudio {
+  fileName: string;
+  data: ArrayBuffer;
+}
+
+export interface SoundMeta {
+  id: string;
+  name: string;
+  emoji: string;
+  /** 0-1, fixed at save time — see decisions.md, this is one of the two soundboard volumes. */
+  volume: number;
+  durationMs: number;
+  hash: string;
+  mimeType: string;
+}
+
+export interface CachedSound extends SoundMeta {
+  data: ArrayBuffer;
+}
+
 declare global {
   interface Window {
     concord: {
@@ -38,10 +58,18 @@ declare global {
       media: {
         getScreenSources: () => Promise<ScreenSource[]>;
         pickImage: () => Promise<PickedImage | null>;
+        pickAudio: () => Promise<PickedAudio | null>;
       };
       imageCache: {
         save: (key: string, data: ArrayBuffer, mimeType: string) => Promise<boolean>;
         load: (key: string) => Promise<CachedImage | null>;
+      };
+      soundCache: {
+        list: () => Promise<CachedSound[]>;
+        loadBytes: (id: string) => Promise<{ mimeType: string; data: ArrayBuffer } | null>;
+        save: (meta: SoundMeta, data: ArrayBuffer) => Promise<boolean>;
+        updateMeta: (id: string, patch: Partial<Pick<SoundMeta, 'name' | 'emoji' | 'volume'>>) => Promise<boolean>;
+        delete: (id: string) => Promise<boolean>;
       };
       auth: {
         loginWithGoogle: () => Promise<GoogleLoginResult>;

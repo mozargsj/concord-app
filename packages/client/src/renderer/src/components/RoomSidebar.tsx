@@ -1,10 +1,12 @@
-import { useState, type KeyboardEvent } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react';
 import type { RoomSummary, ServerSummary, UserProfile } from '@concord/shared';
 import UserPanel from './UserPanel';
 import VoiceConnectionStatus from './VoiceConnectionStatus';
 import HostStarBadge from './HostStarBadge';
 import LiveBadge from './LiveBadge';
 import ConfirmModal from './ConfirmModal';
+import SoundboardPopover from './SoundboardPopover';
+import SoundboardManagerModal from './SoundboardManagerModal';
 import {
   ChevronDown,
   UserPlus,
@@ -20,7 +22,12 @@ import {
 } from 'lucide-react';
 import { getAvatarColor } from '../lib/avatarColor';
 import type { RoomPeer } from '../hooks/useRoomConnection';
+import { decodeAudioFile } from '../lib/audioClip';
+import { listOwnSounds, loadOwnSoundBytes, type OwnSound } from '../lib/soundCache';
+import { getSoundboardVolume, setSoundboardVolume } from '../lib/soundboardVolume';
 import '../styles/RoomSidebar.css';
+
+type SoundboardPopoverState = { mode: 'play' | 'config'; x: number; y: number };
 
 const ROLE_DONO = 1;
 const ROLE_ADMIN = 2;
@@ -54,6 +61,11 @@ interface RoomSidebarProps {
   selfSharingScreen: boolean;
   onToggleCamera: () => void;
   onToggleScreenShare: () => void;
+  onPlaySoundboardClip: (
+    buffer: AudioBuffer,
+    volume: number,
+    onEnded?: () => void
+  ) => { stop: () => void } | null;
 }
 
 export default function RoomSidebar({
@@ -84,13 +96,77 @@ export default function RoomSidebar({
   selfCameraOn,
   selfSharingScreen,
   onToggleCamera,
-  onToggleScreenShare
+  onToggleScreenShare,
+  onPlaySoundboardClip
 }: RoomSidebarProps) {
   const [isCreatingRoom, setIsCreatingRoom] = useState(false);
   const [newRoomName, setNewRoomName] = useState('');
   const [editingRoomId, setEditingRoomId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState('');
   const [roomPendingDelete, setRoomPendingDelete] = useState<RoomSummary | null>(null);
+  const [soundboardPopover, setSoundboardPopover] = useState<SoundboardPopoverState | null>(null);
+  const [isSoundboardManagerOpen, setIsSoundboardManagerOpen] = useState(false);
+  const [ownSounds, setOwnSounds] = useState<OwnSound[]>([]);
+  const [generalVolumePercent, setGeneralVolumePercent] = useState(getSoundboardVolume());
+  // Lifted above the popover (which unmounts on close) so the play/pause state survives closing
+  // and reopening the megafone's quick-play list while a clip is still going.
+  const [activeSoundboardId, setActiveSoundboardId] = useState<string | null>(null);
+  const activeSoundboardStopRef = useRef<(() => void) | null>(null);
+
+  async function refreshOwnSounds() {
+    setOwnSounds(await listOwnSounds());
+  }
+
+  useEffect(() => {
+    void refreshOwnSounds();
+  }, []);
+
+  useEffect(() => {
+    return () => activeSoundboardStopRef.current?.();
+  }, []);
+
+  function handleMegafoneClick(event: ReactMouseEvent) {
+    setSoundboardPopover({ mode: 'play', x: event.clientX, y: event.clientY });
+  }
+
+  function handleMegafoneContextMenu(event: ReactMouseEvent) {
+    event.preventDefault();
+    setSoundboardPopover({ mode: 'config', x: event.clientX, y: event.clientY });
+  }
+
+  function handleGeneralVolumeChange(value: number) {
+    setGeneralVolumePercent(value);
+    setSoundboardVolume(value);
+  }
+
+  // Clicking a sound toggles it: same sound while it's playing stops it, any other sound stops
+  // whatever was playing first and starts the new one — mirrors the play/pause behavior in the
+  // "Enviar um som" preview and the manager's own list, just wired through the mesh instead of a
+  // plain <audio> element since this path actually broadcasts too (see MeshManager.playSoundboardClip).
+  async function handleToggleSound(sound: OwnSound) {
+    if (activeSoundboardId === sound.id) {
+      activeSoundboardStopRef.current?.();
+      activeSoundboardStopRef.current = null;
+      setActiveSoundboardId(null);
+      return;
+    }
+
+    activeSoundboardStopRef.current?.();
+    const bytes = await loadOwnSoundBytes(sound.id);
+    if (!bytes) return;
+    const buffer = await decodeAudioFile(bytes.data);
+    // Fixed per-sound volume (set once, at save time) combined with the general/real-time
+    // volume from the config popover — decisions.md is explicit the two coexist, neither
+    // replaces the other.
+    const handle = onPlaySoundboardClip(buffer, sound.volume * (generalVolumePercent / 100), () => {
+      // Fires whether the clip finished on its own or was stopped explicitly (see
+      // MeshManager.playSoundboardClip) — only clear state if this is still the active sound,
+      // so a stale callback from a sound that was already superseded doesn't clobber the new one.
+      setActiveSoundboardId((current) => (current === sound.id ? null : current));
+    });
+    activeSoundboardStopRef.current = handle?.stop ?? null;
+    setActiveSoundboardId(sound.id);
+  }
 
   const selectedRoom = rooms.find((room) => room.id === selectedRoomId) ?? null;
   const canCreateOrDeleteRooms = myRole <= ROLE_DONO;
@@ -349,7 +425,12 @@ export default function RoomSidebar({
               <button className="room-sidebar__quick-action" title="Em breve" disabled>
                 <LayoutGrid size={18} />
               </button>
-              <button className="room-sidebar__quick-action" title="Em breve" disabled>
+              <button
+                className="room-sidebar__quick-action"
+                title="Áudios (clique direito para configurar)"
+                onClick={handleMegafoneClick}
+                onContextMenu={handleMegafoneContextMenu}
+              >
                 <Megaphone size={18} />
               </button>
             </div>
@@ -358,6 +439,7 @@ export default function RoomSidebar({
           <UserPanel
             isMicMuted={isMicMuted}
             isDeafened={isDeafened}
+            isSpeaking={isSpeaking}
             showMutedSpeakingHint={showMutedSpeakingHint}
             onToggleMic={onToggleMic}
             onToggleDeafen={onToggleDeafen}
@@ -377,6 +459,37 @@ export default function RoomSidebar({
           confirmLabel="Excluir"
           onCancel={() => setRoomPendingDelete(null)}
           onConfirm={confirmDeleteRoom}
+        />
+      )}
+
+      {soundboardPopover?.mode === 'play' && (
+        <SoundboardPopover
+          mode="play"
+          x={soundboardPopover.x}
+          y={soundboardPopover.y}
+          sounds={ownSounds}
+          playingId={activeSoundboardId}
+          onToggleSound={handleToggleSound}
+          onClose={() => setSoundboardPopover(null)}
+        />
+      )}
+
+      {soundboardPopover?.mode === 'config' && (
+        <SoundboardPopover
+          mode="config"
+          x={soundboardPopover.x}
+          y={soundboardPopover.y}
+          generalVolumePercent={generalVolumePercent}
+          onGeneralVolumeChange={handleGeneralVolumeChange}
+          onOpenManager={() => setIsSoundboardManagerOpen(true)}
+          onClose={() => setSoundboardPopover(null)}
+        />
+      )}
+
+      {isSoundboardManagerOpen && (
+        <SoundboardManagerModal
+          onClose={() => setIsSoundboardManagerOpen(false)}
+          onSoundsChanged={refreshOwnSounds}
         />
       )}
     </aside>

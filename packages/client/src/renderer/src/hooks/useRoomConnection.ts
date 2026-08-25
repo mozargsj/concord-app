@@ -401,6 +401,17 @@ export function useRoomConnection(
     void meshRef.current?.setLocalScreenTrack(stream);
   }
 
+  /** Broadcasts a local soundboard clip to every peer as if it were the mic (see
+   * MeshManager.playSoundboardClip) — no-ops outside a room, same as every other mesh action.
+   * Returns a stop handle so the caller's play/pause toggle can cut it short. */
+  function playSoundboardClip(
+    buffer: AudioBuffer,
+    volume: number,
+    onEnded?: () => void
+  ): { stop: () => void } | null {
+    return meshRef.current?.playSoundboardClip(buffer, volume, onEnded) ?? null;
+  }
+
   /** Broadcasts the switch to the room (everyone else's client plays the sound) and plays it locally right away. */
   function sendDeviceSwitched(kind: DeviceKind): void {
     signalingRef.current?.send({ type: 'device-switched', kind });
@@ -434,6 +445,7 @@ export function useRoomConnection(
     setLocalCameraTrack,
     setLocalScreenTrack,
     switchMicDevice,
-    sendDeviceSwitched
+    sendDeviceSwitched,
+    playSoundboardClip
   };
 }

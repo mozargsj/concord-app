@@ -28,15 +28,17 @@
 
 .user-panel__avatar {
   position: relative;
-  width: 32px;
-  height: 32px;
+  /* Largest this can go without touching the 56px row's own edges (.user-panel__identity's 4px
+     padding top/bottom leaves 48px to work with) — up from the original 32px. */
+  width: 44px;
+  height: 44px;
   border-radius: 50%;
   background: var(--color-accent);
   display: flex;
   align-items: center;
   justify-content: center;
   font-weight: 700;
-  font-size: 13px;
+  font-size: 16px;
   flex-shrink: 0;
   overflow: hidden;
 }
@@ -47,12 +49,45 @@
   object-fit: cover;
 }
 
+/* Same "está falando" language as everywhere else (ring + glow, 1s pulse) but drawn *inside* the
+   circle via inset box-shadow instead of bulging outward — the avatar here sits shoulder-to-
+   shoulder with the mic/deafen buttons, no room for an outward glow without overlapping them.
+   Rendered on a ::after overlay, not as a box-shadow straight on .user-panel__avatar — an inset
+   box-shadow paints *behind* the element's own children in normal flow, so with a real photo
+   (the <img>, sized to fill the whole circle) sitting on top, it was completely invisible no
+   matter how thick it got. A generated ::after paints after (on top of) that <img>, fixing it. */
+.user-panel__avatar--speaking::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  pointer-events: none;
+  box-shadow:
+    inset 0 0 0 3px var(--color-online),
+    inset 0 0 10px 2px rgba(35, 165, 90, 0.7);
+  animation: user-panel-speaking-pulse 1s ease-in-out infinite;
+}
+
+@keyframes user-panel-speaking-pulse {
+  0%,
+  100% {
+    box-shadow:
+      inset 0 0 0 3px var(--color-online),
+      inset 0 0 10px 2px rgba(35, 165, 90, 0.7);
+  }
+  50% {
+    box-shadow:
+      inset 0 0 0 4px var(--color-online),
+      inset 0 0 14px 3px rgba(35, 165, 90, 0.9);
+  }
+}
+
 .user-panel__online-dot {
   position: absolute;
-  bottom: -2px;
-  right: -2px;
-  width: 10px;
-  height: 10px;
+  bottom: -1px;
+  right: -1px;
+  width: 12px;
+  height: 12px;
   border-radius: 50%;
   background: var(--color-online);
   border: 2px solid var(--color-bg-sidebar);

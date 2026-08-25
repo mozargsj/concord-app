@@ -103,7 +103,8 @@ export default function ServerListPage({
     setLocalCameraTrack,
     setLocalScreenTrack,
     switchMicDevice,
-    sendDeviceSwitched
+    sendDeviceSwitched,
+    playSoundboardClip
   } = useRoomConnection(
     selectedRoomId,
     currentUser.displayName,
@@ -464,6 +465,7 @@ export default function ServerListPage({
         selfSharingScreen={!!screenStream}
         onToggleCamera={handleToggleCamera}
         onToggleScreenShare={handleToggleScreenShare}
+        onPlaySoundboardClip={playSoundboardClip}
       />
 
       <div className="server-list-page__main">

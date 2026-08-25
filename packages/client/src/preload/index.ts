@@ -14,12 +14,20 @@ contextBridge.exposeInMainWorld('concord', {
   },
   media: {
     getScreenSources: () => ipcRenderer.invoke('screen:get-sources'),
-    pickImage: () => ipcRenderer.invoke('media:pick-image')
+    pickImage: () => ipcRenderer.invoke('media:pick-image'),
+    pickAudio: () => ipcRenderer.invoke('media:pick-audio')
   },
   imageCache: {
     save: (key: string, data: ArrayBuffer, mimeType: string) =>
       ipcRenderer.invoke('image-cache:save', key, data, mimeType),
     load: (key: string) => ipcRenderer.invoke('image-cache:load', key)
+  },
+  soundCache: {
+    list: () => ipcRenderer.invoke('sound-cache:list'),
+    loadBytes: (id: string) => ipcRenderer.invoke('sound-cache:load-bytes', id),
+    save: (meta: unknown, data: ArrayBuffer) => ipcRenderer.invoke('sound-cache:save', meta, data),
+    updateMeta: (id: string, patch: unknown) => ipcRenderer.invoke('sound-cache:update-meta', id, patch),
+    delete: (id: string) => ipcRenderer.invoke('sound-cache:delete', id)
   },
   auth: {
     loginWithGoogle: () => ipcRenderer.invoke('auth:login-with-google')

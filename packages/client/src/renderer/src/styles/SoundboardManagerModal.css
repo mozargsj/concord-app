@@ -1,0 +1,137 @@
+.soundboard-manager__backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 210;
+}
+
+.soundboard-manager {
+  width: 420px;
+  max-height: 80vh;
+  background: var(--color-bg-elevated);
+  border-radius: var(--radius-lg);
+  padding: 20px 24px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.soundboard-manager__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.soundboard-manager__header h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.soundboard-manager__close {
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: 20px;
+  line-height: 1;
+  border-radius: var(--radius-sm);
+}
+
+.soundboard-manager__close:hover {
+  background: var(--color-bg-elevated-hover);
+  color: var(--color-text-primary);
+}
+
+.soundboard-manager__add-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+}
+
+.soundboard-manager__list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow-y: auto;
+}
+
+.soundboard-manager__hint {
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  margin: 8px 0;
+}
+
+.soundboard-manager__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+}
+
+.soundboard-manager__row:hover {
+  background: var(--color-bg-elevated-hover);
+}
+
+.soundboard-manager__play {
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  border: none;
+  background: var(--color-accent);
+  color: var(--color-text-primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.soundboard-manager__play:hover {
+  background: var(--color-accent-hover);
+}
+
+.soundboard-manager__emoji {
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
+.soundboard-manager__name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+}
+
+.soundboard-manager__duration {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  flex-shrink: 0;
+}
+
+.soundboard-manager__icon-button {
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  color: var(--color-text-secondary);
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.soundboard-manager__icon-button:hover {
+  background: var(--color-bg-rail);
+  color: var(--color-text-primary);
+}
+
+.soundboard-manager__icon-button--danger:hover {
+  color: var(--color-danger);
+}
