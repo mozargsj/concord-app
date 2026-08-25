@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { UserProfile } from '@concord/shared';
-import type { UpdateStatus } from './types/window';
+import type { UpdatePhase, UpdateStatusInfo } from './types/window';
 import TitleBar from './components/TitleBar';
 import ConfirmModal from './components/ConfirmModal';
 import LoadingSpinner from './components/LoadingSpinner';
@@ -21,8 +21,9 @@ export default function App() {
   // 'checking' at startup, every launch — no prompt either way: 'done' (nothing found, or an
   // error) just falls through to the normal boot below; 'updating' means main is silently
   // downloading and will relaunch on its own once ready (see main/autoUpdate.ts), so the normal
-  // session check is held off until then.
-  const [updateStatus, setUpdateStatus] = useState<UpdateStatus>('checking');
+  // session check is held off until then. 'phase'/'percent'/'version' drive the dynamic message
+  // below instead of one static "sendo atualizado" screen with no information.
+  const [updateStatus, setUpdateStatus] = useState<UpdateStatusInfo>({ status: 'checking' });
 
   useEffect(() => {
     return window.concord?.app.onConfirmCloseRequest(() => setIsCloseConfirmOpen(true));
@@ -42,7 +43,7 @@ export default function App() {
   }
 
   useEffect(() => {
-    if (updateStatus !== 'done') return;
+    if (updateStatus.status !== 'done') return;
     getStoredSessionToken().then((token) => {
       if (!token) {
         setView('login');
@@ -61,7 +62,22 @@ export default function App() {
           setView('login');
         });
     });
-  }, [updateStatus]);
+  }, [updateStatus.status]);
+
+  function describeUpdatePhase(phase: UpdatePhase | undefined, version: string | undefined): string {
+    switch (phase) {
+      case 'checking':
+        return 'Verificando atualizações...';
+      case 'available':
+        return version ? `Nova versão encontrada (${version})...` : 'Nova versão encontrada...';
+      case 'downloading':
+        return 'Baixando atualização...';
+      case 'installing':
+        return version ? `Instalando a versão ${version}...` : 'Instalando atualização...';
+      default:
+        return 'O Concord está sendo atualizado, aguarde...';
+    }
+  }
 
   function handleLoggedIn(user: UserProfile, sessionToken: string): void {
     setSessionToken(sessionToken);
@@ -75,8 +91,11 @@ export default function App() {
     <div className="app-shell">
       <TitleBar title={activeServerName} />
       <div className="app-shell__content">
-        {updateStatus === 'updating' ? (
-          <LoadingSpinner message="O Concord está sendo atualizado, aguarde..." />
+        {updateStatus.status !== 'done' ? (
+          <LoadingSpinner
+            message={describeUpdatePhase(updateStatus.phase, updateStatus.version)}
+            percent={updateStatus.phase === 'downloading' ? updateStatus.percent : undefined}
+          />
         ) : (
           view === 'loading' && <LoadingSpinner />
         )}

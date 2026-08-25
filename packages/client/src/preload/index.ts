@@ -56,8 +56,15 @@ contextBridge.exposeInMainWorld('concord', {
     respondToCloseConfirmation: (confirmed: boolean) => {
       ipcRenderer.send('app:confirm-close-response', confirmed);
     },
-    onUpdateStatus: (callback: (status: 'checking' | 'updating' | 'done') => void) => {
-      const listener = (_event: unknown, status: 'checking' | 'updating' | 'done') => callback(status);
+    onUpdateStatus: (
+      callback: (info: {
+        status: 'checking' | 'updating' | 'done';
+        phase?: 'checking' | 'available' | 'downloading' | 'installing';
+        percent?: number;
+        version?: string;
+      }) => void
+    ) => {
+      const listener = (_event: unknown, info: Parameters<typeof callback>[0]) => callback(info);
       ipcRenderer.on('app:update-status', listener);
       return () => ipcRenderer.removeListener('app:update-status', listener);
     }

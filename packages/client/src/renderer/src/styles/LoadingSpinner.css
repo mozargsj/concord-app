@@ -14,6 +14,36 @@
   color: var(--color-text-secondary);
 }
 
+.loading-spinner__progress {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.loading-spinner__progress-fill {
+  width: 220px;
+  height: 8px;
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-elevated);
+  overflow: hidden;
+}
+
+.loading-spinner__progress-fill::before {
+  content: '';
+  display: block;
+  height: 100%;
+  width: var(--percent, 0%);
+  background: var(--color-accent);
+  /* Smooths out the frequent, small percent bumps from download-progress instead of jumping. */
+  transition: width 0.2s ease-out;
+}
+
+.loading-spinner__progress-label {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+
 .loading-spinner__logo {
   width: 80px;
   height: 80px;

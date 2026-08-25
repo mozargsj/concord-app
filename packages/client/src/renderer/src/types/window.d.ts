@@ -20,6 +20,17 @@ export interface GoogleLoginResult {
 
 export type UpdateStatus = 'checking' | 'updating' | 'done';
 
+// Sub-state of 'updating', shown as a dynamic message/progress bar instead of a static "sendo
+// atualizado" text — 'percent' is only meaningful during 'downloading'.
+export type UpdatePhase = 'checking' | 'available' | 'downloading' | 'installing';
+
+export interface UpdateStatusInfo {
+  status: UpdateStatus;
+  phase?: UpdatePhase;
+  percent?: number;
+  version?: string;
+}
+
 export interface CachedImage {
   mimeType: string;
   data: ArrayBuffer;
@@ -106,7 +117,7 @@ declare global {
         onBeforeQuit: (callback: () => void) => () => void;
         onConfirmCloseRequest: (callback: () => void) => () => void;
         respondToCloseConfirmation: (confirmed: boolean) => void;
-        onUpdateStatus: (callback: (status: UpdateStatus) => void) => () => void;
+        onUpdateStatus: (callback: (info: UpdateStatusInfo) => void) => () => void;
       };
     };
   }
