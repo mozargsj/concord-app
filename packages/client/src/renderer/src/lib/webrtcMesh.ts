@@ -175,6 +175,10 @@ interface MeshManagerOptions {
   /** A requested sound finished downloading from a peer — caller stashes it in the temporary
    * download cache (decisions.md: downloading ≠ adding to "meus áudios", that's a separate step). */
   onSoundReceived: (peerId: string, soundId: string, data: ArrayBuffer, mimeType: string) => void;
+  /** A peer connection actually failed (ICE or overall), or an ICE candidate errored out — the
+   * CGNAT/symmetric-NAT scenario decisions.md §1 already flags as the reason TURN might be
+   * needed. Optional: MeshManager works the same with or without a listener, this is diagnostics. */
+  onConnectionError?: (peerId: string, kind: 'ice-failed' | 'connection-failed' | 'ice-candidate-error', detail: string) => void;
 }
 
 /**
@@ -587,6 +591,25 @@ export class MeshManager {
         targetPeerId: peerId,
         candidate: JSON.stringify(event.candidate.toJSON())
       });
+    };
+
+    pc.oniceconnectionstatechange = () => {
+      if (pc.iceConnectionState === 'failed') {
+        this.opts.onConnectionError?.(peerId, 'ice-failed', `iceConnectionState=failed (peer ${peerId})`);
+      }
+    };
+    pc.onconnectionstatechange = () => {
+      if (pc.connectionState === 'failed') {
+        this.opts.onConnectionError?.(peerId, 'connection-failed', `connectionState=failed (peer ${peerId})`);
+      }
+    };
+    pc.onicecandidateerror = (event) => {
+      const iceError = event as RTCPeerConnectionIceErrorEvent;
+      this.opts.onConnectionError?.(
+        peerId,
+        'ice-candidate-error',
+        `errorCode=${iceError.errorCode} ${iceError.errorText ?? ''}`.trim()
+      );
     };
 
     // Camera and screen are both kind:'video', so which is which is determined by

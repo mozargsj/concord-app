@@ -3,6 +3,7 @@ dist/
 out/
 build/
 release/
+tools/
 .claude/
 *.log
 .env
@@ -10,6 +11,7 @@ release/
 !.env.example
 !.env.test-dev
 !.env.test-offline
+!.env.test-real
 .DS_Store
 Thumbs.db
 .vscode/*

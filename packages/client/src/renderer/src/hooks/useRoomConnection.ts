@@ -4,7 +4,7 @@ import { SignalingClient, type SignalingStatus } from '../lib/signalingClient';
 import { MeshManager, type SoundListEntry } from '../lib/webrtcMesh';
 import { getPreferredDeviceId } from '../lib/devicePreferences';
 import { playDeviceSwitch, playRoomJoin, playRoomLeave } from '../lib/soundEffects';
-import { TEST_OFFLINE } from '../lib/api';
+import { TEST_OFFLINE, reportClientError } from '../lib/api';
 import { fetchImageBytes, loadCachedImage, saveCachedImage, type ImageCacheKind } from '../lib/imageCache';
 import { listOwnSounds, loadOwnSoundBytes } from '../lib/soundCache';
 import { saveTempSound } from '../lib/soundTempCache';
@@ -309,7 +309,9 @@ export function useRoomConnection(
         onSoundListRequest,
         onSoundListReceived,
         onSoundRequest,
-        onSoundReceived
+        onSoundReceived,
+        onConnectionError: (peerId, kind, detail) =>
+          void reportClientError('WebRTCConnectionError', detail, undefined, { peerId, kind })
       });
       meshRef.current = mesh;
 

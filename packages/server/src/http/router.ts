@@ -3,6 +3,7 @@ import { createReadStream, existsSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type {
   ApiErrorResponse,
+  ClientErrorReportRequest,
   CreateInviteResponse,
   CreateRoomRequest,
   CreateServerRequest,
@@ -38,6 +39,7 @@ import * as userSoundsRepo from '../db/userSoundsRepo.js';
 import { createPresignedGetUrl, createPresignedUploadUrl, putObject } from '../aws/s3Client.js';
 import { signSessionToken, verifySessionToken } from '../auth/session.js';
 import { signInviteToken, verifyInviteToken } from '../auth/invite.js';
+import { logError } from '../logging/errorLog.js';
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -259,6 +261,10 @@ export async function handleHttpRequest(req: IncomingMessage, res: ServerRespons
       await handlePresignUpload(req, res);
       return;
     }
+    if (method === 'POST' && segments.length === 2 && segments[0] === 'logs' && segments[1] === 'client-error') {
+      await handleClientErrorReport(req, res);
+      return;
+    }
     if (
       method === 'GET' &&
       segments.length === 3 &&
@@ -301,7 +307,10 @@ export async function handleHttpRequest(req: IncomingMessage, res: ServerRespons
     }
     sendError(res, 404, 'not-found');
   } catch (error) {
-    console.error('HTTP handler error', error);
+    // segments/method already parsed above — best-effort serverId extraction from routes shaped
+    // /servers/:id/... covers the common case without needing every handler to catch locally.
+    const serverId = segments[0] === 'servers' && segments.length > 1 ? segments[1] : undefined;
+    await logError(error, { source: 'http', route: `${method} ${url.pathname}`, serverId });
     sendError(res, 500, 'internal-error');
   }
 }
@@ -583,6 +592,37 @@ async function handleDeleteSound(req: IncomingMessage, res: ServerResponse, soun
   if (!userId) return;
 
   await userSoundsRepo.remove(userId, soundId);
+  sendJson(res, 200, {});
+}
+
+/** Public (session optional) — a client error can happen before login exists too. Whatever
+ * userId/serverId/roomId the client already knows travels in `context`, same shape logError
+ * already accepts. */
+async function handleClientErrorReport(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const header = req.headers.authorization;
+  const token = header?.startsWith('Bearer ') ? header.slice('Bearer '.length) : null;
+  const userId = token ? await verifySessionToken(token) : null;
+
+  const body = await readJsonBody<ClientErrorReportRequest>(req);
+  if (!body?.errorType || !body?.message) return sendError(res, 400, 'invalid-request');
+
+  const context = body.context && typeof body.context === 'object' ? body.context : undefined;
+  const serverId = typeof context?.serverId === 'string' ? context.serverId : undefined;
+
+  // Preserves the client's own error name/stack instead of a fresh one pointing at this handler —
+  // logError derives errorType/stack from the Error object it's given.
+  const clientError = new Error(body.message);
+  clientError.name = body.errorType;
+  if (body.stack) clientError.stack = body.stack;
+
+  await logError(clientError, {
+    source: 'client',
+    route: body.errorType,
+    userId: userId ?? undefined,
+    serverId,
+    roomId: typeof context?.roomId === 'string' ? context.roomId : undefined
+  });
+
   sendJson(res, 200, {});
 }
 

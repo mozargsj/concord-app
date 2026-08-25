@@ -309,6 +309,28 @@ export async function deleteUserSound(soundId: string): Promise<void> {
   await request(`/users/me/sounds/${soundId}`, { method: 'DELETE' });
 }
 
+/**
+ * decisions.md §7 — best-effort error reporting to the same log pipeline the server writes to.
+ * Must never itself throw or crash the caller (a logging failure is not a reason to compound the
+ * original error), and is a no-op in TEST_MODE (no real backend to receive it).
+ */
+export async function reportClientError(
+  errorType: string,
+  message: string,
+  stack?: string,
+  context?: Record<string, unknown>
+): Promise<void> {
+  if (TEST_MODE) return;
+  try {
+    await request('/logs/client-error', {
+      method: 'POST',
+      body: JSON.stringify({ errorType, message, stack, context })
+    });
+  } catch {
+    // Swallowed on purpose — see doc comment above.
+  }
+}
+
 export async function uploadToPresignedUrl(
   uploadUrl: string,
   data: ArrayBuffer,

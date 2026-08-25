@@ -5,7 +5,8 @@ export const env = {
     keyPath: process.env.TLS_KEY_PATH ?? ''
   },
   aws: {
-    region: process.env.AWS_REGION ?? ''
+    region: process.env.AWS_REGION ?? '',
+    dynamodbEndpoint: process.env.DYNAMODB_ENDPOINT ?? ''
   },
   dynamodbTablePrefix: process.env.DYNAMODB_TABLE_PREFIX ?? 'concord_',
   s3ServerIconsBucket: process.env.S3_SERVER_ICONS_BUCKET ?? '',

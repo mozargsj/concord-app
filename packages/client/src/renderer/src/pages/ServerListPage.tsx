@@ -19,7 +19,8 @@ import {
   getServer,
   listMyServers,
   listRooms,
-  renameRoom
+  renameRoom,
+  reportClientError
 } from '../lib/api';
 import { useRoomConnection } from '../hooks/useRoomConnection';
 import { getPreferredDeviceId } from '../lib/devicePreferences';
@@ -218,6 +219,7 @@ export default function ServerListPage({
       setLocalCameraTrack(stream.getVideoTracks()[0] ?? null);
     } catch (error) {
       setMediaError(error instanceof Error ? error.message : 'Não foi possível acessar a câmera.');
+      void reportClientError('CameraAccessError', error instanceof Error ? error.message : String(error), error instanceof Error ? error.stack : undefined);
     }
   }
 
@@ -280,6 +282,7 @@ export default function ServerListPage({
       playTransmissionEnter();
     } catch (error) {
       setMediaError(error instanceof Error ? error.message : 'Não foi possível capturar a tela escolhida.');
+      void reportClientError('ScreenCaptureError', error instanceof Error ? error.message : String(error), error instanceof Error ? error.stack : undefined);
     }
   }
 
@@ -370,6 +373,12 @@ export default function ServerListPage({
         isLoading: false,
         error: error instanceof ApiError ? 'Só admins ou o dono podem gerar convites.' : 'Não foi possível gerar o convite.'
       });
+      void reportClientError(
+        'CreateInviteError',
+        error instanceof Error ? error.message : String(error),
+        error instanceof Error ? error.stack : undefined,
+        { serverId: selectedServerId ?? undefined }
+      );
     }
   }
 

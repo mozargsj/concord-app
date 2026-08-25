@@ -120,3 +120,12 @@ export interface UserSoundResponse {
 export interface ApiErrorResponse {
   error: string;
 }
+
+// decisions.md §7 — client-side errors reported to the same system_logs/server_logs pipeline as
+// server-side ones. Session is optional server-side (an error can happen before login exists).
+export interface ClientErrorReportRequest {
+  errorType: string;
+  message: string;
+  stack?: string;
+  context?: Record<string, unknown>;
+}
