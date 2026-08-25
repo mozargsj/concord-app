@@ -7,6 +7,13 @@ import {
   setMicSensitivity
 } from '../lib/micSensitivity';
 import { getRnnoiseEnabled, setRnnoiseEnabled } from '../lib/noiseSuppressionSettings';
+import {
+  MASTER_VOLUME_DEFAULT,
+  MASTER_VOLUME_MAX,
+  MASTER_VOLUME_MIN,
+  getMasterVolume,
+  setMasterVolume
+} from '../lib/masterVolume';
 import '../styles/SettingsModal.css';
 
 interface SettingsModalProps {
@@ -19,6 +26,7 @@ interface SettingsModalProps {
 export default function SettingsModal({ onClose, onNoiseSuppressionChange }: SettingsModalProps) {
   const [threshold, setThreshold] = useState(MIC_SENSITIVITY_DEFAULT);
   const [isRnnoiseEnabled, setIsRnnoiseEnabled] = useState(true);
+  const [masterVolume, setMasterVolumeState] = useState(MASTER_VOLUME_DEFAULT);
   // Placeholder input level — same nature as the "está falando" mock in RoomView.tsx:
   // stand-in until the real gate reads audioLevel via getStats() (~20-50ms poll, per
   // the "Gate de ruído" decision). Only here to give the slider a visual reference.
@@ -27,6 +35,7 @@ export default function SettingsModal({ onClose, onNoiseSuppressionChange }: Set
   useEffect(() => {
     setThreshold(getMicSensitivity());
     setIsRnnoiseEnabled(getRnnoiseEnabled());
+    setMasterVolumeState(getMasterVolume());
   }, []);
 
   // Ties updates to the display's own refresh rate instead of a fixed interval — the
@@ -53,6 +62,11 @@ export default function SettingsModal({ onClose, onNoiseSuppressionChange }: Set
   function handleThresholdChange(value: number) {
     setThreshold(value);
     setMicSensitivity(value);
+  }
+
+  function handleMasterVolumeChange(value: number) {
+    setMasterVolumeState(value);
+    setMasterVolume(value);
   }
 
   function handleToggleRnnoise() {
@@ -91,6 +105,25 @@ export default function SettingsModal({ onClose, onNoiseSuppressionChange }: Set
               className="settings-modal__checkbox"
             />
           </label>
+        </div>
+
+        <div className="settings-modal__section">
+          <label className="settings-modal__label" htmlFor="master-volume">
+            Volume geral
+          </label>
+          <p className="settings-modal__hint">
+            Controla o volume de tudo que você ouve na sala. Pra ajustar uma pessoa específica,
+            clique com o botão direito nela.
+          </p>
+          <input
+            id="master-volume"
+            type="range"
+            min={MASTER_VOLUME_MIN}
+            max={MASTER_VOLUME_MAX}
+            value={masterVolume}
+            onChange={(event) => handleMasterVolumeChange(Number(event.target.value))}
+            className="settings-modal__slider"
+          />
         </div>
 
         <div className="settings-modal__section">

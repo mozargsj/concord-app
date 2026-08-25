@@ -5,11 +5,19 @@ import { HeadphoneOff, MicOff } from 'lucide-react';
 import CallControls from './CallControls';
 import MediaStreamVideo from './MediaStreamVideo';
 import ScreenShareTile from './ScreenShareTile';
+import ParticipantVolumeMenu from './ParticipantVolumeMenu';
 import HostStarBadge from './HostStarBadge';
 import LiveBadge from './LiveBadge';
 import { getAvatarColor } from '../lib/avatarColor';
 import { getGridContainerStyle, getGridItemStyle } from '../lib/participantGrid';
 import { playCameraStart, playCameraStop, playTransmissionEnter, playTransmissionExit } from '../lib/soundEffects';
+import { getMasterVolume, onMasterVolumeChange } from '../lib/masterVolume';
+import {
+  type PeerVolumeSettings,
+  getPeerVolumeSettings,
+  setPeerMuted,
+  setPeerVolume
+} from '../lib/peerVolumePreferences';
 import '../styles/RoomView.css';
 
 interface RoomViewProps {
@@ -49,6 +57,8 @@ type Tile =
       isSpeaking: boolean;
       isMicMuted: boolean;
       isDeafened: boolean;
+      // null for self — there's no incoming stream to adjust volume on for your own tile.
+      userId: string | null;
     }
   | { kind: 'screen'; key: string; name: string; stream: MediaStream };
 
@@ -74,6 +84,31 @@ export default function RoomView({
   onToggleScreenShare
 }: RoomViewProps) {
   const [focusedTileKey, setFocusedTileKey] = useState<string | null>(null);
+  // Live overrides for this session — seeded lazily from localStorage the first time a given
+  // userId is touched (getEffectivePeerSettings below), so most peers never need an entry here
+  // at all until the listener actually right-clicks one.
+  const [peerVolumeOverrides, setPeerVolumeOverrides] = useState<Record<string, PeerVolumeSettings>>({});
+  const [masterVolume, setMasterVolumeState] = useState(getMasterVolume());
+  const [volumeMenu, setVolumeMenu] = useState<{ x: number; y: number; userId: string; name: string } | null>(
+    null
+  );
+
+  useEffect(() => onMasterVolumeChange(setMasterVolumeState), []);
+
+  function getEffectivePeerSettings(userId: string): PeerVolumeSettings {
+    return peerVolumeOverrides[userId] ?? getPeerVolumeSettings(userId);
+  }
+
+  function handlePeerVolumeChange(userId: string, volume: number) {
+    setPeerVolumeOverrides((prev) => ({ ...prev, [userId]: { ...getEffectivePeerSettings(userId), volume } }));
+    setPeerVolume(userId, volume);
+  }
+
+  function handleTogglePeerMute(userId: string) {
+    const next = !getEffectivePeerSettings(userId).muted;
+    setPeerVolumeOverrides((prev) => ({ ...prev, [userId]: { ...getEffectivePeerSettings(userId), muted: next } }));
+    setPeerMuted(userId, next);
+  }
 
   const peerMediaRef = useRef<Map<string, { hasVideo: boolean; hasScreen: boolean }>>(new Map());
 
@@ -141,7 +176,8 @@ export default function RoomView({
       stream: null,
       isSpeaking: isSpeaking && !isMicMuted,
       isMicMuted,
-      isDeafened
+      isDeafened,
+      userId: null
     },
     ...peers.map(
       (peer): Tile => ({
@@ -154,7 +190,8 @@ export default function RoomView({
         stream: peer.personalStream,
         isSpeaking: peer.isSpeaking,
         isMicMuted: peer.isMicMuted,
-        isDeafened: peer.isDeafened
+        isDeafened: peer.isDeafened,
+        userId: peer.userId
       })
     )
   ];
@@ -193,6 +230,16 @@ export default function RoomView({
           const isFocused = tile.key === focusedTileKey;
           const isFocusable = tile.kind === 'screen';
 
+          // Peer's own fixed level × this listener's general volume — same "two volumes
+          // combine, neither replaces the other" pattern already decided for the soundboard.
+          const peerSettings =
+            tile.kind === 'participant' && tile.userId ? getEffectivePeerSettings(tile.userId) : null;
+          const effectiveVolume = peerSettings
+            ? peerSettings.muted
+              ? 0
+              : (peerSettings.volume / 100) * (masterVolume / 100)
+            : undefined;
+
           const media =
             tile.kind === 'screen' ? (
               <ScreenShareTile
@@ -205,7 +252,7 @@ export default function RoomView({
             ) : showCamera ? (
               <MediaStreamVideo stream={cameraStream} mirrored fit="cover" />
             ) : hasRemoteVideo ? (
-              <MediaStreamVideo stream={remoteStream!} muted={isDeafened} fit="cover" />
+              <MediaStreamVideo stream={remoteStream!} muted={isDeafened} volume={effectiveVolume} fit="cover" />
             ) : (
               <div
                 className={'room-view__avatar' + (speaking ? ' room-view__avatar--speaking' : '')}
@@ -217,7 +264,9 @@ export default function RoomView({
                   tile.name.charAt(0)
                 )}
                 {/* No camera track from this peer yet — keep the audio playing invisibly. */}
-                {remoteStream && <MediaStreamVideo stream={remoteStream} muted={isDeafened} hidden />}
+                {remoteStream && (
+                  <MediaStreamVideo stream={remoteStream} muted={isDeafened} volume={effectiveVolume} hidden />
+                )}
               </div>
             );
 
@@ -244,6 +293,14 @@ export default function RoomView({
               }
               style={isFocused ? undefined : getGridItemStyle(index, tiles.length)}
               onClick={isFocusable && !isFocused ? () => setFocusedTileKey(tile.key) : undefined}
+              onContextMenu={
+                tile.kind === 'participant' && tile.userId
+                  ? (event) => {
+                      event.preventDefault();
+                      setVolumeMenu({ x: event.clientX, y: event.clientY, userId: tile.userId!, name: tile.name });
+                    }
+                  : undefined
+              }
             >
               {tile.kind === 'screen' ? (
                 // Always the same wrapper, focused or not — only the CSS (16:9-locked
@@ -286,6 +343,19 @@ export default function RoomView({
         onToggleScreenShare={onToggleScreenShare}
         onLeave={onLeave}
       />
+
+      {volumeMenu && (
+        <ParticipantVolumeMenu
+          x={volumeMenu.x}
+          y={volumeMenu.y}
+          name={volumeMenu.name}
+          volume={getEffectivePeerSettings(volumeMenu.userId).volume}
+          isMuted={getEffectivePeerSettings(volumeMenu.userId).muted}
+          onVolumeChange={(value) => handlePeerVolumeChange(volumeMenu.userId, value)}
+          onToggleMute={() => handleTogglePeerMute(volumeMenu.userId)}
+          onClose={() => setVolumeMenu(null)}
+        />
+      )}
     </div>
   );
 }
