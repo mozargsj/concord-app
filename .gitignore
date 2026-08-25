@@ -1,7 +1,12 @@
 node_modules/
 dist/
 out/
-build/
+# packages/client/build/ is electron-builder's source-asset folder (app icon.ico), not build
+# output — a blanket `build/` rule here was silently excluding it from every commit (git can't
+# un-ignore files inside an already-ignored directory, so a negation pattern doesn't work either),
+# so CI checkouts never had a real icon.ico and electron-builder fell back to Electron's generic
+# icon. It's the only directory anywhere in the repo actually named "build", so just not ignoring
+# it at all is simplest.
 release/
 tools/
 packages/server/updates/
