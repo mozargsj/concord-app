@@ -8,6 +8,7 @@ import { checkForUpdatesOnStartup } from './autoUpdate';
 const sessionFilePath = () => path.join(app.getPath('userData'), 'session.enc');
 const imageCacheDir = () => path.join(app.getPath('userData'), 'imageCache');
 const soundCacheDir = () => path.join(app.getPath('userData'), 'soundCache');
+const soundTempCacheDir = () => path.join(app.getPath('userData'), 'soundTempCache');
 
 interface SoundMetaFile {
   id: string;
@@ -17,6 +18,45 @@ interface SoundMetaFile {
   durationMs: number;
   hash: string;
   mimeType: string;
+}
+
+// Downloaded-but-not-yet-adopted sounds from other peers (decisions.md — downloading ≠ adding to
+// "meus áudios"): a separate cache from soundCacheDir, self-expiring after 7 days so previewing a
+// bunch of peers' sounds without ever confirming any of them doesn't grow disk usage forever.
+const TEMP_SOUND_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+interface TempSoundMetaFile {
+  id: string;
+  ownerId: string;
+  ownerName: string;
+  name: string;
+  emoji: string;
+  durationMs: number;
+  hash: string;
+  mimeType: string;
+  downloadedAt: number;
+}
+
+/** Best-effort sweep of expired temp sounds — called once at startup, not on a running timer
+ * (the app isn't usually left open for 7 days straight, next launch is a fine cadence). */
+async function cleanupExpiredTempSounds(): Promise<void> {
+  const dir = soundTempCacheDir();
+  const entries = await readdir(dir).catch(() => []);
+  const now = Date.now();
+  await Promise.all(
+    entries
+      .filter((name) => name.endsWith('.json'))
+      .map(async (name) => {
+        try {
+          const meta = JSON.parse(await readFile(path.join(dir, name), 'utf8')) as TempSoundMetaFile;
+          if (now - meta.downloadedAt <= TEMP_SOUND_TTL_MS) return;
+          await unlink(path.join(dir, name)).catch(() => {});
+          await unlink(path.join(dir, `${meta.id}.bin`)).catch(() => {});
+        } catch {
+          // corrupt/unreadable metadata — leave it, not worth crashing startup over
+        }
+      })
+  );
 }
 
 const IMAGE_MIME_TYPES: Record<string, string> = {
@@ -281,6 +321,44 @@ ipcMain.handle('sound-cache:delete', async (_event, id: string) => {
   return true;
 });
 
+ipcMain.handle('sound-temp-cache:list', async () => {
+  const dir = soundTempCacheDir();
+  const entries = await readdir(dir).catch(() => []);
+  const jsonNames = entries.filter((name) => name.endsWith('.json'));
+  const sounds = await Promise.all(
+    jsonNames.map(async (name) => {
+      try {
+        const meta = JSON.parse(await readFile(path.join(dir, name), 'utf8')) as TempSoundMetaFile;
+        const audio = await readFile(path.join(dir, `${meta.id}.bin`));
+        return {
+          ...meta,
+          data: audio.buffer.slice(audio.byteOffset, audio.byteOffset + audio.byteLength)
+        };
+      } catch {
+        return null;
+      }
+    })
+  );
+  return sounds.filter((sound): sound is NonNullable<typeof sound> => sound !== null);
+});
+
+ipcMain.handle('sound-temp-cache:save', async (_event, meta: TempSoundMetaFile, data: ArrayBuffer) => {
+  const safeId = sanitizeSoundId(meta.id);
+  const dir = soundTempCacheDir();
+  await mkdir(dir, { recursive: true });
+  await writeFile(path.join(dir, `${safeId}.bin`), Buffer.from(data));
+  await writeFile(path.join(dir, `${safeId}.json`), JSON.stringify({ ...meta, id: safeId }));
+  return true;
+});
+
+ipcMain.handle('sound-temp-cache:delete', async (_event, id: string) => {
+  const safeId = sanitizeSoundId(id);
+  const dir = soundTempCacheDir();
+  await unlink(path.join(dir, `${safeId}.bin`)).catch(() => {});
+  await unlink(path.join(dir, `${safeId}.json`)).catch(() => {});
+  return true;
+});
+
 ipcMain.handle('auth:login-with-google', async () => {
   return loginWithGoogle();
 });
@@ -325,6 +403,7 @@ if (hasSingleInstanceLock) {
   });
 
   app.whenReady().then(() => {
+    void cleanupExpiredTempSounds();
     createMainWindow();
 
     app.on('activate', () => {

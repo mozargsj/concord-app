@@ -29,6 +29,11 @@ contextBridge.exposeInMainWorld('concord', {
     updateMeta: (id: string, patch: unknown) => ipcRenderer.invoke('sound-cache:update-meta', id, patch),
     delete: (id: string) => ipcRenderer.invoke('sound-cache:delete', id)
   },
+  soundTempCache: {
+    list: () => ipcRenderer.invoke('sound-temp-cache:list'),
+    save: (meta: unknown, data: ArrayBuffer) => ipcRenderer.invoke('sound-temp-cache:save', meta, data),
+    delete: (id: string) => ipcRenderer.invoke('sound-temp-cache:delete', id)
+  },
   auth: {
     loginWithGoogle: () => ipcRenderer.invoke('auth:login-with-google')
   },

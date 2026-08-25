@@ -7,7 +7,10 @@ import LiveBadge from './LiveBadge';
 import ConfirmModal from './ConfirmModal';
 import SoundboardPopover from './SoundboardPopover';
 import SoundboardManagerModal from './SoundboardManagerModal';
+import ConfirmAddSoundModal from './ConfirmAddSoundModal';
 import {
+  AudioLines,
+  AudioLinesOff,
   ChevronDown,
   UserPlus,
   Plus,
@@ -23,8 +26,11 @@ import {
 import { getAvatarColor } from '../lib/avatarColor';
 import type { RoomPeer } from '../hooks/useRoomConnection';
 import { decodeAudioFile } from '../lib/audioClip';
-import { listOwnSounds, loadOwnSoundBytes, type OwnSound } from '../lib/soundCache';
+import { getRnnoiseEnabled, setRnnoiseEnabled } from '../lib/noiseSuppressionSettings';
+import { listOwnSounds, loadOwnSoundBytes, syncOwnSoundsToBackend, type OwnSound } from '../lib/soundCache';
+import { listTempSounds, type TempSound } from '../lib/soundTempCache';
 import { getSoundboardVolume, setSoundboardVolume } from '../lib/soundboardVolume';
+import type { SoundListEntry } from '../lib/webrtcMesh';
 import '../styles/RoomSidebar.css';
 
 type SoundboardPopoverState = { mode: 'play' | 'config'; x: number; y: number };
@@ -48,6 +54,7 @@ interface RoomSidebarProps {
   onToggleDeafen: () => void;
   onSelectMic: (deviceId: string) => void;
   onSelectSpeaker: (deviceId: string) => void;
+  onNoiseSuppressionChange: () => void;
   isSpeaking: boolean;
   showMutedSpeakingHint: boolean;
   latencyMs: number | null;
@@ -66,6 +73,14 @@ interface RoomSidebarProps {
     volume: number,
     onEnded?: () => void
   ) => { stop: () => void } | null;
+  /** Catalogs already received from peers currently in the room — live-only, per decisions.md
+   * (never persisted, cleared the moment a peer leaves). */
+  peerSoundLists: Record<string, SoundListEntry[]>;
+  onRequestPeerSoundList: (peerId: string) => void;
+  onRequestPeerSound: (peerId: string, soundId: string, knownHash: string | null) => void;
+  /** Bumped by ServerListPage every time a P2P sound download finishes — the trigger to refresh
+   * the temp-cache list, since the download itself happens deep inside the mesh, not here. */
+  soundDownloadTick: number;
 }
 
 export default function RoomSidebar({
@@ -84,6 +99,7 @@ export default function RoomSidebar({
   onToggleDeafen,
   onSelectMic,
   onSelectSpeaker,
+  onNoiseSuppressionChange,
   isSpeaking,
   showMutedSpeakingHint,
   latencyMs,
@@ -97,7 +113,11 @@ export default function RoomSidebar({
   selfSharingScreen,
   onToggleCamera,
   onToggleScreenShare,
-  onPlaySoundboardClip
+  onPlaySoundboardClip,
+  peerSoundLists,
+  onRequestPeerSoundList,
+  onRequestPeerSound,
+  soundDownloadTick
 }: RoomSidebarProps) {
   const [isCreatingRoom, setIsCreatingRoom] = useState(false);
   const [newRoomName, setNewRoomName] = useState('');
@@ -112,17 +132,60 @@ export default function RoomSidebar({
   // and reopening the megafone's quick-play list while a clip is still going.
   const [activeSoundboardId, setActiveSoundboardId] = useState<string | null>(null);
   const activeSoundboardStopRef = useRef<(() => void) | null>(null);
+  // Which peer's catalog the popover is currently drilled into — null means "top level"
+  // (my own sounds + the participant list).
+  const [selectedSoundboardPeer, setSelectedSoundboardPeer] = useState<{
+    peerId: string;
+    displayName: string;
+    avatarUrl: string | null;
+  } | null>(null);
+  const [tempSounds, setTempSounds] = useState<TempSound[]>([]);
+  const [playingTempSoundId, setPlayingTempSoundId] = useState<string | null>(null);
+  const playingTempAudioRef = useRef<HTMLAudioElement | null>(null);
+  const [confirmAddTemp, setConfirmAddTemp] = useState<TempSound | null>(null);
+  // Mirrors the same toggle exposed in Configurações de voz — quick single-click access right
+  // next to the megafone, same interaction as the mic/deafen buttons. Deliberately duplicated
+  // rather than removing the settings one: some users will only ever find it here, others only
+  // in Configurações, and this one's a lot faster to reach mid-call.
+  const [isRnnoiseEnabled, setIsRnnoiseEnabled] = useState(true);
+
+  useEffect(() => {
+    setIsRnnoiseEnabled(getRnnoiseEnabled());
+  }, []);
+
+  function handleToggleRnnoise() {
+    const next = !isRnnoiseEnabled;
+    setIsRnnoiseEnabled(next);
+    setRnnoiseEnabled(next);
+    onNoiseSuppressionChange();
+  }
 
   async function refreshOwnSounds() {
-    setOwnSounds(await listOwnSounds());
+    const sounds = await listOwnSounds();
+    setOwnSounds(sounds);
+    void syncOwnSoundsToBackend(sounds);
+  }
+
+  async function refreshTempSounds() {
+    setTempSounds(await listTempSounds());
   }
 
   useEffect(() => {
     void refreshOwnSounds();
+    void refreshTempSounds();
   }, []);
 
+  // A P2P sound download completed somewhere inside the mesh (useRoomConnection's
+  // onSoundReceived) — re-read the temp cache to pick it up.
   useEffect(() => {
-    return () => activeSoundboardStopRef.current?.();
+    void refreshTempSounds();
+  }, [soundDownloadTick]);
+
+  useEffect(() => {
+    return () => {
+      activeSoundboardStopRef.current?.();
+      playingTempAudioRef.current?.pause();
+    };
   }, []);
 
   function handleMegafoneClick(event: ReactMouseEvent) {
@@ -166,6 +229,52 @@ export default function RoomSidebar({
     });
     activeSoundboardStopRef.current = handle?.stop ?? null;
     setActiveSoundboardId(sound.id);
+  }
+
+  // null = the self avatar (first in the strip) — back to "meus áudios", no network call needed.
+  function handleSelectSoundboardPeer(peer: { peerId: string; displayName: string; avatarUrl: string | null } | null) {
+    setSelectedSoundboardPeer(peer);
+    if (!peer) return;
+    // Always re-asks, even if a list from this peer already arrived earlier in the session —
+    // it's cheap (just metadata) and picks up anything they've added since (decisions.md: ao vivo).
+    onRequestPeerSoundList(peer.peerId);
+  }
+
+  function handleDownloadSound(entry: SoundListEntry) {
+    if (!selectedSoundboardPeer) return;
+    onRequestPeerSound(selectedSoundboardPeer.peerId, entry.soundId, null);
+  }
+
+  // Same single-Audio play/pause toggle pattern as SoundboardManagerModal's own-sounds preview —
+  // this one just reads from the temp (not-yet-adopted) cache instead.
+  function handleToggleTempPreview(soundId: string) {
+    if (playingTempSoundId === soundId) {
+      playingTempAudioRef.current?.pause();
+      playingTempAudioRef.current = null;
+      setPlayingTempSoundId(null);
+      return;
+    }
+    const temp = tempSounds.find((sound) => sound.id === soundId);
+    if (!temp) return;
+    playingTempAudioRef.current?.pause();
+    const audio = new Audio(temp.url);
+    audio.onended = () => {
+      setPlayingTempSoundId((current) => (current === soundId ? null : current));
+      playingTempAudioRef.current = null;
+    };
+    playingTempAudioRef.current = audio;
+    setPlayingTempSoundId(soundId);
+    void audio.play();
+  }
+
+  function handleConfirmAddTemp(soundId: string) {
+    const temp = tempSounds.find((sound) => sound.id === soundId);
+    if (!temp) return;
+    setConfirmAddTemp(temp);
+  }
+
+  async function handleSoundAdopted() {
+    await Promise.all([refreshOwnSounds(), refreshTempSounds()]);
   }
 
   const selectedRoom = rooms.find((room) => room.id === selectedRoomId) ?? null;
@@ -426,6 +535,16 @@ export default function RoomSidebar({
                 <LayoutGrid size={18} />
               </button>
               <button
+                className={
+                  'room-sidebar__quick-action' +
+                  (isRnnoiseEnabled ? ' room-sidebar__quick-action--rnnoise-on' : ' room-sidebar__quick-action--rnnoise-off')
+                }
+                title={isRnnoiseEnabled ? 'Redução de ruído ativada' : 'Redução de ruído desativada'}
+                onClick={handleToggleRnnoise}
+              >
+                {isRnnoiseEnabled ? <AudioLines size={18} /> : <AudioLinesOff size={18} />}
+              </button>
+              <button
                 className="room-sidebar__quick-action"
                 title="Áudios (clique direito para configurar)"
                 onClick={handleMegafoneClick}
@@ -445,6 +564,7 @@ export default function RoomSidebar({
             onToggleDeafen={onToggleDeafen}
             onSelectMic={onSelectMic}
             onSelectSpeaker={onSelectSpeaker}
+            onNoiseSuppressionChange={onNoiseSuppressionChange}
             displayName={currentUser.displayName}
             avatarUrl={currentUser.avatarUrl}
             onOpenProfile={onOpenProfile}
@@ -467,10 +587,28 @@ export default function RoomSidebar({
           mode="play"
           x={soundboardPopover.x}
           y={soundboardPopover.y}
-          sounds={ownSounds}
-          playingId={activeSoundboardId}
-          onToggleSound={handleToggleSound}
-          onClose={() => setSoundboardPopover(null)}
+          ownSounds={ownSounds}
+          playingOwnSoundId={activeSoundboardId}
+          onToggleOwnSound={handleToggleSound}
+          selfDisplayName={currentUser.displayName}
+          selfAvatarUrl={currentUser.avatarUrl}
+          participants={peers.map((peer) => ({
+            peerId: peer.peerId,
+            displayName: peer.displayName,
+            avatarUrl: peer.avatarUrl
+          }))}
+          selectedPeer={selectedSoundboardPeer}
+          onSelectPeer={handleSelectSoundboardPeer}
+          peerSounds={selectedSoundboardPeer ? (peerSoundLists[selectedSoundboardPeer.peerId] ?? null) : null}
+          downloadedSoundIds={new Set(tempSounds.map((sound) => sound.id))}
+          onDownloadSound={handleDownloadSound}
+          playingTempSoundId={playingTempSoundId}
+          onToggleTempPreview={handleToggleTempPreview}
+          onConfirmAdd={handleConfirmAddTemp}
+          onClose={() => {
+            setSoundboardPopover(null);
+            setSelectedSoundboardPeer(null);
+          }}
         />
       )}
 
@@ -490,6 +628,14 @@ export default function RoomSidebar({
         <SoundboardManagerModal
           onClose={() => setIsSoundboardManagerOpen(false)}
           onSoundsChanged={refreshOwnSounds}
+        />
+      )}
+
+      {confirmAddTemp && (
+        <ConfirmAddSoundModal
+          temp={confirmAddTemp}
+          onClose={() => setConfirmAddTemp(null)}
+          onAdded={handleSoundAdopted}
         />
       )}
     </aside>

@@ -1,11 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
 import type { DeviceKind, ServerToClientMessage } from '@concord/shared';
 import { SignalingClient, type SignalingStatus } from '../lib/signalingClient';
-import { MeshManager } from '../lib/webrtcMesh';
+import { MeshManager, type SoundListEntry } from '../lib/webrtcMesh';
 import { getPreferredDeviceId } from '../lib/devicePreferences';
 import { playDeviceSwitch, playRoomJoin, playRoomLeave } from '../lib/soundEffects';
 import { TEST_OFFLINE } from '../lib/api';
 import { fetchImageBytes, loadCachedImage, saveCachedImage, type ImageCacheKind } from '../lib/imageCache';
+import { listOwnSounds, loadOwnSoundBytes } from '../lib/soundCache';
+import { saveTempSound } from '../lib/soundTempCache';
+import { createDenoisedTrack } from '../lib/rnnoise';
+import { getRnnoiseEnabled } from '../lib/noiseSuppressionSettings';
 
 /** The server the joined room belongs to — just enough to know who to ask for its icon (its
  * owner) and, if that owner happens to be me, what to answer with. */
@@ -15,12 +19,64 @@ interface RoomServerInfo {
   iconUrl: string | null;
 }
 
-const MIC_CONSTRAINTS = (preferredDeviceId: string | null): MediaTrackConstraints => ({
+// When RNNoise is on it replaces the browser's own noiseSuppression rather than stacking on top
+// of it — running both risks double-processing artifacts for no proven benefit, and RNNoise (an
+// actual denoising model) is the one that measurably stopped mouse-click/keyboard-tap bleed in
+// testing, not the native gate-style suppressor.
+const MIC_CONSTRAINTS = (preferredDeviceId: string | null, rnnoiseEnabled: boolean): MediaTrackConstraints => ({
   echoCancellation: true,
-  noiseSuppression: true,
+  noiseSuppression: !rnnoiseEnabled,
   autoGainControl: true,
   ...(preferredDeviceId ? { deviceId: { exact: preferredDeviceId } } : {})
 });
+
+interface MicPipeline {
+  track: MediaStreamTrack;
+  /** Tears down everything this pipeline created (the RNNoise graph, if any, and the raw
+   * getUserMedia stream) — the one thing callers need to remember to call on swap/teardown. */
+  cleanup: () => void;
+}
+
+/** Acquires the mic and, unless the user has turned RNNoise off (noiseSuppressionSettings.ts),
+ * routes it through the RNNoise AudioWorklet graph before handing back a track — every caller
+ * downstream (MeshManager: sending, speaking-detection, soundboard mixing) just sees "the mic
+ * track" and never needs to know whether RNNoise is in the loop. Falls back to the raw track if
+ * RNNoise itself fails to load/initialize (e.g. AudioWorklet unsupported) rather than losing mic
+ * input entirely; returns null only if there's no mic at all (denied/unavailable). */
+async function acquireMicPipeline(preferredDeviceId: string | null): Promise<MicPipeline | null> {
+  let stream: MediaStream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: MIC_CONSTRAINTS(preferredDeviceId, getRnnoiseEnabled())
+    });
+  } catch {
+    return null; // no mic available/denied — proceed without local audio (video-only participation)
+  }
+
+  const rawTrack = stream.getAudioTracks()[0];
+  if (!rawTrack) {
+    stream.getTracks().forEach((track) => track.stop());
+    return null;
+  }
+
+  const stopRawStream = () => stream.getTracks().forEach((track) => track.stop());
+  if (!getRnnoiseEnabled()) {
+    return { track: rawTrack, cleanup: stopRawStream };
+  }
+
+  try {
+    const denoised = await createDenoisedTrack(rawTrack);
+    return {
+      track: denoised.track,
+      cleanup: () => {
+        denoised.stop();
+        stopRawStream();
+      }
+    };
+  } catch {
+    return { track: rawTrack, cleanup: stopRawStream };
+  }
+}
 
 const PING_INTERVAL_MS = 4000;
 
@@ -46,6 +102,9 @@ interface RoomConnectionState {
   peers: RoomPeer[];
   latencyMs: number | null;
   selfIsSpeaking: boolean;
+  /** Live-only (decisions.md — soundboard): a peer's catalog is only ever known while both are
+   * online in the same room, keyed by peerId, cleared on peer-left/room-exit. */
+  peerSoundLists: Record<string, SoundListEntry[]>;
 }
 
 const initialState: RoomConnectionState = {
@@ -54,7 +113,8 @@ const initialState: RoomConnectionState = {
   hostPeerId: null,
   peers: [],
   latencyMs: null,
-  selfIsSpeaking: false
+  selfIsSpeaking: false,
+  peerSoundLists: {}
 };
 
 /**
@@ -71,18 +131,28 @@ export function useRoomConnection(
   isDeafened: boolean,
   myAvatarUrl: string | null,
   server: RoomServerInfo | null,
-  onServerIconReceived: (serverId: string, url: string) => void
+  onServerIconReceived: (serverId: string, url: string) => void,
+  onSoundDownloaded?: (tempSoundId: string) => void
 ) {
   const [state, setState] = useState<RoomConnectionState>(initialState);
   const meshRef = useRef<MeshManager | null>(null);
   const signalingRef = useRef<SignalingClient | null>(null);
-  const micStreamRef = useRef<MediaStream | null>(null);
+  // Tears down whatever the current mic pipeline set up (RNNoise graph + raw stream, or just the
+  // raw stream) — replaces a plain MediaStream ref since RNNoise being in the loop means there's
+  // more than just tracks to stop now (see acquireMicPipeline).
+  const micCleanupRef = useRef<(() => void) | null>(null);
   // Read inside the onImageRequest/requestPeerImages callbacks (created once per room
   // connection) — refs keep them seeing the latest value without needing to recreate the mesh
   // every time one changes, same trick as every other prop this hook watches via a side effect.
   const myAvatarUrlRef = useRef(myAvatarUrl);
   const serverRef = useRef(server);
   const onServerIconReceivedRef = useRef(onServerIconReceived);
+  const onSoundDownloadedRef = useRef(onSoundDownloaded);
+  // Same trick, for onSoundReceived below — it needs to look up the peer's displayName/userId
+  // and the sound's own name/emoji/durationMs (from a previously-received list) synchronously,
+  // without waiting on a setState round-trip.
+  const peersRef = useRef<RoomPeer[]>([]);
+  const peerSoundListsRef = useRef<Record<string, SoundListEntry[]>>({});
 
   useEffect(() => {
     myAvatarUrlRef.current = myAvatarUrl;
@@ -93,6 +163,15 @@ export function useRoomConnection(
   useEffect(() => {
     onServerIconReceivedRef.current = onServerIconReceived;
   }, [onServerIconReceived]);
+  useEffect(() => {
+    onSoundDownloadedRef.current = onSoundDownloaded;
+  }, [onSoundDownloaded]);
+  useEffect(() => {
+    peersRef.current = state.peers;
+  }, [state.peers]);
+  useEffect(() => {
+    peerSoundListsRef.current = state.peerSoundLists;
+  }, [state.peerSoundLists]);
 
   /** Answers another peer's request for my avatar, or my server's icon if the request's
    * ownerId is a server I actually own — shared by both the offline-test and real mesh below. */
@@ -148,6 +227,62 @@ export function useRoomConnection(
     });
   }
 
+  /** Answers another peer's "what sounds do you have" with my own local catalog. */
+  async function onSoundListRequest(): Promise<SoundListEntry[]> {
+    const sounds = await listOwnSounds();
+    return sounds.map((sound) => ({
+      soundId: sound.id,
+      name: sound.name,
+      emoji: sound.emoji,
+      durationMs: sound.durationMs,
+      hash: sound.hash
+    }));
+  }
+
+  /** A peer's catalog just arrived — stashed both in state (UI reacts) and in the ref (so
+   * onSoundReceived below can look entries up synchronously). */
+  function onSoundListReceived(peerId: string, sounds: SoundListEntry[]): void {
+    setState((prev) => ({ ...prev, peerSoundLists: { ...prev.peerSoundLists, [peerId]: sounds } }));
+  }
+
+  /** Answers another peer's request for one specific sound of mine, by id. */
+  async function onSoundRequest(
+    soundId: string,
+    knownHash: string | null
+  ): Promise<
+    { status: 'unchanged' } | { status: 'missing' } | { status: 'data'; data: ArrayBuffer; mimeType: string; hash: string }
+  > {
+    const sounds = await listOwnSounds();
+    const sound = sounds.find((entry) => entry.id === soundId);
+    if (!sound) return { status: 'missing' };
+    if (knownHash && knownHash === sound.hash) return { status: 'unchanged' };
+    const bytes = await loadOwnSoundBytes(soundId);
+    if (!bytes) return { status: 'missing' };
+    return { status: 'data', data: bytes.data, mimeType: bytes.mimeType, hash: sound.hash };
+  }
+
+  /** A requested sound finished downloading — stashed in the temporary preview cache, never
+   * straight into "meus áudios" (decisions.md: baixar ≠ adicionar à lista própria). Silently
+   * drops a stray/stale download (peer left, or their list changed) rather than guessing. */
+  function onSoundReceived(peerId: string, soundId: string, data: ArrayBuffer, mimeType: string): void {
+    const peer = peersRef.current.find((candidate) => candidate.peerId === peerId);
+    const entry = peerSoundListsRef.current[peerId]?.find((candidate) => candidate.soundId === soundId);
+    if (!peer || !entry) return;
+    void saveTempSound(
+      {
+        id: soundId,
+        ownerId: peer.userId,
+        ownerName: peer.displayName,
+        name: entry.name,
+        emoji: entry.emoji,
+        durationMs: entry.durationMs,
+        hash: entry.hash,
+        mimeType
+      },
+      data
+    ).then(() => onSoundDownloadedRef.current?.(soundId));
+  }
+
   useEffect(() => {
     if (!roomId) {
       setState(initialState);
@@ -170,7 +305,11 @@ export function useRoomConnection(
           setState((prev) => ({ ...prev, selfIsSpeaking: isSpeaking }));
         },
         onImageRequest,
-        onImageReceived
+        onImageReceived,
+        onSoundListRequest,
+        onSoundListReceived,
+        onSoundRequest,
+        onSoundReceived
       });
       meshRef.current = mesh;
 
@@ -184,29 +323,22 @@ export function useRoomConnection(
         latencyMs: 0
       }));
 
-      let localMicStream: MediaStream | null = null;
       const preferredMic = getPreferredDeviceId('audioinput');
-      navigator.mediaDevices
-        .getUserMedia({ audio: MIC_CONSTRAINTS(preferredMic) })
-        .then((stream) => {
-          if (cancelled) {
-            stream.getTracks().forEach((track) => track.stop());
-            return;
-          }
-          localMicStream = stream;
-          micStreamRef.current = stream;
-          const track = stream.getAudioTracks()[0] ?? null;
-          mesh.setLocalMicTrack(track);
-        })
-        .catch(() => {
-          // No mic available/denied — proceed without local audio (video-only participation).
-        });
+      void acquireMicPipeline(preferredMic).then((pipeline) => {
+        if (!pipeline) return;
+        if (cancelled) {
+          pipeline.cleanup();
+          return;
+        }
+        micCleanupRef.current = pipeline.cleanup;
+        mesh.setLocalMicTrack(pipeline.track);
+      });
 
       return () => {
         cancelled = true;
         mesh.closeAll();
-        localMicStream?.getTracks().forEach((track) => track.stop());
-        micStreamRef.current = null;
+        micCleanupRef.current?.();
+        micCleanupRef.current = null;
         meshRef.current = null;
       };
     }
@@ -237,7 +369,11 @@ export function useRoomConnection(
         setState((prev) => ({ ...prev, selfIsSpeaking: isSpeaking }));
       },
       onImageRequest,
-      onImageReceived
+      onImageReceived,
+      onSoundListRequest,
+      onSoundListReceived,
+      onSoundRequest,
+      onSoundReceived
     });
     meshRef.current = mesh;
 
@@ -300,7 +436,16 @@ export function useRoomConnection(
         case 'peer-left':
           playRoomLeave();
           mesh.removePeer(message.peerId);
-          setState((prev) => ({ ...prev, peers: prev.peers.filter((peer) => peer.peerId !== message.peerId) }));
+          setState((prev) => {
+            const remainingSoundLists = Object.fromEntries(
+              Object.entries(prev.peerSoundLists).filter(([peerId]) => peerId !== message.peerId)
+            );
+            return {
+              ...prev,
+              peers: prev.peers.filter((peer) => peer.peerId !== message.peerId),
+              peerSoundLists: remainingSoundLists
+            };
+          });
           break;
         case 'sdp-offer':
           void mesh.handleOffer(message.fromPeerId, message.sdp);
@@ -313,6 +458,14 @@ export function useRoomConnection(
           break;
         case 'host-changed':
           setState((prev) => ({ ...prev, hostPeerId: message.hostPeerId }));
+          break;
+        case 'host-candidate-notify':
+          // Any connected peer can be host — the server already decided who to ask (ranked by
+          // connection stability, decisions.md §2), so confirming is unconditional; the server's
+          // own atomic lock (handleCandidateConfirm) picks whichever confirmation lands first and
+          // ignores the rest of the batch. Without this handler, migration always timed out and
+          // cascaded through every peer with nobody ever confirming, eventually closing the room.
+          signaling.send({ type: 'host-candidate-confirm', roomId: message.roomId, epoch: message.epoch });
           break;
         case 'room-closed':
         case 'join-rejected':
@@ -340,26 +493,32 @@ export function useRoomConnection(
             )
           }));
           break;
+        case 'peer-screen-share-changed':
+          // Only acts on "stopped" — "started" still waits for the real track to arrive via
+          // ontrack, same as always; this message is just the reliable clear signal.
+          if (!message.isSharing) {
+            mesh.forceClearScreenStream(message.peerId);
+            setState((prev) => ({
+              ...prev,
+              peers: prev.peers.map((peer) =>
+                peer.peerId === message.peerId ? { ...peer, screenStream: null } : peer
+              )
+            }));
+          }
+          break;
       }
     });
 
-    let localMicStream: MediaStream | null = null;
     const preferredMic = getPreferredDeviceId('audioinput');
-    navigator.mediaDevices
-      .getUserMedia({ audio: MIC_CONSTRAINTS(preferredMic) })
-      .then((stream) => {
-        if (cancelled) {
-          stream.getTracks().forEach((track) => track.stop());
-          return;
-        }
-        localMicStream = stream;
-        micStreamRef.current = stream;
-        const track = stream.getAudioTracks()[0] ?? null;
-        mesh.setLocalMicTrack(track);
-      })
-      .catch(() => {
-        // No mic available/denied — proceed without local audio (video-only participation).
-      });
+    void acquireMicPipeline(preferredMic).then((pipeline) => {
+      if (!pipeline) return;
+      if (cancelled) {
+        pipeline.cleanup();
+        return;
+      }
+      micCleanupRef.current = pipeline.cleanup;
+      mesh.setLocalMicTrack(pipeline.track);
+    });
 
     signaling.connect(import.meta.env.VITE_SIGNALING_URL, roomId, displayName, userId);
 
@@ -373,8 +532,8 @@ export function useRoomConnection(
       cancelled = true;
       clearInterval(pingInterval);
       mesh.closeAll();
-      localMicStream?.getTracks().forEach((track) => track.stop());
-      micStreamRef.current = null;
+      micCleanupRef.current?.();
+      micCleanupRef.current = null;
       signaling.close();
       meshRef.current = null;
       signalingRef.current = null;
@@ -399,6 +558,9 @@ export function useRoomConnection(
 
   function setLocalScreenTrack(stream: MediaStream | null): void {
     void meshRef.current?.setLocalScreenTrack(stream);
+    // Explicit signal (see messages.ts) — the WebRTC-level "track ended" alone was unreliable for
+    // this transition, leaving viewers stuck on the last frame when sharing stopped.
+    signalingRef.current?.send({ type: 'screen-share-changed', isSharing: !!stream });
   }
 
   /** Broadcasts a local soundboard clip to every peer as if it were the mic (see
@@ -412,27 +574,48 @@ export function useRoomConnection(
     return meshRef.current?.playSoundboardClip(buffer, volume, onEnded) ?? null;
   }
 
+  /** Asks one peer for their current soundboard catalog — answer arrives via peerSoundLists. */
+  function requestPeerSoundList(peerId: string): void {
+    meshRef.current?.requestSoundList(peerId);
+  }
+
+  /** Downloads one specific sound from a peer's already-received catalog — lands in the
+   * temporary preview cache, not directly in "meus áudios" (onSoundDownloaded fires when done). */
+  function requestPeerSound(peerId: string, soundId: string, knownHash: string | null): void {
+    meshRef.current?.requestSound(peerId, soundId, knownHash);
+  }
+
   /** Broadcasts the switch to the room (everyone else's client plays the sound) and plays it locally right away. */
   function sendDeviceSwitched(kind: DeviceKind): void {
     signalingRef.current?.send({ type: 'device-switched', kind });
     playDeviceSwitch(kind);
   }
 
-  async function switchMicDevice(deviceId: string): Promise<void> {
+  async function switchMicDevice(deviceId: string | null): Promise<void> {
     const mesh = meshRef.current;
     if (!mesh) return;
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: MIC_CONSTRAINTS(deviceId) });
-      const newTrack = stream.getAudioTracks()[0] ?? null;
-      if (!newTrack) return;
-      const oldStream = micStreamRef.current;
-      micStreamRef.current = stream;
-      mesh.setLocalMicTrack(newTrack);
-      oldStream?.getTracks().forEach((track) => track.stop());
-      sendDeviceSwitched('mic');
-    } catch {
-      // device swap failed — keep using the previous mic track
-    }
+    const pipeline = await acquireMicPipeline(deviceId);
+    if (!pipeline) return; // swap failed — keep using the previous mic track
+    const oldCleanup = micCleanupRef.current;
+    micCleanupRef.current = pipeline.cleanup;
+    mesh.setLocalMicTrack(pipeline.track);
+    oldCleanup?.();
+    sendDeviceSwitched('mic');
+  }
+
+  /** Re-acquires the current device through the mic pipeline from scratch — the only way to pick
+   * up a just-changed RNNoise on/off setting, since the AudioWorklet graph (or its absence) is
+   * built once at acquisition time, not read live. Called from the settings toggle, not a device
+   * picker, so it doesn't announce a "device switched" sound — nothing actually changed hardware-wise. */
+  async function refreshMicPipeline(): Promise<void> {
+    const mesh = meshRef.current;
+    if (!mesh) return;
+    const pipeline = await acquireMicPipeline(getPreferredDeviceId('audioinput'));
+    if (!pipeline) return;
+    const oldCleanup = micCleanupRef.current;
+    micCleanupRef.current = pipeline.cleanup;
+    mesh.setLocalMicTrack(pipeline.track);
+    oldCleanup?.();
   }
 
   return {
@@ -442,10 +625,14 @@ export function useRoomConnection(
     peers: state.peers,
     latencyMs: state.latencyMs,
     selfIsSpeaking: state.selfIsSpeaking,
+    peerSoundLists: state.peerSoundLists,
     setLocalCameraTrack,
     setLocalScreenTrack,
     switchMicDevice,
+    refreshMicPipeline,
     sendDeviceSwitched,
-    playSoundboardClip
+    playSoundboardClip,
+    requestPeerSoundList,
+    requestPeerSound
   };
 }

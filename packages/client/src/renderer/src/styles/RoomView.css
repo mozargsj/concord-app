@@ -67,23 +67,11 @@
   border-radius: var(--radius-md);
 }
 
-.room-view__focus-close {
-  position: absolute;
-  top: 10px;
-  right: 10px;
-  width: 30px;
-  height: 30px;
-  border: none;
-  border-radius: 50%;
-  background: rgba(0, 0, 0, 0.6);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 21;
-}
-
-.room-view__focus-close:hover {
-  background: rgba(0, 0, 0, 0.8);
+/* Not-focused state — same wrapper (see RoomView.tsx's comment on why it's never conditionally
+   unmounted), just filling the grid cell plainly instead of the 16:9-locked fullscreen box. */
+.room-view__focus-frame--grid {
+  width: 100%;
+  height: 100%;
 }
 
 .room-view__avatar {

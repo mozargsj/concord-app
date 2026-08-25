@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import type { RoomSummary } from '@concord/shared';
 import type { RoomPeer } from '../hooks/useRoomConnection';
-import { HeadphoneOff, MicOff, X } from 'lucide-react';
+import { HeadphoneOff, MicOff } from 'lucide-react';
 import CallControls from './CallControls';
 import MediaStreamVideo from './MediaStreamVideo';
+import ScreenShareTile from './ScreenShareTile';
 import HostStarBadge from './HostStarBadge';
 import LiveBadge from './LiveBadge';
 import { getAvatarColor } from '../lib/avatarColor';
@@ -194,7 +195,13 @@ export default function RoomView({
 
           const media =
             tile.kind === 'screen' ? (
-              <MediaStreamVideo stream={tile.stream} fit="contain" />
+              <ScreenShareTile
+                stream={tile.stream}
+                isDeafened={isDeafened}
+                isFocused={isFocused}
+                onCloseFocus={() => setFocusedTileKey(null)}
+                isOwnPreview={tile.key === 'self-screen'}
+              />
             ) : showCamera ? (
               <MediaStreamVideo stream={cameraStream} mirrored fit="cover" />
             ) : hasRemoteVideo ? (
@@ -238,22 +245,20 @@ export default function RoomView({
               style={isFocused ? undefined : getGridItemStyle(index, tiles.length)}
               onClick={isFocusable && !isFocused ? () => setFocusedTileKey(tile.key) : undefined}
             >
-              {isFocused ? (
-                // Locked to 16:9, letterboxed, even when the available space isn't
-                // that shape — the transmission's own aspect (via object-fit:contain
-                // on the video) can add further black bars inside this box too.
-                <div className="room-view__focus-frame">
+              {tile.kind === 'screen' ? (
+                // Always the same wrapper, focused or not — only the CSS (16:9-locked
+                // fullscreen vs. plain 100%-fill grid cell) differs between the two. Screen
+                // tiles keep local state (ScreenShareTile's isLive/volume) that must survive a
+                // click toggling focus; conditionally mounting/unmounting this wrapper around
+                // `media` used to change its parent shape between the two branches, which made
+                // React tear the component down and remount it right after that same click had
+                // just set isLive — the fix here is keeping the parent shape constant instead.
+                <div
+                  className={'room-view__focus-frame' + (isFocused ? '' : ' room-view__focus-frame--grid')}
+                >
+                  {/* Close button now lives inside ScreenShareTile — closing has to reset that
+                      component's own play/audio state, not just this file's focus state. */}
                   {media}
-                  <button
-                    className="room-view__focus-close"
-                    title="Fechar (Esc)"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      setFocusedTileKey(null);
-                    }}
-                  >
-                    <X size={14} />
-                  </button>
                   {liveIndicator}
                   {status}
                 </div>

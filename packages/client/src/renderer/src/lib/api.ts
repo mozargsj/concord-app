@@ -4,6 +4,7 @@ import type {
   CreateRoomRequest,
   CreateServerRequest,
   CreateServerResponse,
+  CreateUserSoundRequest,
   JoinServerRequest,
   LoginRequest,
   LoginResponse,
@@ -18,8 +19,12 @@ import type {
   UpdateProfileRequest,
   UpdateRoomRequest,
   UpdateServerRequest,
+  UpdateUserSoundRequest,
   UploadKind,
-  UserProfile
+  UserProfile,
+  UserSoundListResponse,
+  UserSoundResponse,
+  UserSoundSummary
 } from '@concord/shared';
 
 export class ApiError extends Error {
@@ -53,9 +58,10 @@ interface TestModeState {
   user: UserProfile | null;
   server: ServerSummary | null;
   rooms: RoomSummary[];
+  sounds: UserSoundSummary[];
 }
 
-const testState: TestModeState = { user: null, server: null, rooms: [] };
+const testState: TestModeState = { user: null, server: null, rooms: [], sounds: [] };
 
 function slugify(value: string): string {
   return value
@@ -255,6 +261,52 @@ export async function presignUpload(
     method: 'POST',
     body: JSON.stringify(body)
   });
+}
+
+// Registry-only sync for the soundboard (decisions.md — seção 4): the audio bytes themselves
+// never touch this API, only the metadata (name/emoji/volume/hash) that lets "meus áudios"
+// survive a reinstall. Callers (soundCache.ts) treat every one of these as best-effort — the
+// local disk cache is the real source of truth, this is just an opportunistic mirror.
+export async function listMySounds(): Promise<UserSoundSummary[]> {
+  if (TEST_MODE) return testState.sounds;
+  const result = await request<UserSoundListResponse>('/users/me/sounds');
+  return result.sounds;
+}
+
+export async function createUserSound(sound: CreateUserSoundRequest): Promise<UserSoundSummary> {
+  if (TEST_MODE) {
+    const summary: UserSoundSummary = {
+      id: sound.id,
+      name: sound.name,
+      emoji: sound.emoji,
+      volume: sound.volume,
+      durationMs: sound.durationMs,
+      hash: sound.hash
+    };
+    testState.sounds = [...testState.sounds.filter((s) => s.id !== sound.id), summary];
+    return summary;
+  }
+  const result = await request<UserSoundResponse>('/users/me/sounds', {
+    method: 'POST',
+    body: JSON.stringify(sound)
+  });
+  return result.sound;
+}
+
+export async function updateUserSound(soundId: string, patch: UpdateUserSoundRequest): Promise<void> {
+  if (TEST_MODE) {
+    testState.sounds = testState.sounds.map((sound) => (sound.id === soundId ? { ...sound, ...patch } : sound));
+    return;
+  }
+  await request(`/users/me/sounds/${soundId}`, { method: 'PATCH', body: JSON.stringify(patch) });
+}
+
+export async function deleteUserSound(soundId: string): Promise<void> {
+  if (TEST_MODE) {
+    testState.sounds = testState.sounds.filter((sound) => sound.id !== soundId);
+    return;
+  }
+  await request(`/users/me/sounds/${soundId}`, { method: 'DELETE' });
 }
 
 export async function uploadToPresignedUrl(

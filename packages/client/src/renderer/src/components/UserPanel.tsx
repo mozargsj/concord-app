@@ -17,6 +17,7 @@ interface UserPanelProps {
   displayName: string;
   avatarUrl: string | null;
   onOpenProfile: () => void;
+  onNoiseSuppressionChange: () => void;
 }
 
 export default function UserPanel({
@@ -30,7 +31,8 @@ export default function UserPanel({
   onSelectSpeaker,
   displayName,
   avatarUrl,
-  onOpenProfile
+  onOpenProfile,
+  onNoiseSuppressionChange
 }: UserPanelProps) {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [openMenu, setOpenMenu] = useState<'mic' | 'speaker' | null>(null);
@@ -108,7 +110,9 @@ export default function UserPanel({
         </button>
       </div>
 
-      {isSettingsOpen && <SettingsModal onClose={() => setIsSettingsOpen(false)} />}
+      {isSettingsOpen && (
+        <SettingsModal onClose={() => setIsSettingsOpen(false)} onNoiseSuppressionChange={onNoiseSuppressionChange} />
+      )}
     </div>
   );
 }

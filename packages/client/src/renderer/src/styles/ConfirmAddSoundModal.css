@@ -1,0 +1,117 @@
+.confirm-add-sound-modal__backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 220;
+}
+
+.confirm-add-sound-modal {
+  width: 420px;
+  background: var(--color-bg-elevated);
+  border-radius: var(--radius-lg);
+  padding: 20px 24px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.confirm-add-sound-modal__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.confirm-add-sound-modal__header h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.confirm-add-sound-modal__close {
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: 20px;
+  line-height: 1;
+  border-radius: var(--radius-sm);
+}
+
+.confirm-add-sound-modal__close:hover {
+  background: var(--color-bg-elevated-hover);
+  color: var(--color-text-primary);
+}
+
+.confirm-add-sound-modal__source {
+  margin: 0;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+
+.confirm-add-sound-modal__audio {
+  width: 100%;
+  height: 32px;
+}
+
+.confirm-add-sound-modal__row {
+  display: flex;
+  gap: 16px;
+}
+
+.confirm-add-sound-modal__field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.confirm-add-sound-modal__field--grow {
+  flex: 1;
+}
+
+.confirm-add-sound-modal__label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.confirm-add-sound-modal__required {
+  color: var(--color-danger);
+}
+
+.confirm-add-sound-modal__input {
+  height: 40px;
+  padding: 0 12px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-rail);
+  color: var(--color-text-primary);
+  font-size: 14px;
+}
+
+.confirm-add-sound-modal__section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.confirm-add-sound-modal__slider {
+  width: 100%;
+  accent-color: var(--color-accent);
+}
+
+.confirm-add-sound-modal__error {
+  margin: 0;
+  font-size: 13px;
+  color: var(--color-danger);
+}
+
+.confirm-add-sound-modal__footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}

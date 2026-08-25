@@ -93,6 +93,11 @@ export default function ServerListPage({
     setMyServers((prev) => prev?.map((server) => (server.id === updated.id ? updated : server)) ?? prev);
   }
 
+  // Bumped every time a P2P sound download finishes (see useRoomConnection's onSoundDownloaded)
+  // — RoomSidebar watches this to know when to re-read the temp-cache list, since the actual
+  // download happens deep inside the mesh, not in anything RoomSidebar itself calls.
+  const [soundDownloadTick, setSoundDownloadTick] = useState(0);
+
   const {
     connectionStatus,
     selfPeerId,
@@ -100,11 +105,15 @@ export default function ServerListPage({
     peers,
     latencyMs,
     selfIsSpeaking,
+    peerSoundLists,
     setLocalCameraTrack,
     setLocalScreenTrack,
     switchMicDevice,
+    refreshMicPipeline,
     sendDeviceSwitched,
-    playSoundboardClip
+    playSoundboardClip,
+    requestPeerSoundList,
+    requestPeerSound
   } = useRoomConnection(
     selectedRoomId,
     currentUser.displayName,
@@ -113,7 +122,8 @@ export default function ServerListPage({
     isDeafened,
     currentUser.avatarUrl,
     roomServerInfo,
-    handleServerIconReceived
+    handleServerIconReceived,
+    () => setSoundDownloadTick((tick) => tick + 1)
   );
 
   const cameraStreamRef = useRef<MediaStream | null>(null);
@@ -452,6 +462,7 @@ export default function ServerListPage({
         onToggleDeafen={handleToggleDeafen}
         onSelectMic={switchMicDevice}
         onSelectSpeaker={() => sendDeviceSwitched('speaker')}
+        onNoiseSuppressionChange={refreshMicPipeline}
         isSpeaking={selfIsSpeaking && !isMicMuted}
         showMutedSpeakingHint={isMicMuted && selfIsSpeaking}
         latencyMs={latencyMs}
@@ -466,6 +477,10 @@ export default function ServerListPage({
         onToggleCamera={handleToggleCamera}
         onToggleScreenShare={handleToggleScreenShare}
         onPlaySoundboardClip={playSoundboardClip}
+        peerSoundLists={peerSoundLists}
+        onRequestPeerSoundList={requestPeerSoundList}
+        onRequestPeerSound={requestPeerSound}
+        soundDownloadTick={soundDownloadTick}
       />
 
       <div className="server-list-page__main">

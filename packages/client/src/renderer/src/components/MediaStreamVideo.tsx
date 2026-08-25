@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, type RefObject } from 'react';
 import { getPreferredDeviceId, onOutputDeviceChange } from '../lib/devicePreferences';
 
 /** setSinkId isn't in the standard DOM typings yet (Audio Output Devices API is still experimental). */
@@ -11,6 +11,10 @@ interface MediaStreamVideoProps {
   muted?: boolean;
   /** Keeps the element mounted (so its audio track still plays) without showing any picture. */
   hidden?: boolean;
+  /** Lets a parent reach the underlying <video> element directly — e.g. ScreenShareTile grabbing
+   * a frame onto a canvas right before tearing this element down. Falls back to an internal ref
+   * when not provided, same as every other caller today. */
+  videoRef?: RefObject<HTMLVideoElement>;
 }
 
 export default function MediaStreamVideo({
@@ -18,9 +22,11 @@ export default function MediaStreamVideo({
   mirrored,
   fit = 'cover',
   muted = true,
-  hidden = false
+  hidden = false,
+  videoRef: externalVideoRef
 }: MediaStreamVideoProps) {
-  const videoRef = useRef<HTMLVideoElement>(null);
+  const internalVideoRef = useRef<HTMLVideoElement>(null);
+  const videoRef = externalVideoRef ?? internalVideoRef;
 
   useEffect(() => {
     const video = videoRef.current;
@@ -29,7 +35,7 @@ export default function MediaStreamVideo({
     return () => {
       video.srcObject = null;
     };
-  }, [stream]);
+  }, [stream]); // eslint-disable-line react-hooks/exhaustive-deps -- videoRef is stable (own useRef, or caller-owned and unchanging)
 
   useEffect(() => {
     const video = videoRef.current as MediaElementWithSink | null;
@@ -45,7 +51,7 @@ export default function MediaStreamVideo({
     if (preferred) applyPreferred(preferred);
 
     return onOutputDeviceChange(applyPreferred);
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- videoRef is stable, see effect above
 
   return (
     <video

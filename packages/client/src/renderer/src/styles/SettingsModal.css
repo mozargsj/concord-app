@@ -88,3 +88,23 @@
   width: 100%;
   accent-color: var(--color-accent);
 }
+
+.settings-modal__toggle-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+}
+
+.settings-modal__toggle-row .settings-modal__hint {
+  margin-bottom: 0;
+}
+
+.settings-modal__checkbox {
+  flex-shrink: 0;
+  width: 36px;
+  height: 20px;
+  accent-color: var(--color-accent);
+  margin-top: 2px;
+}

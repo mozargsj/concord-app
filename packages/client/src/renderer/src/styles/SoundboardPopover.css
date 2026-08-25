@@ -6,16 +6,88 @@
 
 .soundboard-popover {
   position: fixed;
-  width: 260px;
-  max-height: 320px;
+  max-height: 380px;
   background: var(--color-bg-elevated);
   border-radius: var(--radius-md);
-  padding: 12px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
   z-index: 91;
   display: flex;
   flex-direction: column;
+  /* Rounds the rail's own square corners along with the popover's — without this, the rail's
+     flush dark background would poke past the popover's own border-radius. */
+  overflow: hidden;
+}
+
+.soundboard-popover--config {
+  padding: 12px;
   gap: 10px;
+}
+
+/* Two columns, same visual split as the app's own ServerRail + main content: a narrower,
+   darker vertical rail of avatars on the left, the selected person's sounds on the right. */
+.soundboard-popover__play-layout {
+  display: flex;
+  flex-direction: row;
+  min-height: 0;
+  max-height: 380px;
+}
+
+.soundboard-popover__rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  width: 56px;
+  padding: 12px 0;
+  background: var(--color-bg-rail);
+  overflow-y: auto;
+}
+
+.soundboard-popover__content {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  overflow: hidden;
+}
+
+.soundboard-popover__avatar-item {
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  padding: 2px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px transparent;
+}
+
+.soundboard-popover__avatar-item:hover {
+  box-shadow: 0 0 0 2px var(--color-bg-elevated-hover);
+}
+
+.soundboard-popover__avatar-item--active {
+  box-shadow: 0 0 0 2px var(--color-accent);
+}
+
+.soundboard-popover__avatar-image {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 14px;
+  color: #ffffff;
+  overflow: hidden;
+}
+
+.soundboard-popover__avatar-image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .soundboard-popover__title {
@@ -24,6 +96,28 @@
   color: var(--color-text-secondary);
   text-transform: uppercase;
   letter-spacing: 0.02em;
+}
+
+.soundboard-popover__sound--row {
+  cursor: default;
+}
+
+.soundboard-popover__icon-button {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  border: none;
+  background: transparent;
+  color: var(--color-text-secondary);
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.soundboard-popover__icon-button:hover {
+  background: var(--color-bg-elevated-hover);
+  color: var(--color-text-primary);
 }
 
 .soundboard-popover__hint {

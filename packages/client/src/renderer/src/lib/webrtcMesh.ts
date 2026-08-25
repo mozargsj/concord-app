@@ -16,6 +16,12 @@ const SPEAKING_DEBOUNCE_TICKS = 2; // consecutive ticks required before flipping
 const IMAGE_CHUNK_SIZE = 16 * 1024;
 const IMAGE_CHUNK_HIGH_WATER = 1024 * 1024;
 
+// Soundboard clip transfer over the 'sounds' data channel — same chunked-transfer shape as
+// images, plus a list-req/list step first since (unlike one avatar per owner) a peer can have
+// many sounds and the UI needs their names/emojis before anyone downloads bytes.
+const SOUND_CHUNK_SIZE = 16 * 1024;
+const SOUND_CHUNK_HIGH_WATER = 1024 * 1024;
+
 interface SpeakingState {
   isSpeaking: boolean;
   consecutive: number;
@@ -60,6 +66,65 @@ interface IncomingImageTransfer {
   received: number;
 }
 
+/** One entry in a peer's own-sounds catalog — metadata only, exactly what the "list" step of
+ * the 'sounds' data channel protocol exchanges before anyone downloads any actual bytes. */
+export interface SoundListEntry {
+  soundId: string;
+  name: string;
+  emoji: string;
+  durationMs: number;
+  hash: string;
+}
+
+type SoundAnswer =
+  | { status: 'unchanged' }
+  | { status: 'missing' }
+  | { status: 'data'; data: ArrayBuffer; mimeType: string; hash: string };
+
+interface SoundListRequestFrame {
+  t: 'list-req';
+}
+interface SoundListFrame {
+  t: 'list';
+  sounds: SoundListEntry[];
+}
+interface SoundRequestFrame {
+  t: 'req';
+  soundId: string;
+  knownHash: string | null;
+}
+interface SoundUnchangedFrame {
+  t: 'unchanged';
+  soundId: string;
+}
+interface SoundMissingFrame {
+  t: 'missing';
+  soundId: string;
+}
+interface SoundMetaFrame {
+  t: 'meta';
+  soundId: string;
+  mimeType: string;
+  hash: string;
+  size: number;
+}
+type SoundControlFrame =
+  | SoundListRequestFrame
+  | SoundListFrame
+  | SoundRequestFrame
+  | SoundUnchangedFrame
+  | SoundMissingFrame
+  | SoundMetaFrame;
+
+interface IncomingSoundTransfer {
+  soundId: string;
+  mimeType: string;
+  hash: string;
+  size: number;
+  chunks: ArrayBuffer[];
+  received: number;
+}
+
 interface PeerConnectionEntry {
   peerId: string;
   pc: RTCPeerConnection;
@@ -77,6 +142,13 @@ interface PeerConnectionEntry {
   // receiver's single incomingImageTransfer slot can't demux that. Chaining onto this promise
   // forces one full response (meta + all its chunks) to finish before the next one starts.
   imageSendQueue: Promise<void>;
+  soundsChannel: RTCDataChannel | null;
+  pendingSoundListRequest: boolean;
+  pendingSoundRequests: { soundId: string; knownHash: string | null }[];
+  incomingSoundTransfer: IncomingSoundTransfer | null;
+  // Same rationale as imageSendQueue — a sound-list answer and a sound-bytes answer (or two
+  // bytes answers back to back) must not interleave their sends on the one shared channel.
+  soundSendQueue: Promise<void>;
 }
 
 interface MeshManagerOptions {
@@ -93,6 +165,16 @@ interface MeshManagerOptions {
   onImageRequest: (kind: ImageCacheKind, ownerId: string, knownHash: string | null) => Promise<ImageAnswer>;
   /** A requested image finished downloading from a peer — caller persists it and updates UI state. */
   onImageReceived: (kind: ImageCacheKind, ownerId: string, data: ArrayBuffer, mimeType: string) => void;
+  /** Answers another peer's "what sounds do you have" — my own sounds list, read from local disk
+   * cache (MeshManager has no notion of sound storage, same reasoning as onImageRequest). */
+  onSoundListRequest: () => Promise<SoundListEntry[]>;
+  /** A peer's sound catalog just arrived (in response to requestSoundList). */
+  onSoundListReceived: (peerId: string, sounds: SoundListEntry[]) => void;
+  /** Answers another peer's request for one specific sound of mine, by id. */
+  onSoundRequest: (soundId: string, knownHash: string | null) => Promise<SoundAnswer>;
+  /** A requested sound finished downloading from a peer — caller stashes it in the temporary
+   * download cache (decisions.md: downloading ≠ adding to "meus áudios", that's a separate step). */
+  onSoundReceived: (peerId: string, soundId: string, data: ArrayBuffer, mimeType: string) => void;
 }
 
 /**
@@ -140,6 +222,9 @@ export class MeshManager {
   // e.g. right after a fresh 'peer-joined' event, before their SDP offer has even arrived.
   // Flushed into the entry's own pendingImageRequests as soon as getOrCreateConnection makes one.
   private pendingImageRequestsByPeer = new Map<string, { kind: ImageCacheKind; ownerId: string; knownHash: string | null }[]>();
+  // Same buffering rationale as pendingImageRequestsByPeer, for the 'sounds' channel.
+  private pendingSoundListRequestsByPeer = new Set<string>();
+  private pendingSoundRequestsByPeer = new Map<string, { soundId: string; knownHash: string | null }[]>();
 
   constructor(private opts: MeshManagerOptions) {
     this.speakingPollHandle = setInterval(() => void this.pollSpeaking(), SPEAKING_POLL_INTERVAL_MS);
@@ -151,6 +236,7 @@ export class MeshManager {
     // pc.ondatachannel (registered in getOrCreateConnection, which runs for both roles). Created
     // before renegotiate() below so it rides along in that very first offer.
     if (!entry.imagesChannel) this.setupImagesChannel(entry, entry.pc.createDataChannel('images'));
+    if (!entry.soundsChannel) this.setupSoundsChannel(entry, entry.pc.createDataChannel('sounds'));
     void this.renegotiate(entry);
   }
 
@@ -196,6 +282,8 @@ export class MeshManager {
     entry.pc.close();
     this.connections.delete(peerId);
     this.pendingImageRequestsByPeer.delete(peerId);
+    this.pendingSoundListRequestsByPeer.delete(peerId);
+    this.pendingSoundRequestsByPeer.delete(peerId);
     this.speakingStateByPeer.delete(peerId);
     this.opts.onRemoteStreamsChange(peerId, { personal: null, screen: null });
   }
@@ -217,6 +305,39 @@ export class MeshManager {
       this.sendImageControl(entry.imagesChannel, { t: 'req', kind, ownerId, knownHash });
     } else {
       entry.pendingImageRequests.push({ kind, ownerId, knownHash });
+    }
+  }
+
+  /** Asks one peer for their current soundboard catalog (names/emojis, no audio bytes yet) —
+   * answered via onSoundListReceived. Queued the same way requestImage is if the connection or
+   * channel isn't ready yet. */
+  requestSoundList(peerId: string): void {
+    const entry = this.connections.get(peerId);
+    if (!entry) {
+      this.pendingSoundListRequestsByPeer.add(peerId);
+      return;
+    }
+    if (entry.soundsChannel?.readyState === 'open') {
+      this.sendSoundControl(entry.soundsChannel, { t: 'list-req' });
+    } else {
+      entry.pendingSoundListRequest = true;
+    }
+  }
+
+  /** Asks one peer for one specific sound of theirs (by id, from a list already received via
+   * requestSoundList) — `knownHash` skips re-downloading bytes already cached from before. */
+  requestSound(peerId: string, soundId: string, knownHash: string | null): void {
+    const entry = this.connections.get(peerId);
+    if (!entry) {
+      const queued = this.pendingSoundRequestsByPeer.get(peerId) ?? [];
+      queued.push({ soundId, knownHash });
+      this.pendingSoundRequestsByPeer.set(peerId, queued);
+      return;
+    }
+    if (entry.soundsChannel?.readyState === 'open') {
+      this.sendSoundControl(entry.soundsChannel, { t: 'req', soundId, knownHash });
+    } else {
+      entry.pendingSoundRequests.push({ soundId, knownHash });
     }
   }
 
@@ -370,6 +491,20 @@ export class MeshManager {
     await Promise.all(toRenegotiate.map((entry) => this.renegotiate(entry)));
   }
 
+  /** Authoritative "this peer stopped sharing" — called from the explicit screen-share-changed
+   * signal (messages.ts), not from WebRTC track lifecycle events, which turned out unreliable
+   * for this specific transition (removeTrack + renegotiation doesn't consistently fire 'ended'
+   * on the remote track, leaving viewers stuck on the last frame). Clears this manager's own
+   * bookkeeping too, so a later unrelated emitRemoteStreams call (e.g. from a personal-stream
+   * update) can't resurrect the stale reference. */
+  forceClearScreenStream(peerId: string): void {
+    const entry = this.connections.get(peerId);
+    if (!entry) return;
+    entry.screenStream = null;
+    entry.screenStreamId = null;
+    this.emitRemoteStreams(peerId);
+  }
+
   /** Accepts the whole local screen-share stream (video + optional system audio). */
   async setLocalScreenTrack(stream: MediaStream | null): Promise<void> {
     const videoTrack = stream?.getVideoTracks()[0] ?? null;
@@ -422,9 +557,16 @@ export class MeshManager {
       imagesChannel: null,
       pendingImageRequests: this.pendingImageRequestsByPeer.get(peerId) ?? [],
       incomingImageTransfer: null,
-      imageSendQueue: Promise.resolve()
+      imageSendQueue: Promise.resolve(),
+      soundsChannel: null,
+      pendingSoundListRequest: this.pendingSoundListRequestsByPeer.has(peerId),
+      pendingSoundRequests: this.pendingSoundRequestsByPeer.get(peerId) ?? [],
+      incomingSoundTransfer: null,
+      soundSendQueue: Promise.resolve()
     };
     this.pendingImageRequestsByPeer.delete(peerId);
+    this.pendingSoundListRequestsByPeer.delete(peerId);
+    this.pendingSoundRequestsByPeer.delete(peerId);
     this.connections.set(peerId, entry);
 
     // Only fires on the answering side — the offering side already has its own channel
@@ -432,6 +574,9 @@ export class MeshManager {
     pc.ondatachannel = (event) => {
       if (event.channel.label === 'images' && !entry.imagesChannel) {
         this.setupImagesChannel(entry, event.channel);
+      }
+      if (event.channel.label === 'sounds' && !entry.soundsChannel) {
+        this.setupSoundsChannel(entry, event.channel);
       }
     };
 
@@ -589,6 +734,120 @@ export class MeshManager {
         });
       }
       channel.send(data.slice(offset, offset + IMAGE_CHUNK_SIZE));
+    }
+  }
+
+  private setupSoundsChannel(entry: PeerConnectionEntry, channel: RTCDataChannel): void {
+    channel.binaryType = 'arraybuffer';
+    entry.soundsChannel = channel;
+
+    channel.onopen = () => {
+      if (entry.pendingSoundListRequest) {
+        entry.pendingSoundListRequest = false;
+        this.sendSoundControl(channel, { t: 'list-req' });
+      }
+      const queued = entry.pendingSoundRequests;
+      entry.pendingSoundRequests = [];
+      for (const request of queued) this.sendSoundControl(channel, { t: 'req', ...request });
+    };
+
+    channel.onmessage = (event) => {
+      if (typeof event.data === 'string') {
+        void this.handleSoundControl(entry, channel, JSON.parse(event.data) as SoundControlFrame);
+        return;
+      }
+      this.handleSoundChunk(entry, event.data as ArrayBuffer);
+    };
+  }
+
+  private sendSoundControl(channel: RTCDataChannel, frame: SoundControlFrame): void {
+    if (channel.readyState !== 'open') return;
+    channel.send(JSON.stringify(frame));
+  }
+
+  private async answerSoundListRequest(channel: RTCDataChannel): Promise<void> {
+    const sounds = await this.opts.onSoundListRequest();
+    this.sendSoundControl(channel, { t: 'list', sounds });
+  }
+
+  private async answerSoundRequest(channel: RTCDataChannel, frame: SoundRequestFrame): Promise<void> {
+    const answer = await this.opts.onSoundRequest(frame.soundId, frame.knownHash);
+    if (answer.status === 'unchanged') {
+      this.sendSoundControl(channel, { t: 'unchanged', soundId: frame.soundId });
+    } else if (answer.status === 'missing') {
+      this.sendSoundControl(channel, { t: 'missing', soundId: frame.soundId });
+    } else {
+      this.sendSoundControl(channel, {
+        t: 'meta',
+        soundId: frame.soundId,
+        mimeType: answer.mimeType,
+        hash: answer.hash,
+        size: answer.data.byteLength
+      });
+      await this.sendSoundData(channel, answer.data);
+    }
+  }
+
+  private async handleSoundControl(
+    entry: PeerConnectionEntry,
+    channel: RTCDataChannel,
+    frame: SoundControlFrame
+  ): Promise<void> {
+    if (frame.t === 'list-req') {
+      // Chained onto the same queue as byte requests — see soundSendQueue's doc comment (mirrors
+      // imageSendQueue) on why two concurrent responses on one channel can't interleave.
+      entry.soundSendQueue = entry.soundSendQueue.then(() => this.answerSoundListRequest(channel)).catch(() => {});
+      return;
+    }
+    if (frame.t === 'list') {
+      this.opts.onSoundListReceived(entry.peerId, frame.sounds);
+      return;
+    }
+    if (frame.t === 'req') {
+      entry.soundSendQueue = entry.soundSendQueue.then(() => this.answerSoundRequest(channel, frame)).catch(() => {});
+      return;
+    }
+    if (frame.t === 'meta') {
+      entry.incomingSoundTransfer = {
+        soundId: frame.soundId,
+        mimeType: frame.mimeType,
+        hash: frame.hash,
+        size: frame.size,
+        chunks: [],
+        received: 0
+      };
+    }
+    // 'unchanged'/'missing' need no state — the requester just doesn't hear back with a sound.
+  }
+
+  private handleSoundChunk(entry: PeerConnectionEntry, chunk: ArrayBuffer): void {
+    const transfer = entry.incomingSoundTransfer;
+    if (!transfer) return; // stray chunk with no matching meta — drop
+    transfer.chunks.push(chunk);
+    transfer.received += chunk.byteLength;
+    if (transfer.received < transfer.size) return;
+
+    entry.incomingSoundTransfer = null;
+    if (transfer.received !== transfer.size) return; // truncated/corrupt — drop rather than show garbage
+    const data = new Uint8Array(transfer.received);
+    let offset = 0;
+    for (const part of transfer.chunks) {
+      data.set(new Uint8Array(part), offset);
+      offset += part.byteLength;
+    }
+    this.opts.onSoundReceived(entry.peerId, transfer.soundId, data.buffer, transfer.mimeType);
+  }
+
+  private async sendSoundData(channel: RTCDataChannel, data: ArrayBuffer): Promise<void> {
+    channel.bufferedAmountLowThreshold = SOUND_CHUNK_HIGH_WATER / 2;
+    for (let offset = 0; offset < data.byteLength; offset += SOUND_CHUNK_SIZE) {
+      if (channel.readyState !== 'open') return;
+      if (channel.bufferedAmount > SOUND_CHUNK_HIGH_WATER) {
+        await new Promise<void>((resolve) => {
+          channel.addEventListener('bufferedamountlow', () => resolve(), { once: true });
+        });
+      }
+      channel.send(data.slice(offset, offset + SOUND_CHUNK_SIZE));
     }
   }
 

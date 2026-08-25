@@ -7,6 +7,7 @@ import type {
   CreateRoomRequest,
   CreateServerRequest,
   CreateServerResponse,
+  CreateUserSoundRequest,
   JoinServerRequest,
   LoginRequest,
   LoginResponse,
@@ -21,7 +22,11 @@ import type {
   UpdateProfileRequest,
   UpdateRoomRequest,
   UpdateServerRequest,
-  UserProfile
+  UpdateUserSoundRequest,
+  UserProfile,
+  UserSoundListResponse,
+  UserSoundResponse,
+  UserSoundSummary
 } from '@concord/shared';
 import { Role, hasAtLeastRole } from '@concord/shared';
 import * as usersRepo from '../db/usersRepo.js';
@@ -29,6 +34,7 @@ import * as serversRepo from '../db/serversRepo.js';
 import * as roomsRepo from '../db/roomsRepo.js';
 import * as rolesRepo from '../db/rolesRepo.js';
 import * as authorizedUsersRepo from '../db/authorizedUsersRepo.js';
+import * as userSoundsRepo from '../db/userSoundsRepo.js';
 import { createPresignedGetUrl, createPresignedUploadUrl, putObject } from '../aws/s3Client.js';
 import { signSessionToken, verifySessionToken } from '../auth/session.js';
 import { signInviteToken, verifyInviteToken } from '../auth/invite.js';
@@ -138,6 +144,17 @@ async function toServerSummary(record: serversRepo.ServerRecord): Promise<Server
   };
 }
 
+function toUserSoundSummary(record: userSoundsRepo.UserSoundRecord): UserSoundSummary {
+  return {
+    id: record.sound_id,
+    name: record.name,
+    emoji: record.emoji,
+    volume: record.volume,
+    durationMs: record.duration_ms,
+    hash: record.hash
+  };
+}
+
 function toRoomSummary(record: roomsRepo.RoomRecord): RoomSummary {
   // Real-time member count is a signaling-server (WS) concern, not tracked in DynamoDB.
   return { id: record.room_id, serverId: record.server_id, name: record.name, memberCount: 0, maxMembers: 10 };
@@ -240,6 +257,46 @@ export async function handleHttpRequest(req: IncomingMessage, res: ServerRespons
     }
     if (method === 'POST' && segments.length === 2 && segments[0] === 'uploads' && segments[1] === 'presign') {
       await handlePresignUpload(req, res);
+      return;
+    }
+    if (
+      method === 'GET' &&
+      segments.length === 3 &&
+      segments[0] === 'users' &&
+      segments[1] === 'me' &&
+      segments[2] === 'sounds'
+    ) {
+      await handleListMySounds(req, res);
+      return;
+    }
+    if (
+      method === 'POST' &&
+      segments.length === 3 &&
+      segments[0] === 'users' &&
+      segments[1] === 'me' &&
+      segments[2] === 'sounds'
+    ) {
+      await handleCreateSound(req, res);
+      return;
+    }
+    if (
+      method === 'PATCH' &&
+      segments.length === 4 &&
+      segments[0] === 'users' &&
+      segments[1] === 'me' &&
+      segments[2] === 'sounds'
+    ) {
+      await handleUpdateSound(req, res, segments[3]);
+      return;
+    }
+    if (
+      method === 'DELETE' &&
+      segments.length === 4 &&
+      segments[0] === 'users' &&
+      segments[1] === 'me' &&
+      segments[2] === 'sounds'
+    ) {
+      await handleDeleteSound(req, res, segments[3]);
       return;
     }
     sendError(res, 404, 'not-found');
@@ -470,6 +527,62 @@ async function handleDeleteRoom(
   if (!userId) return;
 
   await roomsRepo.remove(serverId, roomId);
+  sendJson(res, 200, {});
+}
+
+async function handleListMySounds(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const userId = await requireSession(req, res);
+  if (!userId) return;
+
+  const records = await userSoundsRepo.listByUser(userId);
+  const response: UserSoundListResponse = { sounds: records.map(toUserSoundSummary) };
+  sendJson(res, 200, response);
+}
+
+async function handleCreateSound(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const userId = await requireSession(req, res);
+  if (!userId) return;
+
+  const body = await readJsonBody<CreateUserSoundRequest>(req);
+  const id = body?.id?.trim();
+  const name = body?.name?.trim();
+  if (!id) return sendError(res, 400, 'id-required');
+  if (!name) return sendError(res, 400, 'name-required');
+  if (typeof body?.durationMs !== 'number' || typeof body?.volume !== 'number' || !body?.hash) {
+    return sendError(res, 400, 'invalid-request');
+  }
+
+  const record = await userSoundsRepo.create({
+    userId,
+    soundId: id,
+    name,
+    emoji: body.emoji ?? '',
+    volume: body.volume,
+    durationMs: body.durationMs,
+    hash: body.hash
+  });
+  const response: UserSoundResponse = { sound: toUserSoundSummary(record) };
+  sendJson(res, 201, response);
+}
+
+async function handleUpdateSound(req: IncomingMessage, res: ServerResponse, soundId: string): Promise<void> {
+  const userId = await requireSession(req, res);
+  if (!userId) return;
+
+  const body = await readJsonBody<UpdateUserSoundRequest>(req);
+  await userSoundsRepo.updateMeta(userId, soundId, {
+    name: body?.name?.trim() || undefined,
+    emoji: body?.emoji,
+    volume: body?.volume
+  });
+  sendJson(res, 200, {});
+}
+
+async function handleDeleteSound(req: IncomingMessage, res: ServerResponse, soundId: string): Promise<void> {
+  const userId = await requireSession(req, res);
+  if (!userId) return;
+
+  await userSoundsRepo.remove(userId, soundId);
   sendJson(res, 200, {});
 }
 

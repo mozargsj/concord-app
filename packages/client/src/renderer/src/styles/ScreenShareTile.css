@@ -1,0 +1,115 @@
+.screen-share-tile {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.screen-share-tile__overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: none;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  background: #000000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.screen-share-tile__frozen-image {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  filter: blur(16px) brightness(0.55);
+  /* Scaled up slightly so the blurred, softened edges never show the tile's own boundary. */
+  transform: scale(1.08);
+}
+
+.screen-share-tile__message {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 0 28px;
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: center;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.7);
+}
+
+.screen-share-tile__close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 2;
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 50%;
+  background: var(--color-danger);
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.screen-share-tile__close:hover {
+  background: #d5363a;
+}
+
+.screen-share-tile__volume {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.screen-share-tile__volume-slider {
+  /* Chromium (Electron's renderer) honors writing-mode on range inputs — turns the normally
+     horizontal track into a vertical one, matching the "régua vertical" ask directly instead of
+     faking it with a rotated horizontal slider. */
+  writing-mode: vertical-lr;
+  direction: rtl;
+  width: 6px;
+  height: 84px;
+  accent-color: var(--color-accent);
+  background: rgba(0, 0, 0, 0.5);
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.screen-share-tile__volume-icon {
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.6);
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.screen-share-tile__volume-icon:hover {
+  background: rgba(0, 0, 0, 0.8);
+}
+
+/* Same "off" language as MicOff/HeadphoneOff/AudioLinesOff elsewhere in the app — red icon,
+   VolumeX's built-in strike stands in for the "risco vertical" convention. */
+.screen-share-tile__volume-icon--muted {
+  color: var(--color-danger);
+}

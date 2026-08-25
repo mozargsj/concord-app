@@ -93,6 +93,14 @@
   cursor: default;
 }
 
+.room-sidebar__quick-action--rnnoise-on {
+  color: var(--color-accent);
+}
+
+.room-sidebar__quick-action--rnnoise-off {
+  color: var(--color-danger);
+}
+
 .room-sidebar__header {
   height: 48px;
   flex-shrink: 0;
@@ -263,6 +271,13 @@
   height: 16px;
   opacity: 0.75;
   flex-shrink: 0;
+}
+
+/* Green = "você está aqui" — the same room the mesh/signaling connection is actually joined to,
+   not just the one last clicked (those always match today, but this is what the color means). */
+.room-sidebar__room--active .room-sidebar__room-icon {
+  opacity: 1;
+  color: var(--color-online);
 }
 
 .room-sidebar__room-name {

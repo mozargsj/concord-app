@@ -6,6 +6,7 @@ import {
   handleDisconnect,
   handleHeartbeat,
   handleMicState,
+  handleScreenShareChanged,
   joinRoom,
   relay
 } from '../rooms/roomManager.js';
@@ -42,6 +43,9 @@ export function handleConnection(socket: WebSocket): void {
         break;
       case 'mic-state':
         handleMicState(socket, message.isMicMuted, message.isDeafened);
+        break;
+      case 'screen-share-changed':
+        handleScreenShareChanged(socket, message.isSharing);
         break;
     }
   });

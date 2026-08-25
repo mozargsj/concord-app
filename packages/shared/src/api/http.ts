@@ -80,6 +80,43 @@ export interface PresignUploadResponse {
   key: string;
 }
 
+/** Registry entry for one of the caller's own soundboard sounds — metadata only, the audio
+ * bytes never touch the backend (P2P-only, same as avatar/server-icon, decisions.md). */
+export interface UserSoundSummary {
+  id: string;
+  name: string;
+  emoji: string;
+  /** 0-1, fixed at creation — see decisions.md, this is one of the two soundboard volumes. */
+  volume: number;
+  durationMs: number;
+  hash: string;
+}
+
+export interface CreateUserSoundRequest {
+  /** Client-generated (crypto.randomUUID()) — the client already named the local cache file
+   * under this id before the registry call happens, so both sides must agree on it. */
+  id: string;
+  name: string;
+  emoji: string;
+  volume: number;
+  durationMs: number;
+  hash: string;
+}
+
+export interface UpdateUserSoundRequest {
+  name?: string;
+  emoji?: string;
+  volume?: number;
+}
+
+export interface UserSoundListResponse {
+  sounds: UserSoundSummary[];
+}
+
+export interface UserSoundResponse {
+  sound: UserSoundSummary;
+}
+
 export interface ApiErrorResponse {
   error: string;
 }

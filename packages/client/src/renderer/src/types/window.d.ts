@@ -45,6 +45,24 @@ export interface CachedSound extends SoundMeta {
   data: ArrayBuffer;
 }
 
+/** A sound downloaded from another peer but not yet confirmed into "meus áudios" — self-expires
+ * after 7 days if never adopted (decisions.md, seção 3, soundboard). */
+export interface TempSoundMeta {
+  id: string;
+  ownerId: string;
+  ownerName: string;
+  name: string;
+  emoji: string;
+  durationMs: number;
+  hash: string;
+  mimeType: string;
+  downloadedAt: number;
+}
+
+export interface CachedTempSound extends TempSoundMeta {
+  data: ArrayBuffer;
+}
+
 declare global {
   interface Window {
     concord: {
@@ -69,6 +87,11 @@ declare global {
         loadBytes: (id: string) => Promise<{ mimeType: string; data: ArrayBuffer } | null>;
         save: (meta: SoundMeta, data: ArrayBuffer) => Promise<boolean>;
         updateMeta: (id: string, patch: Partial<Pick<SoundMeta, 'name' | 'emoji' | 'volume'>>) => Promise<boolean>;
+        delete: (id: string) => Promise<boolean>;
+      };
+      soundTempCache: {
+        list: () => Promise<CachedTempSound[]>;
+        save: (meta: TempSoundMeta, data: ArrayBuffer) => Promise<boolean>;
         delete: (id: string) => Promise<boolean>;
       };
       auth: {

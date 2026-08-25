@@ -155,6 +155,17 @@ export function handleMicState(socket: WebSocket, isMicMuted: boolean, isDeafene
   broadcast(room, { type: 'peer-mic-state', roomId: room.id, peerId: peer.id, isMicMuted, isDeafened });
 }
 
+export function handleScreenShareChanged(socket: WebSocket, isSharing: boolean): void {
+  const peer = peersBySocket.get(socket);
+  if (!peer) return;
+  const room = rooms.get(peer.roomId);
+  if (!room) return;
+  // Excludes the sender — same as peer-device-switched, the broadcaster already knows their own
+  // state locally. This is purely so viewers get an authoritative "stopped" they can trust even
+  // if the underlying WebRTC track never fires its own 'ended' event (see messages.ts).
+  broadcast(room, { type: 'peer-screen-share-changed', roomId: room.id, peerId: peer.id, isSharing }, peer.id);
+}
+
 export function handleDisconnect(socket: WebSocket): void {
   const peer = peersBySocket.get(socket);
   if (!peer) return;

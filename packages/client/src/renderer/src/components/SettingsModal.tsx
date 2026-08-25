@@ -6,14 +6,19 @@ import {
   getMicSensitivity,
   setMicSensitivity
 } from '../lib/micSensitivity';
+import { getRnnoiseEnabled, setRnnoiseEnabled } from '../lib/noiseSuppressionSettings';
 import '../styles/SettingsModal.css';
 
 interface SettingsModalProps {
   onClose: () => void;
+  /** Rebuilds the mic pipeline so a toggle takes effect immediately, mid-call — the RNNoise
+   * AudioWorklet graph (or its absence) is only ever set up once, at mic-acquisition time. */
+  onNoiseSuppressionChange: () => void;
 }
 
-export default function SettingsModal({ onClose }: SettingsModalProps) {
+export default function SettingsModal({ onClose, onNoiseSuppressionChange }: SettingsModalProps) {
   const [threshold, setThreshold] = useState(MIC_SENSITIVITY_DEFAULT);
+  const [isRnnoiseEnabled, setIsRnnoiseEnabled] = useState(true);
   // Placeholder input level — same nature as the "está falando" mock in RoomView.tsx:
   // stand-in until the real gate reads audioLevel via getStats() (~20-50ms poll, per
   // the "Gate de ruído" decision). Only here to give the slider a visual reference.
@@ -21,6 +26,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
 
   useEffect(() => {
     setThreshold(getMicSensitivity());
+    setIsRnnoiseEnabled(getRnnoiseEnabled());
   }, []);
 
   // Ties updates to the display's own refresh rate instead of a fixed interval — the
@@ -49,6 +55,13 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
     setMicSensitivity(value);
   }
 
+  function handleToggleRnnoise() {
+    const next = !isRnnoiseEnabled;
+    setIsRnnoiseEnabled(next);
+    setRnnoiseEnabled(next);
+    onNoiseSuppressionChange();
+  }
+
   const isGateOpen = mockLevel >= threshold;
 
   return (
@@ -60,6 +73,25 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
             ×
           </button>
         </header>
+
+        <div className="settings-modal__section">
+          <label className="settings-modal__toggle-row" htmlFor="rnnoise-toggle">
+            <span>
+              <span className="settings-modal__label">Redução de ruído (RNNoise)</span>
+              <p className="settings-modal__hint">
+                Remove ruído de fundo (teclado, clique do mouse, ventilador) com um modelo
+                dedicado — mais eficaz que a supressão padrão do navegador.
+              </p>
+            </span>
+            <input
+              id="rnnoise-toggle"
+              type="checkbox"
+              checked={isRnnoiseEnabled}
+              onChange={handleToggleRnnoise}
+              className="settings-modal__checkbox"
+            />
+          </label>
+        </div>
 
         <div className="settings-modal__section">
           <label className="settings-modal__label" htmlFor="mic-sensitivity">

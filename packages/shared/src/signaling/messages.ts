@@ -64,6 +64,16 @@ export interface MicStateMessage {
   isDeafened: boolean;
 }
 
+/** Explicit signal that screen sharing started/stopped — the WebRTC-level signal alone (the
+ * remote track ending after RTCRtpSender.removeTrack + renegotiation) turned out unreliable in
+ * testing: viewers kept the tile up with the last frame frozen instead of it disappearing when
+ * the broadcaster stopped. This is authoritative for "stopped" regardless of what the track
+ * object itself does. */
+export interface ScreenShareChangedMessage {
+  type: 'screen-share-changed';
+  isSharing: boolean;
+}
+
 export type ClientToServerMessage =
   | JoinRoomMessage
   | SdpOfferMessage
@@ -73,7 +83,8 @@ export type ClientToServerMessage =
   | HostCandidateConfirmMessage
   | PingMessage
   | DeviceSwitchedMessage
-  | MicStateMessage;
+  | MicStateMessage
+  | ScreenShareChangedMessage;
 
 /** Relayed to the target peer with the sender's id attached, since the client-to-server shape has no envelope. */
 export interface SdpOfferRelayMessage extends SdpOfferMessage {
@@ -150,6 +161,13 @@ export interface PeerMicStateMessage {
   isDeafened: boolean;
 }
 
+export interface PeerScreenShareChangedMessage {
+  type: 'peer-screen-share-changed';
+  roomId: string;
+  peerId: string;
+  isSharing: boolean;
+}
+
 export type ServerToClientMessage =
   | RoomJoinedMessage
   | JoinRejectedMessage
@@ -163,4 +181,5 @@ export type ServerToClientMessage =
   | RoomClosedMessage
   | PongMessage
   | PeerDeviceSwitchedMessage
-  | PeerMicStateMessage;
+  | PeerMicStateMessage
+  | PeerScreenShareChangedMessage;
