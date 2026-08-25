@@ -1,0 +1,56 @@
+name: Build and publish installer
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch: {}
+
+jobs:
+  build-and-publish:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Write client .env
+        working-directory: packages/client
+        shell: pwsh
+        env:
+          GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
+          GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
+        run: |
+          @"
+          VITE_SIGNALING_URL=wss://signaling.undersoft.tec.br
+          VITE_TEST_MODE=false
+          VITE_TEST_OFFLINE=false
+          GOOGLE_OAUTH_CLIENT_ID=$env:GOOGLE_OAUTH_CLIENT_ID
+          GOOGLE_OAUTH_CLIENT_SECRET=$env:GOOGLE_OAUTH_CLIENT_SECRET
+          "@ | Set-Content -Path .env -Encoding utf8
+
+      - name: Build renderer + electron
+        run: npm run build --workspace=@concord/client
+
+      - name: Package installer (Windows/NSIS)
+        working-directory: packages/client
+        run: npx electron-builder --config.artifactName=Concord-Setup.exe
+
+      - name: Publish to landing page (rolling "latest" release)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.CONCORDPROJECT_RELEASE_TOKEN }}
+        run: |
+          gh release delete latest --repo mozargsj/concordProject --yes --cleanup-tag || true
+          gh release create latest release/Concord-Setup.exe \
+            --repo mozargsj/concordProject \
+            --title "Concord — instalador mais recente" \
+            --notes "Publicado automaticamente a partir de ${{ github.ref_name }} (commit ${{ github.sha }})."
