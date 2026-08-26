@@ -7,8 +7,21 @@ const STAGE_WIDTH = 400;
 const STAGE_HEIGHT = 280;
 const CROP_DIAMETER = 220;
 const OUTPUT_SIZE = 512;
-const ZOOM_MIN = 1;
+// ZOOM_MIN used to be 1 (the image always covers the whole stage, itself already bigger than the
+// crop circle) — fine for a photo, but forces a wide/short image (a logo, a banner) to lose its
+// sides just to fill the circle, with no way to back off and see the whole thing. True "infinite"
+// zoom-out isn't meaningful for a raster image (it'd just shrink to an imperceptible dot), so this
+// is a generously low floor instead — the image can shrink well inside the circle, leaving
+// transparent padding around it, however small the user wants.
+const ZOOM_MIN = 0.1;
 const ZOOM_MAX = 3;
+// [Bug corrigido] Opening (and "Redefinir") used to jump straight to ZOOM_MIN — harmless back
+// when ZOOM_MIN was 1 (the old only value), but once it dropped to 0.1 the modal started every
+// edit at the most-zoomed-out extreme instead of a sane starting point. 1 is the neutral "no
+// zoom" scale (baseScale alone, image covering the stage) — same idea as "0" being the center of
+// a -200..+200 slider: the default should sit at the neutral point, with room to go further out
+// or in from there, not start pinned at one end.
+const ZOOM_DEFAULT = 1;
 
 interface ImageCropModalProps {
   data: ArrayBuffer;
@@ -40,7 +53,7 @@ interface Bounds {
 export default function ImageCropModal({ data, mimeType, onCancel, onApply }: ImageCropModalProps) {
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [naturalSize, setNaturalSize] = useState<{ width: number; height: number } | null>(null);
-  const [zoom, setZoom] = useState(ZOOM_MIN);
+  const [zoom, setZoom] = useState(ZOOM_DEFAULT);
   const [offset, setOffset] = useState<Offset>({ x: 0, y: 0 });
   const [isApplying, setIsApplying] = useState(false);
   const imageRef = useRef<HTMLImageElement | null>(null);
@@ -67,11 +80,20 @@ export default function ImageCropModal({ data, mimeType, onCancel, onApply }: Im
   // Only requires the image to still fully cover the crop *circle*, not the whole stage
   // rectangle — the dimmed area outside the circle is free to show empty stage background, so
   // the image can be dragged well past its own edges to bring any corner into the circle.
+  //
+  // Below zoom 1, the image can end up *smaller* than the circle on one or both axes (the whole
+  // point of the lower ZOOM_MIN — see its comment) — the normal "drag range" math below inverts
+  // itself in that case (minX would land past maxX), so each axis falls back to a single centered
+  // position instead of a range once the image no longer covers it on that axis.
   function boundsFor(zoomValue: number, size: { width: number; height: number } | null = naturalSize): Bounds {
     const scale = baseScaleFor(size) * zoomValue;
     const width = (size?.width ?? 0) * scale;
     const height = (size?.height ?? 0) * scale;
-    return { minX: circleRight - width, maxX: circleLeft, minY: circleBottom - height, maxY: circleTop, width, height };
+    const minX = width >= CROP_DIAMETER ? circleRight - width : (STAGE_WIDTH - width) / 2;
+    const maxX = width >= CROP_DIAMETER ? circleLeft : minX;
+    const minY = height >= CROP_DIAMETER ? circleBottom - height : (STAGE_HEIGHT - height) / 2;
+    const maxY = height >= CROP_DIAMETER ? circleTop : minY;
+    return { minX, maxX, minY, maxY, width, height };
   }
 
   function clamp(value: Offset, bounds: Bounds): Offset {
@@ -97,13 +119,13 @@ export default function ImageCropModal({ data, mimeType, onCancel, onApply }: Im
     const img = imageRef.current;
     if (!img) return;
     // Reads img.naturalWidth/Height directly rather than the naturalSize state var — setState
-    // doesn't apply until the next render, so centeredOffsetFor(ZOOM_MIN) right after would
+    // doesn't apply until the next render, so centeredOffsetFor(ZOOM_DEFAULT) right after would
     // otherwise still see the previous (null) state and center against a 0×0 size, landing the
     // image well outside the circle the first time a picture loads.
     const size = { width: img.naturalWidth, height: img.naturalHeight };
     setNaturalSize(size);
-    setZoom(ZOOM_MIN);
-    setOffset(centeredOffsetFor(ZOOM_MIN, size));
+    setZoom(ZOOM_DEFAULT);
+    setOffset(centeredOffsetFor(ZOOM_DEFAULT, size));
   }
 
   function handleDragStart(event: ReactMouseEvent): void {
@@ -162,8 +184,8 @@ export default function ImageCropModal({ data, mimeType, onCancel, onApply }: Im
   }
 
   function handleReset(): void {
-    setZoom(ZOOM_MIN);
-    setOffset(centeredOffsetFor(ZOOM_MIN));
+    setZoom(ZOOM_DEFAULT);
+    setOffset(centeredOffsetFor(ZOOM_DEFAULT));
   }
 
   async function handleApply(): Promise<void> {

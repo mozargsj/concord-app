@@ -10,6 +10,23 @@ const SPEAKING_POLL_INTERVAL_MS = 200;
 const SPEAKING_THRESHOLD = 0.05;
 const SPEAKING_DEBOUNCE_TICKS = 2; // consecutive ticks required before flipping state, avoids flicker
 
+// [Teste, pedido do Mozar] O anel de "está falando" do próprio usuário sempre usou o mesmo poll
+// de 200ms + debounce de 2 ticks dos peers remotos (getStats(), assíncrono) — até 400ms de
+// latência no pior caso, perceptível o bastante pra render diferente da própria fala em tempo
+// real ao lado. Separado num poll só do mic local, bem mais rápido: ler o AnalyserNode é síncrono
+// e barato (não é getStats()), então não faz sentido — nem seria de graça — acelerar o poll dos
+// peers remotos também só por causa disso (isso sim multiplicaria custo real por peer no mesh).
+const LOCAL_SPEAKING_POLL_INTERVAL_MS = 15;
+// [Corrigido — eram a mesma coisa antes, não deveriam ser] "Captação" (delay de falar até o anel
+// ACENDER) e "duração do efeito" (quanto tempo o anel fica aceso depois que a fala pausa, antes de
+// APAGAR) são dois momentos diferentes — a primeira versão usava um debounce único e simétrico
+// pros dois, então acelerar a detecção também acelerava (e deixava mais "piscante") o apagar, que
+// já estava bom do jeito que estava. Agora são independentes: liga quase na hora (attack, sem
+// espera de verdade — qualquer amostra acima do limiar já acende), mas só apaga depois de ficar
+// abaixo do limiar por um tempo contínuo (release) — mesma sensação de antes pra isso, só a
+// captação (o "acender") que ficou mais rápida.
+const LOCAL_SPEAKING_RELEASE_HOLD_MS = 400;
+
 // Avatar/server-icon transfer over the 'images' data channel — small control frames as JSON
 // text, the file itself as ordered binary chunks (channel is reliable+ordered by default, so a
 // sequential meta-then-chunks protocol needs no sequence numbers).
@@ -207,8 +224,13 @@ export class MeshManager {
   private screenVideoTrack: MediaStreamTrack | null = null;
   private screenAudioTrack: MediaStreamTrack | null = null;
   private speakingStateByPeer = new Map<string, SpeakingState>();
-  private localSpeakingState: SpeakingState = { isSpeaking: false, consecutive: 0 };
+  // Not a SpeakingState/applySpeakingLevel() — those give both directions the same debounce,
+  // exactly the mix-up this replaced (see LOCAL_SPEAKING_RELEASE_HOLD_MS's comment). Plain
+  // attack/release instead: isSpeaking flips true immediately, false only after a timer.
+  private localIsSpeaking = false;
+  private localSpeakingReleaseTimer: ReturnType<typeof setTimeout> | null = null;
   private speakingPollHandle: ReturnType<typeof setInterval>;
+  private localSpeakingPollHandle: ReturnType<typeof setInterval>;
   // Local level comes straight off the mic track via Web Audio, not getStats() on an
   // RTCRtpSender — a sender only exists once there's an actual peer connection, which
   // meant the local indicator silently never worked when alone in a room (no peers yet).
@@ -241,7 +263,8 @@ export class MeshManager {
   private pendingSoundRequestsByPeer = new Map<string, { soundId: string; knownHash: string | null }[]>();
 
   constructor(private opts: MeshManagerOptions) {
-    this.speakingPollHandle = setInterval(() => void this.pollSpeaking(), SPEAKING_POLL_INTERVAL_MS);
+    this.speakingPollHandle = setInterval(() => void this.pollRemoteSpeaking(), SPEAKING_POLL_INTERVAL_MS);
+    this.localSpeakingPollHandle = setInterval(() => this.pollLocalSpeaking(), LOCAL_SPEAKING_POLL_INTERVAL_MS);
   }
 
   addExistingPeer(peerId: string): void {
@@ -541,6 +564,8 @@ export class MeshManager {
 
   closeAll(): void {
     clearInterval(this.speakingPollHandle);
+    clearInterval(this.localSpeakingPollHandle);
+    if (this.localSpeakingReleaseTimer) clearTimeout(this.localSpeakingReleaseTimer);
     for (const peerId of [...this.connections.keys()]) this.removePeer(peerId);
     this.micAnalyserSource?.disconnect();
     this.micAnalyserSource = null;
@@ -945,7 +970,7 @@ export class MeshManager {
     }
   }
 
-  private async pollSpeaking(): Promise<void> {
+  private async pollRemoteSpeaking(): Promise<void> {
     for (const entry of this.connections.values()) {
       try {
         const stats = await entry.pc.getStats();
@@ -960,12 +985,18 @@ export class MeshManager {
           state = { isSpeaking: false, consecutive: 0 };
           this.speakingStateByPeer.set(entry.peerId, state);
         }
-        this.applySpeakingLevel(state, level, (isSpeaking) => this.opts.onSpeakingChange(entry.peerId, isSpeaking));
+        this.applySpeakingLevel(state, level, SPEAKING_DEBOUNCE_TICKS, (isSpeaking) =>
+          this.opts.onSpeakingChange(entry.peerId, isSpeaking)
+        );
       } catch {
         // transient stats failure — skip this tick
       }
     }
+  }
 
+  // Synchronous (no getStats() round-trip) and on its own much faster timer — see
+  // LOCAL_SPEAKING_POLL_INTERVAL_MS's comment for why this is split out from the peers above.
+  private pollLocalSpeaking(): void {
     // Bail out only if there's neither a mic to poll nor a clip playing — a user with no mic at
     // all (micAnalyser never set up) can still trigger a soundboard clip and should still see
     // their own ring light up for it.
@@ -988,19 +1019,44 @@ export class MeshManager {
     // sees the soundboard mix, so a playing clip is forced in here instead of being picked up
     // naturally the way it already is on every remote peer's own copy of getStats().
     if (this.soundboardLocalPlaybackCount > 0) level = Math.max(level, 1);
-    this.applySpeakingLevel(this.localSpeakingState, level, (isSpeaking) =>
-      this.opts.onLocalSpeakingChange(isSpeaking)
-    );
+
+    const aboveThreshold = level > SPEAKING_THRESHOLD;
+    if (aboveThreshold) {
+      // Fast attack: any single sample above threshold turns it on right away, and cancels a
+      // pending "turn off" from a moment ago — still speaking through a brief dip/pause.
+      if (this.localSpeakingReleaseTimer) {
+        clearTimeout(this.localSpeakingReleaseTimer);
+        this.localSpeakingReleaseTimer = null;
+      }
+      if (!this.localIsSpeaking) {
+        this.localIsSpeaking = true;
+        this.opts.onLocalSpeakingChange(true);
+      }
+    } else if (this.localIsSpeaking && !this.localSpeakingReleaseTimer) {
+      // Slow release: only turns off after staying below threshold continuously for
+      // LOCAL_SPEAKING_RELEASE_HOLD_MS, so the ring survives natural micro-pauses between
+      // words instead of flickering off and back on mid-sentence.
+      this.localSpeakingReleaseTimer = setTimeout(() => {
+        this.localIsSpeaking = false;
+        this.localSpeakingReleaseTimer = null;
+        this.opts.onLocalSpeakingChange(false);
+      }, LOCAL_SPEAKING_RELEASE_HOLD_MS);
+    }
   }
 
-  private applySpeakingLevel(state: SpeakingState, level: number, onChange: (isSpeaking: boolean) => void): void {
+  private applySpeakingLevel(
+    state: SpeakingState,
+    level: number,
+    debounceTicks: number,
+    onChange: (isSpeaking: boolean) => void
+  ): void {
     const aboveThreshold = level > SPEAKING_THRESHOLD;
     if (aboveThreshold === state.isSpeaking) {
       state.consecutive = 0;
       return;
     }
     state.consecutive += 1;
-    if (state.consecutive >= SPEAKING_DEBOUNCE_TICKS) {
+    if (state.consecutive >= debounceTicks) {
       state.isSpeaking = aboveThreshold;
       state.consecutive = 0;
       onChange(state.isSpeaking);

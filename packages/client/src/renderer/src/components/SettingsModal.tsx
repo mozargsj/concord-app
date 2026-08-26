@@ -4,6 +4,7 @@ import {
   MIC_SENSITIVITY_MAX,
   MIC_SENSITIVITY_MIN,
   getMicSensitivity,
+  sensitivityToThresholdDb,
   setMicSensitivity
 } from '../lib/micSensitivity';
 import { getRnnoiseEnabled, setRnnoiseEnabled } from '../lib/noiseSuppressionSettings';
@@ -78,6 +79,12 @@ export default function SettingsModal({ onClose, onNoiseSuppressionChange }: Set
 
   const isGateOpen = mockLevel >= threshold;
 
+  // Round to a whole dB — the underlying slider already only moves in whole percentage points, so
+  // fractional dB in the tooltip would just be noise, not real added precision.
+  function formatThresholdDb(sensitivity: number): string {
+    return `${Math.round(sensitivityToThresholdDb(sensitivity))} dB`;
+  }
+
   return (
     <div className="settings-modal__backdrop" onClick={onClose}>
       <div className="settings-modal" onClick={(event) => event.stopPropagation()}>
@@ -132,23 +139,26 @@ export default function SettingsModal({ onClose, onNoiseSuppressionChange }: Set
           </label>
           <p className="settings-modal__hint">
             Define o limiar do corte automático de ruído — abaixo da linha, o microfone é
-            silenciado.
+            silenciado. Arraste a linha sobre o próprio medidor de captação.
           </p>
 
-          <div className={'settings-modal__meter' + (isGateOpen ? ' settings-modal__meter--open' : '')}>
-            <div className="settings-modal__meter-fill" style={{ width: `${mockLevel}%` }} />
-            <div className="settings-modal__meter-threshold" style={{ left: `${threshold}%` }} />
+          <div className="settings-modal__gate">
+            <div className="settings-modal__gate-tooltip" style={{ left: `${threshold}%` }}>
+              {formatThresholdDb(threshold)}
+            </div>
+            <div className={'settings-modal__gate-track' + (isGateOpen ? ' settings-modal__gate-track--open' : '')}>
+              <div className="settings-modal__gate-level" style={{ width: `${mockLevel}%` }} />
+            </div>
+            <input
+              id="mic-sensitivity"
+              type="range"
+              min={MIC_SENSITIVITY_MIN}
+              max={MIC_SENSITIVITY_MAX}
+              value={threshold}
+              onChange={(event) => handleThresholdChange(Number(event.target.value))}
+              className="settings-modal__gate-slider"
+            />
           </div>
-
-          <input
-            id="mic-sensitivity"
-            type="range"
-            min={MIC_SENSITIVITY_MIN}
-            max={MIC_SENSITIVITY_MAX}
-            value={threshold}
-            onChange={(event) => handleThresholdChange(Number(event.target.value))}
-            className="settings-modal__slider"
-          />
         </div>
       </div>
     </div>

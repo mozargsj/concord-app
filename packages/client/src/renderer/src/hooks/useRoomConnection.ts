@@ -10,6 +10,8 @@ import { listOwnSounds, loadOwnSoundBytes } from '../lib/soundCache';
 import { saveTempSound } from '../lib/soundTempCache';
 import { createDenoisedTrack } from '../lib/rnnoise';
 import { getRnnoiseEnabled } from '../lib/noiseSuppressionSettings';
+import { createGatedTrack } from '../lib/noiseGate';
+import { getMicSensitivity, onMicSensitivityChange, sensitivityToThresholdRms } from '../lib/micSensitivity';
 
 /** The server the joined room belongs to — just enough to know who to ask for its icon (its
  * owner) and, if that owner happens to be me, what to answer with. */
@@ -38,11 +40,13 @@ interface MicPipeline {
 }
 
 /** Acquires the mic and, unless the user has turned RNNoise off (noiseSuppressionSettings.ts),
- * routes it through the RNNoise AudioWorklet graph before handing back a track — every caller
- * downstream (MeshManager: sending, speaking-detection, soundboard mixing) just sees "the mic
- * track" and never needs to know whether RNNoise is in the loop. Falls back to the raw track if
- * RNNoise itself fails to load/initialize (e.g. AudioWorklet unsupported) rather than losing mic
- * input entirely; returns null only if there's no mic at all (denied/unavailable). */
+ * routes it through the RNNoise AudioWorklet graph, then through the noise gate (noiseGate.ts) —
+ * every caller downstream (MeshManager: sending, speaking-detection, soundboard mixing) just sees
+ * "the mic track" and never needs to know either stage is in the loop. Falls back to the raw
+ * track if RNNoise itself fails to load/initialize (e.g. AudioWorklet unsupported) rather than
+ * losing mic input entirely; returns null only if there's no mic at all (denied/unavailable). The
+ * gate applies either way (raw or denoised) — it's cutting by *level*, not doing RNNoise's
+ * spectral denoising, so the two are complementary, not redundant. */
 async function acquireMicPipeline(preferredDeviceId: string | null): Promise<MicPipeline | null> {
   let stream: MediaStream;
   try {
@@ -60,22 +64,35 @@ async function acquireMicPipeline(preferredDeviceId: string | null): Promise<Mic
   }
 
   const stopRawStream = () => stream.getTracks().forEach((track) => track.stop());
-  if (!getRnnoiseEnabled()) {
-    return { track: rawTrack, cleanup: stopRawStream };
-  }
 
-  try {
-    const denoised = await createDenoisedTrack(rawTrack);
-    return {
-      track: denoised.track,
-      cleanup: () => {
+  let preGateTrack = rawTrack;
+  let stopPreGate = stopRawStream;
+  if (getRnnoiseEnabled()) {
+    try {
+      const denoised = await createDenoisedTrack(rawTrack);
+      preGateTrack = denoised.track;
+      stopPreGate = () => {
         denoised.stop();
         stopRawStream();
-      }
-    };
-  } catch {
-    return { track: rawTrack, cleanup: stopRawStream };
+      };
+    } catch {
+      // RNNoise failed to load — preGateTrack/stopPreGate are still pointing at the raw track
+    }
   }
+
+  const gate = createGatedTrack(preGateTrack, sensitivityToThresholdRms(getMicSensitivity()));
+  const unsubscribeSensitivity = onMicSensitivityChange((value) =>
+    gate.setThresholdRms(sensitivityToThresholdRms(value))
+  );
+
+  return {
+    track: gate.track,
+    cleanup: () => {
+      unsubscribeSensitivity();
+      gate.stop();
+      stopPreGate();
+    }
+  };
 }
 
 const PING_INTERVAL_MS = 4000;

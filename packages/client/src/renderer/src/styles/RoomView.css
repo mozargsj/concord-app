@@ -85,6 +85,20 @@
   height: 100%;
 }
 
+/* [Bug corrigido] Participant tiles used to be centered by the outer .room-view__participant-tile
+   flex container directly (media/liveIndicator/status were its direct children, status pulled out
+   of flow by its own position:absolute). Wrapping them in .room-view__focus-frame put this div in
+   between as the *only* flex child instead — since this wrapper itself isn't a flex container, its
+   own children (the avatar circle, in particular) fell back to normal block flow and landed
+   top-left instead of centered. Harmless for the video cases (camera/screen fill 100% either way,
+   centering an element that big does nothing visible), but very visible for the avatar-placeholder
+   circle, which doesn't fill the tile. */
+.room-view__focus-frame--participant {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
 /* An unfocused participant tile (camera on or off) must look exactly like the plain unwrapped
    fragment it used to be — the base .room-view__focus-frame's black board + rounding + clipping
    is only appropriate for the focused 16:9 box (or a screen tile, which fills a whole tile either

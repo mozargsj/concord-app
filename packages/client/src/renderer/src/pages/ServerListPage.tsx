@@ -307,13 +307,15 @@ export default function ServerListPage({
         // constraints legadas nessa versão do Chromium) — investigar com dados reais (getStats())
         // antes de tentar de novo, não só trocar flags no escuro.
         //
-        // channelCount:2 (a standard constraint, not Chrome-specific — sits alongside `mandatory`
-        // rather than inside it) asks for stereo capture instead of whatever the desktop-audio
-        // default is; paired with the sender-side bitrate ceiling in webrtcMesh.ts
-        // (raiseScreenAudioBitrateCeiling) so there's actually room to carry it. This part doesn't
-        // touch audio *processing* (echo/AGC/NS) at all, unlike the reverted attempt above.
+        // [Bug corrigido] channelCount:2 tinha sido colocado como propriedade solta ao lado de
+        // `mandatory` — Chromium rejeita isso de cara ("Malformed constraint: Cannot use both
+        // optional/mandatory and specific or advanced constraints"), quebrando getUserMedia por
+        // completo sempre que includeAudio era true (compartilhar tela SEM áudio continuava
+        // funcionando, por nunca passar por esse objeto). Constraint legada (`mandatory`) só
+        // aceita se misturar com outra propriedade padrão dentro do array `optional` — não solta
+        // no mesmo objeto. Pedido de estéreo continua o mesmo, só a forma de pedir mudou.
         audio: includeAudio
-          ? ({ mandatory: { chromeMediaSource: 'desktop' }, channelCount: 2 } as MediaTrackConstraints)
+          ? ({ mandatory: { chromeMediaSource: 'desktop' }, optional: [{ channelCount: 2 }] } as MediaTrackConstraints)
           : false,
         video: {
           mandatory: {

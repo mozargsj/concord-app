@@ -3,6 +3,7 @@ import Button from './Button';
 import IllustratedNotice from './IllustratedNotice';
 import accessDeniedArt from '../assets/images/access-denied.png';
 import { ACCESS_DENIED_MESSAGES } from '../lib/errorMessages';
+import { formatInviteLink } from '../lib/inviteLink';
 import '../styles/InviteCodeModal.css';
 
 interface InviteCodeModalProps {
@@ -19,7 +20,7 @@ export default function InviteCodeModal({ code, isLoading, error, isForbidden, o
   async function handleCopy() {
     if (!code) return;
     try {
-      await navigator.clipboard.writeText(code);
+      await navigator.clipboard.writeText(formatInviteLink(code));
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
@@ -46,11 +47,16 @@ export default function InviteCodeModal({ code, isLoading, error, isForbidden, o
         {code && (
           <>
             <p className="invite-code-modal__hint">
-              Compartilhe esse código — quem colar em "Entrar com convite" entra no servidor.
-              Válido por 7 dias.
+              Compartilhe esse link — quem colar em "Entrar com convite" entra no servidor. Válido
+              por 7 dias.
             </p>
-            <textarea className="invite-code-modal__code" readOnly value={code} onClick={(event) => event.currentTarget.select()} />
-            <Button onClick={handleCopy}>{copied ? 'Copiado ✓' : 'Copiar código'}</Button>
+            <textarea
+              className="invite-code-modal__code"
+              readOnly
+              value={formatInviteLink(code)}
+              onClick={(event) => event.currentTarget.select()}
+            />
+            <Button onClick={handleCopy}>{copied ? 'Copiado ✓' : 'Copiar link'}</Button>
           </>
         )}
       </div>

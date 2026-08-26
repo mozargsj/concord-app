@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { ScreenSource } from '../types/window';
+import { getIncludeAudioPreference, setIncludeAudioPreference } from '../lib/screenSharePreferences';
 import '../styles/ScreenSharePicker.css';
 
 interface ScreenSharePickerProps {
@@ -10,7 +11,9 @@ interface ScreenSharePickerProps {
 export default function ScreenSharePicker({ onSelect, onClose }: ScreenSharePickerProps) {
   const [sources, setSources] = useState<ScreenSource[] | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [includeAudio, setIncludeAudio] = useState(false);
+  // Starts from whatever was chosen last time (getIncludeAudioPreference), not always unchecked —
+  // keeps the choice consistent across transmissions instead of resetting every time it's opened.
+  const [includeAudio, setIncludeAudio] = useState(getIncludeAudioPreference);
 
   useEffect(() => {
     let cancelled = false;
@@ -71,7 +74,10 @@ export default function ScreenSharePicker({ onSelect, onClose }: ScreenSharePick
             <input
               type="checkbox"
               checked={includeAudio}
-              onChange={(event) => setIncludeAudio(event.target.checked)}
+              onChange={(event) => {
+                setIncludeAudio(event.target.checked);
+                setIncludeAudioPreference(event.target.checked);
+              }}
             />
             Incluir áudio do sistema
           </label>

@@ -6,6 +6,7 @@ import IllustratedNotice from './IllustratedNotice';
 import uploadFailedArt from '../assets/images/upload-failed.png';
 import { UPLOAD_FAILED_MESSAGES } from '../lib/errorMessages';
 import { ApiError, createServer, joinServerWithCode } from '../lib/api';
+import { extractInviteCode } from '../lib/inviteLink';
 import { pickImageFile, type PickedImageFile } from '../lib/imagePicker';
 import { saveCachedImage } from '../lib/imageCache';
 import '../styles/ServerActionsModal.css';
@@ -100,7 +101,9 @@ export default function ServerActionsModal({ mode, onClose, onServerCreated, onS
     setIsJoining(true);
     setJoinError(null);
     try {
-      const server = await joinServerWithCode(trimmed);
+      // Accepts either the bare code or the domain-prefixed link now shown in InviteCodeModal —
+      // extractInviteCode is a no-op on a bare code (no '/' to strip).
+      const server = await joinServerWithCode(extractInviteCode(trimmed));
       onServerJoined(server);
     } catch {
       setJoinError('Convite inválido ou expirado.');
