@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { RoomSummary } from '@concord/shared';
 import type { RoomPeer } from '../hooks/useRoomConnection';
-import { HeadphoneOff, MicOff } from 'lucide-react';
+import { HeadphoneOff, MicOff, X } from 'lucide-react';
 import CallControls from './CallControls';
 import MediaStreamVideo from './MediaStreamVideo';
 import ScreenShareTile from './ScreenShareTile';
@@ -127,11 +127,33 @@ export default function RoomView({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
-  // If the focused tile disappears (e.g. screen share stopped), fall back to the grid.
+  // If whatever justified focusing this tile goes away — screen share stopped (mine or a peer's),
+  // a camera turned off or died mid-call (device unplugged, driver crash — ServerListPage tears
+  // the stream down and this just reacts to cameraStream/personalStream going video-less), or the
+  // peer disconnected entirely — fall back to the grid instead of leaving the 16:9 box showing a
+  // dead/frozen tile (or, for a since-vanished tile, silently priming a stale focusedTileKey that
+  // would auto-focus again the next time that same key becomes valid, e.g. a re-share). Covers
+  // every tile kind through the one mechanism instead of a one-off carved out per case.
   useEffect(() => {
-    if (focusedTileKey && focusedTileKey !== 'self-screen') return;
-    if (focusedTileKey === 'self-screen' && !screenStream) setFocusedTileKey(null);
-  }, [focusedTileKey, screenStream]);
+    if (!focusedTileKey) return;
+    if (focusedTileKey === 'self-screen') {
+      if (!screenStream) setFocusedTileKey(null);
+      return;
+    }
+    if (focusedTileKey === 'self') {
+      if (!cameraStream) setFocusedTileKey(null);
+      return;
+    }
+    if (focusedTileKey.endsWith('-screen')) {
+      const peerId = focusedTileKey.slice(0, -'-screen'.length);
+      const peer = peers.find((p) => p.peerId === peerId);
+      if (!peer?.screenStream) setFocusedTileKey(null);
+      return;
+    }
+    const peer = peers.find((p) => p.peerId === focusedTileKey);
+    const hasVideo = !!peer?.personalStream && peer.personalStream.getVideoTracks().length > 0;
+    if (!hasVideo) setFocusedTileKey(null);
+  }, [focusedTileKey, screenStream, cameraStream, peers]);
 
   if (!room) {
     return (
@@ -204,8 +226,12 @@ export default function RoomView({
           const showCamera = tile.kind === 'participant' && tile.isSelf && cameraStream;
           const remoteStream = tile.kind === 'participant' && !tile.isSelf ? tile.stream : null;
           const hasRemoteVideo = !!remoteStream && remoteStream.getVideoTracks().length > 0;
+          // A camera feed (self or remote) gets the same click-to-expand treatment as a screen
+          // share — "treat the camera as a transmission too". A tile with no actual video (just
+          // the avatar placeholder) has nothing worth expanding.
+          const hasCameraVideo = !!showCamera || hasRemoteVideo;
           const isFocused = tile.key === focusedTileKey;
-          const isFocusable = tile.kind === 'screen';
+          const isFocusable = tile.kind === 'screen' || hasCameraVideo;
           const isVolumeTarget = tile.kind === 'participant' && !!tile.userId;
           const isVolumeMenuActive = isVolumeTarget && tile.userId === activeVolumeMenuUserId;
 
@@ -275,30 +301,46 @@ export default function RoomView({
                   : undefined
               }
             >
-              {tile.kind === 'screen' ? (
-                // Always the same wrapper, focused or not — only the CSS (16:9-locked
-                // fullscreen vs. plain 100%-fill grid cell) differs between the two. Screen
-                // tiles keep local state (ScreenShareTile's isLive/volume) that must survive a
-                // click toggling focus; conditionally mounting/unmounting this wrapper around
-                // `media` used to change its parent shape between the two branches, which made
-                // React tear the component down and remount it right after that same click had
-                // just set isLive — the fix here is keeping the parent shape constant instead.
-                <div
-                  className={'room-view__focus-frame' + (isFocused ? '' : ' room-view__focus-frame--grid')}
-                >
-                  {/* Close button now lives inside ScreenShareTile — closing has to reset that
-                      component's own play/audio state, not just this file's focus state. */}
-                  {media}
-                  {liveIndicator}
-                  {status}
-                </div>
-              ) : (
-                <>
-                  {media}
-                  {liveIndicator}
-                  {status}
-                </>
-              )}
+              {/* Always the same wrapper, for every tile kind, focused or not — only the CSS
+                  differs (16:9-locked fullscreen vs. plain 100%-fill grid cell, and a
+                  `--participant` override that keeps an unfocused camera tile looking exactly
+                  like the old unwrapped fragment: no black board, no rounding, no clipping).
+                  Screen tiles keep local state (ScreenShareTile's isLive/volume) that must
+                  survive a click toggling focus; conditionally mounting/unmounting a wrapper
+                  around `media` based on tile kind or camera-on/off used to change the parent
+                  shape, which made React tear the subtree down and remount it right after that
+                  same click had just set isLive — keeping the wrapper's presence tied only to
+                  `tile.key` (never to `tile.kind` or `hasCameraVideo`) avoids that for camera
+                  tiles too, now that turning a camera on/off can also flip whether a tile is
+                  focusable. */}
+              <div
+                className={
+                  'room-view__focus-frame' +
+                  (isFocused ? '' : ' room-view__focus-frame--grid') +
+                  (tile.kind === 'participant' ? ' room-view__focus-frame--participant' : '')
+                }
+              >
+                {/* Screen tiles' close button lives inside ScreenShareTile instead — closing has
+                    to reset that component's own play/audio state, not just this file's focus
+                    state. A camera feed has no such component/state of its own, so the close
+                    control for it lives here. */}
+                {isFocused && tile.kind === 'participant' && (
+                  <button
+                    type="button"
+                    className="room-view__focus-close"
+                    title="Fechar (Esc)"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setFocusedTileKey(null);
+                    }}
+                  >
+                    <X size={14} />
+                  </button>
+                )}
+                {media}
+                {liveIndicator}
+                {status}
+              </div>
             </div>
           );
         })}

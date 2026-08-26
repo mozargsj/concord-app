@@ -215,6 +215,15 @@ export default function ServerListPage({
     };
   }, []);
 
+  // Shared by the manual "turn camera off" path and the unexpected-failure path below — both end
+  // up at the exact same cleanup, just triggered differently.
+  function teardownCamera() {
+    cameraStreamRef.current?.getTracks().forEach((track) => track.stop());
+    cameraStreamRef.current = null;
+    setCameraStream(null);
+    setLocalCameraTrack(null);
+  }
+
   async function startCamera(deviceId?: string) {
     const preferred = deviceId ?? getPreferredDeviceId('videoinput') ?? undefined;
     try {
@@ -225,7 +234,22 @@ export default function ServerListPage({
       cameraStreamRef.current = stream;
       setCameraStream(stream);
       setMediaError(null);
-      setLocalCameraTrack(stream.getVideoTracks()[0] ?? null);
+      const track = stream.getVideoTracks()[0] ?? null;
+      setLocalCameraTrack(track);
+      // Fires only when the track ends for a reason outside our control (device unplugged,
+      // driver crash, OS revoking the permission mid-call) — never from our own track.stop()
+      // calls (teardownCamera/device-switch), which the spec explicitly excludes from this event.
+      // Without this, RoomView still shows the last frame frozen forever (or, if focused, a dead
+      // 16:9 box) since nothing ever told the rest of the app the camera was gone.
+      if (track) {
+        track.onended = () => {
+          if (cameraStreamRef.current !== stream) return; // stale handler from an already-replaced stream
+          teardownCamera();
+          playCameraStop();
+          setMediaError('A câmera parou de responder e a transmissão foi encerrada.');
+          void reportClientError('CameraEndedUnexpectedly', 'Camera track ended without user action (device disconnected or driver error)');
+        };
+      }
     } catch (error) {
       setMediaError(error instanceof Error ? error.message : 'Não foi possível acessar a câmera.');
       void reportClientError('CameraAccessError', error instanceof Error ? error.message : String(error), error instanceof Error ? error.stack : undefined);
@@ -234,10 +258,7 @@ export default function ServerListPage({
 
   async function handleToggleCamera() {
     if (cameraStream) {
-      cameraStream.getTracks().forEach((track) => track.stop());
-      cameraStreamRef.current = null;
-      setCameraStream(null);
-      setLocalCameraTrack(null);
+      teardownCamera();
       playCameraStop();
       return;
     }
@@ -276,7 +297,24 @@ export default function ServerListPage({
         // how Chromium wires a specific screen/window id in. System-audio loopback via
         // chromeMediaSource:'desktop' is Windows-only and only reliable for whole-screen
         // sources, not individual windows.
-        audio: includeAudio ? ({ mandatory: { chromeMediaSource: 'desktop' } } as MediaTrackConstraints) : false,
+        //
+        // [Tentativa revertida] googEchoCancellation/googAutoGainControl/googNoiseSuppression/
+        // googHighpassFilter:false foram testados aqui pra atacar um relato de efeito "reverb"/
+        // "dentro do banheiro" + retorno de fala na transmissão de tela (decisions.md, pontos em
+        // aberto) — piorou na prática (áudio picotando, efeito pior), então revertido. Não ficou
+        // confirmado se a causa raiz é mesmo processamento de áudio indevido nessa track (a
+        // teoria original) ou outra coisa (rede/CPU de quem testa, comportamento diferente dessas
+        // constraints legadas nessa versão do Chromium) — investigar com dados reais (getStats())
+        // antes de tentar de novo, não só trocar flags no escuro.
+        //
+        // channelCount:2 (a standard constraint, not Chrome-specific — sits alongside `mandatory`
+        // rather than inside it) asks for stereo capture instead of whatever the desktop-audio
+        // default is; paired with the sender-side bitrate ceiling in webrtcMesh.ts
+        // (raiseScreenAudioBitrateCeiling) so there's actually room to carry it. This part doesn't
+        // touch audio *processing* (echo/AGC/NS) at all, unlike the reverted attempt above.
+        audio: includeAudio
+          ? ({ mandatory: { chromeMediaSource: 'desktop' }, channelCount: 2 } as MediaTrackConstraints)
+          : false,
         video: {
           mandatory: {
             chromeMediaSource: 'desktop',

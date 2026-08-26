@@ -29,6 +29,16 @@ interface SpeakingState {
 
 type TrackRole = 'mic' | 'camera' | 'screenVideo' | 'screenAudio';
 
+// Mic audio is fine at WebRTC's default Opus ceiling (~32kbps mono) — voice doesn't need more.
+// Screen-share system audio (music, game/video sound) does: raising the ceiling here doesn't
+// force this bitrate, it just gives the browser's native congestion control (same one already
+// governing screen-share *video* quality, decisions.md §3 — no custom tiers, same philosophy)
+// room to use more of it when the connection can support it, and back off same as video already
+// does when it can't. Deliberately not touching stereo=1/usedtx=0 here — those need SDP fmtp
+// munging (not exposed via setParameters), a fragile per-payload-type string edit that's a bigger
+// step than this one; left for later, see decisions.md.
+const SCREEN_AUDIO_MAX_BITRATE_BPS = 128_000;
+
 type ImageAnswer =
   | { status: 'unchanged' }
   | { status: 'missing' }
@@ -654,7 +664,9 @@ export class MeshManager {
       entry.senders.screenVideo = entry.pc.addTrack(this.screenVideoTrack, this.screenStream);
     }
     if (this.screenAudioTrack) {
-      entry.senders.screenAudio = entry.pc.addTrack(this.screenAudioTrack, this.screenStream);
+      const sender = entry.pc.addTrack(this.screenAudioTrack, this.screenStream);
+      entry.senders.screenAudio = sender;
+      this.raiseScreenAudioBitrateCeiling(sender);
     }
   }
 
@@ -875,6 +887,17 @@ export class MeshManager {
   }
 
   /** Adds/removes/swaps one local track role on one connection. Returns whether a fresh offer is needed. */
+  /** Best-effort — setParameters() can reject if the connection isn't in a state that allows it
+   * yet (e.g. right after addTrack, before the first negotiation completes on some browsers).
+   * Not fatal either way: without this the sender just keeps whatever default ceiling the
+   * browser picked, same as before this existed. */
+  private raiseScreenAudioBitrateCeiling(sender: RTCRtpSender): void {
+    const params = sender.getParameters();
+    if (!params.encodings?.length) params.encodings = [{}];
+    params.encodings[0].maxBitrate = SCREEN_AUDIO_MAX_BITRATE_BPS;
+    void sender.setParameters(params).catch(() => {});
+  }
+
   private applyTrack(
     entry: PeerConnectionEntry,
     role: TrackRole,
@@ -887,7 +910,9 @@ export class MeshManager {
       return false;
     }
     if (track && !existing) {
-      entry.senders[role] = entry.pc.addTrack(track, groupStream);
+      const sender = entry.pc.addTrack(track, groupStream);
+      entry.senders[role] = sender;
+      if (role === 'screenAudio') this.raiseScreenAudioBitrateCeiling(sender);
       return true;
     }
     if (!track && existing) {

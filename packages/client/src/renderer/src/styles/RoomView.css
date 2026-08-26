@@ -85,6 +85,39 @@
   height: 100%;
 }
 
+/* An unfocused participant tile (camera on or off) must look exactly like the plain unwrapped
+   fragment it used to be — the base .room-view__focus-frame's black board + rounding + clipping
+   is only appropriate for the focused 16:9 box (or a screen tile, which fills a whole tile either
+   way). Without this override, every participant tile would show a solid black square behind its
+   avatar circle instead of the tile's own --color-bg-elevated background. */
+.room-view__focus-frame--participant.room-view__focus-frame--grid {
+  background: transparent;
+  border-radius: 0;
+  overflow: visible;
+}
+
+/* Mirrors .screen-share-tile__close — a focused camera tile has no ScreenShareTile of its own to
+   own this button, so it lives here instead. */
+.room-view__focus-close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 2;
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 50%;
+  background: var(--color-danger);
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.room-view__focus-close:hover {
+  background: #d5363a;
+}
+
 .room-view__avatar {
   /* cqmin (not a plain % of width) — picks the smaller of the tile's own width/height, so the
      circle grows to fill as much of the tile as it can in *either* orientation without ever
