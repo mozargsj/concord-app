@@ -40,6 +40,9 @@ jobs:
       - name: Build renderer + electron
         run: npm run build --workspace=@concord/client
 
+      - name: Build native process-loopback addon
+        run: npm run build:native --workspace=@concord/client
+
       - name: Package installer (Windows/NSIS)
         working-directory: packages/client
         run: npx electron-builder --config.artifactName=Concord-Setup.exe
