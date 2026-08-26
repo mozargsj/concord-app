@@ -8,7 +8,11 @@ on:
 
 jobs:
   build-and-publish:
-    runs-on: windows-latest
+    # Pinned, not windows-latest: that image picked up a newer Visual Studio (version "18") that
+    # this node-gyp doesn't recognize yet ("unknown version 'undefined'"), needed to compile the
+    # process-loopback native addon. windows-2022 ships VS2022 ("17"), which node-gyp's version
+    # detection actually knows about. Revisit if/when node-gyp adds support for the newer VS.
+    runs-on: windows-2022
     steps:
       - name: Checkout
         uses: actions/checkout@v4
