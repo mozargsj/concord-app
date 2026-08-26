@@ -9,11 +9,13 @@ import ServerActionsModal from '../components/ServerActionsModal';
 import InviteCodeModal from '../components/InviteCodeModal';
 import ScreenSharePicker from '../components/ScreenSharePicker';
 import LoadingSpinner from '../components/LoadingSpinner';
+import NoInternetScreen from '../components/NoInternetScreen';
 import ParticipantVolumeMenu from '../components/ParticipantVolumeMenu';
 import ProfilePage from './ProfilePage';
 import {
   ApiError,
   TEST_OFFLINE,
+  checkServerHealth,
   createInvite,
   createRoom,
   deleteRoom,
@@ -58,6 +60,10 @@ interface InviteState {
   isForbidden: boolean;
 }
 
+// How often to retry GET /health once the browser's own 'online' event fires but the server
+// isn't actually reachable yet (e.g. the network interface came up before real WAN routing did).
+const RECONNECT_RETRY_INTERVAL_MS = 3000;
+
 export default function ServerListPage({
   currentUser,
   onCurrentUserChange,
@@ -79,6 +85,15 @@ export default function ServerListPage({
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [serverActionsMode, setServerActionsMode] = useState<'create' | 'join' | null>(null);
   const [inviteState, setInviteState] = useState<InviteState | null>(null);
+  // System-level connectivity (navigator.onLine), not "is our server reachable" — that's the
+  // separate App.tsx/ServerOfflineScreen check. Fully automatic: no retry button, just watches
+  // for the browser's own online/offline events and confirms with a real health check before
+  // declaring it fixed (an interface coming back up doesn't mean the internet actually works).
+  const [connectivityStatus, setConnectivityStatus] = useState<'online' | 'offline' | 'reconnecting'>('online');
+  // Captured at the moment connectivity drops so the room can be rejoined automatically once
+  // confirmed back — the existing disconnect-cleanup effect below clears selectedRoomId shortly
+  // after anyway, so this needs to be saved before that happens, not read back out of state later.
+  const reconnectTargetRef = useRef<{ serverId: string; roomId: string } | null>(null);
 
   // Lifted here (not local to RoomView) so RoomView and RoomSidebar — siblings — share one live
   // copy of per-peer volume/mute state instead of only agreeing via localStorage on next mount.
@@ -208,6 +223,62 @@ export default function ServerListPage({
   useEffect(() => {
     if (selectedRoomId && connectionStatus === 'disconnected') setSelectedRoomId(null);
   }, [connectionStatus, selectedRoomId]);
+
+  // Detects loss of system-level connectivity (distinct from "our server is unreachable" —
+  // App.tsx/ServerOfflineScreen's GET /health check, which already assumes the internet itself is
+  // fine). navigator.onLine + online/offline events are a known-imperfect signal on their own
+  // (an interface coming back up doesn't mean real WAN routing works yet) — that's why 'online'
+  // moves to 'reconnecting' rather than immediately declaring success; the effect below confirms
+  // with a real health check before doing that.
+  useEffect(() => {
+    if (!navigator.onLine) setConnectivityStatus('offline');
+
+    function handleOffline() {
+      if (selectedServerId && selectedRoomId) {
+        reconnectTargetRef.current = { serverId: selectedServerId, roomId: selectedRoomId };
+      }
+      setConnectivityStatus('offline');
+    }
+
+    function handleOnline() {
+      setConnectivityStatus((prev) => (prev === 'offline' ? 'reconnecting' : prev));
+    }
+
+    window.addEventListener('offline', handleOffline);
+    window.addEventListener('online', handleOnline);
+    return () => {
+      window.removeEventListener('offline', handleOffline);
+      window.removeEventListener('online', handleOnline);
+    };
+  }, [selectedServerId, selectedRoomId]);
+
+  // While 'reconnecting', poll GET /health until it actually succeeds (rather than trusting the
+  // 'online' event alone), then rejoin whatever server/room was active when connectivity dropped.
+  useEffect(() => {
+    if (connectivityStatus !== 'reconnecting') return;
+    let cancelled = false;
+
+    async function attempt() {
+      const healthy = await checkServerHealth();
+      if (cancelled) return;
+      if (!healthy) {
+        setTimeout(() => void attempt(), RECONNECT_RETRY_INTERVAL_MS);
+        return;
+      }
+      setConnectivityStatus('online');
+      const target = reconnectTargetRef.current;
+      reconnectTargetRef.current = null;
+      if (target) {
+        setSelectedServerId(target.serverId);
+        setSelectedRoomId(target.roomId);
+      }
+    }
+    void attempt();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [connectivityStatus]);
 
   // Stop every local track on leaving the room — real local capture, never sent anywhere
   // once the room changes (no RTCPeerConnection yet for it), but the hardware indicator
@@ -482,6 +553,14 @@ export default function ServerListPage({
         { serverId: selectedServerId ?? undefined }
       );
     }
+  }
+
+  if (connectivityStatus === 'offline' || connectivityStatus === 'reconnecting') {
+    return (
+      <div className="server-list-page server-list-page--loading">
+        <NoInternetScreen status={connectivityStatus} />
+      </div>
+    );
   }
 
   if (myServers === null) {

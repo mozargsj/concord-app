@@ -7,12 +7,16 @@ interface LoadingSpinnerProps {
   /** 0-100. Only meaningful while a download is actually in progress — omit otherwise, the bar
    * doesn't render without a real number to show (no fake/indeterminate fill). */
   percent?: number;
+  /** Defaults to the plain logo — App.tsx's update screen passes the "gato mecânico" art
+   * (update-spinner.png) instead, since spinning the bare logo during an actual download/install
+   * didn't really say "working on it" the way a cat with a wrench does. */
+  icon?: string;
 }
 
-export default function LoadingSpinner({ message, percent }: LoadingSpinnerProps) {
+export default function LoadingSpinner({ message, percent, icon }: LoadingSpinnerProps) {
   return (
     <div className="loading-spinner">
-      <img src={logoSpinner} alt="" className="loading-spinner__logo" />
+      <img src={icon ?? logoSpinner} alt="" className="loading-spinner__logo" />
       {message && <p className="loading-spinner__message">{message}</p>}
       {percent !== undefined && (
         <div className="loading-spinner__progress">

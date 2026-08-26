@@ -4,6 +4,7 @@ import type { UpdatePhase, UpdateStatusInfo } from './types/window';
 import TitleBar from './components/TitleBar';
 import ConfirmModal from './components/ConfirmModal';
 import LoadingSpinner from './components/LoadingSpinner';
+import updateSpinnerIcon from './assets/images/update-spinner.png';
 import ServerOfflineScreen from './components/ServerOfflineScreen';
 import SessionExpiredScreen from './components/SessionExpiredScreen';
 import LoginPage from './pages/LoginPage';
@@ -164,6 +165,7 @@ export default function App() {
           <LoadingSpinner
             message={describeUpdatePhase(updateStatus.phase, updateStatus.version)}
             percent={updateStatus.phase === 'downloading' ? updateStatus.percent : undefined}
+            icon={updateSpinnerIcon}
           />
         ) : (
           view === 'loading' && <LoadingSpinner />
