@@ -8,6 +8,7 @@ import {
   setMicSensitivity
 } from '../lib/micSensitivity';
 import { getRnnoiseEnabled, setRnnoiseEnabled } from '../lib/noiseSuppressionSettings';
+import { getHardwareEncodePreference, setHardwareEncodePreference } from '../lib/hardwareEncodePreference';
 import {
   MASTER_VOLUME_DEFAULT,
   MASTER_VOLUME_MAX,
@@ -27,6 +28,7 @@ interface SettingsModalProps {
 export default function SettingsModal({ onClose, onNoiseSuppressionChange }: SettingsModalProps) {
   const [threshold, setThreshold] = useState(MIC_SENSITIVITY_DEFAULT);
   const [isRnnoiseEnabled, setIsRnnoiseEnabled] = useState(true);
+  const [isHardwareEncodeEnabled, setIsHardwareEncodeEnabled] = useState(true);
   const [masterVolume, setMasterVolumeState] = useState(MASTER_VOLUME_DEFAULT);
   // Placeholder input level — same nature as the "está falando" mock in RoomView.tsx:
   // stand-in until the real gate reads audioLevel via getStats() (~20-50ms poll, per
@@ -37,6 +39,7 @@ export default function SettingsModal({ onClose, onNoiseSuppressionChange }: Set
     setThreshold(getMicSensitivity());
     setIsRnnoiseEnabled(getRnnoiseEnabled());
     setMasterVolumeState(getMasterVolume());
+    setIsHardwareEncodeEnabled(getHardwareEncodePreference());
   }, []);
 
   // Ties updates to the display's own refresh rate instead of a fixed interval — the
@@ -75,6 +78,12 @@ export default function SettingsModal({ onClose, onNoiseSuppressionChange }: Set
     setIsRnnoiseEnabled(next);
     setRnnoiseEnabled(next);
     onNoiseSuppressionChange();
+  }
+
+  function handleToggleHardwareEncode() {
+    const next = !isHardwareEncodeEnabled;
+    setIsHardwareEncodeEnabled(next);
+    setHardwareEncodePreference(next);
   }
 
   const isGateOpen = mockLevel >= threshold;
@@ -159,6 +168,27 @@ export default function SettingsModal({ onClose, onNoiseSuppressionChange }: Set
               className="settings-modal__gate-slider"
             />
           </div>
+        </div>
+
+        <div className="settings-modal__section">
+          <label className="settings-modal__toggle-row" htmlFor="hardware-encode-toggle">
+            <span>
+              <span className="settings-modal__label">Aceleração de hardware (transmissão de tela)</span>
+              <p className="settings-modal__hint">
+                Usa a placa de vídeo (NVIDIA/AMD/Intel) pra codificar o vídeo da transmissão de
+                tela, quando disponível — menos uso de CPU. Se causar algum problema, desative;
+                nesse caso a transmissão continua funcionando normalmente, só sem essa aceleração.
+                Vale a partir da próxima vez que começar a compartilhar a tela.
+              </p>
+            </span>
+            <input
+              id="hardware-encode-toggle"
+              type="checkbox"
+              checked={isHardwareEncodeEnabled}
+              onChange={handleToggleHardwareEncode}
+              className="settings-modal__checkbox"
+            />
+          </label>
         </div>
       </div>
     </div>

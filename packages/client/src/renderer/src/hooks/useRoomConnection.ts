@@ -12,6 +12,7 @@ import { createDenoisedTrack } from '../lib/rnnoise';
 import { getRnnoiseEnabled } from '../lib/noiseSuppressionSettings';
 import { createGatedTrack } from '../lib/noiseGate';
 import { getMicSensitivity, onMicSensitivityChange, sensitivityToThresholdRms } from '../lib/micSensitivity';
+import { getHardwareEncodePreference } from '../lib/hardwareEncodePreference';
 
 /** The server the joined room belongs to — just enough to know who to ask for its icon (its
  * owner) and, if that owner happens to be me, what to answer with. */
@@ -331,6 +332,7 @@ export function useRoomConnection(
           void reportClientError('WebRTCConnectionError', detail, undefined, { peerId, kind })
       });
       meshRef.current = mesh;
+      mesh.setHardwareEncodePreference(getHardwareEncodePreference());
 
       const selfPeerId = 'offline-self';
       setState((prev) => ({
@@ -395,6 +397,7 @@ export function useRoomConnection(
       onSoundReceived
     });
     meshRef.current = mesh;
+    mesh.setHardwareEncodePreference(getHardwareEncodePreference());
 
     // Both guarded by `cancelled` — closing a WebSocket is async (ws.onclose fires on a
     // later tick), so a leftover event from the room just left can otherwise arrive after
@@ -596,7 +599,10 @@ export function useRoomConnection(
     void meshRef.current?.setLocalCameraTrack(track);
   }
 
-  function setLocalScreenTrack(stream: MediaStream | null): void {
+  // qualityMode only matters when starting a share (ScreenSharePicker.tsx passes the choice made
+  // there) — set before setLocalScreenTrack so it's already in place when the sender gets created.
+  function setLocalScreenTrack(stream: MediaStream | null, qualityMode?: 'quality' | 'smoothness'): void {
+    if (qualityMode) meshRef.current?.setScreenQualityMode(qualityMode);
     void meshRef.current?.setLocalScreenTrack(stream);
     // Explicit signal (see messages.ts) — the WebRTC-level "track ended" alone was unreliable for
     // this transition, leaving viewers stuck on the last frame when sharing stopped.

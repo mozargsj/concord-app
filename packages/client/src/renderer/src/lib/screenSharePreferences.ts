@@ -14,3 +14,22 @@ export function getIncludeAudioPreference(): boolean {
 export function setIncludeAudioPreference(value: boolean): void {
   localStorage.setItem(STORAGE_KEY, String(value));
 }
+
+// Same storage pattern — remembers the last "priorizar qualidade vs. fluidez" choice for screen
+// share, so it's a real user decision (pedido do Mozar) instead of a fixed app default. Maps to
+// RTCRtpSendParameters.degradationPreference in webrtcMesh.ts: 'quality' -> 'maintain-resolution'
+// (keep resolution under bad bandwidth — best for static/text content), 'smoothness' ->
+// 'maintain-framerate' (keep fps under bad bandwidth — best for games/interactive content).
+export type ScreenQualityMode = 'quality' | 'smoothness';
+const QUALITY_MODE_STORAGE_KEY = 'concord.screenShare.qualityMode';
+
+// Default 'quality' — matches the app's original fixed behavior before this became a choice, so
+// nobody's experience changes just from this feature shipping.
+export function getScreenQualityMode(): ScreenQualityMode {
+  const raw = localStorage.getItem(QUALITY_MODE_STORAGE_KEY);
+  return raw === 'smoothness' ? 'smoothness' : 'quality';
+}
+
+export function setScreenQualityMode(mode: ScreenQualityMode): void {
+  localStorage.setItem(QUALITY_MODE_STORAGE_KEY, mode);
+}

@@ -28,6 +28,7 @@ import { usePeerVolumeControl } from '../hooks/usePeerVolumeControl';
 import { getPreferredDeviceId } from '../lib/devicePreferences';
 import { loadCachedImage } from '../lib/imageCache';
 import { startExcludedLoopbackAudio, type LoopbackAudioSession } from '../lib/processLoopbackAudio';
+import type { ScreenQualityMode } from '../lib/screenSharePreferences';
 import {
   playCameraStart,
   playCameraStop,
@@ -306,7 +307,7 @@ export default function ServerListPage({
     setIsScreenPickerOpen(true);
   }
 
-  async function handlePickScreenSource(source: ScreenSource, includeAudio: boolean) {
+  async function handlePickScreenSource(source: ScreenSource, includeAudio: boolean, qualityMode: ScreenQualityMode) {
     setIsScreenPickerOpen(false);
     // Excludes Concord's own audio from the loopback (processLoopbackAudio.ts) — fixes viewers
     // hearing their own voice echoed back during a transmission with system audio (only reported
@@ -361,7 +362,7 @@ export default function ServerListPage({
       screenStreamRef.current = stream;
       setScreenStream(stream);
       setMediaError(null);
-      setLocalScreenTrack(stream);
+      setLocalScreenTrack(stream, qualityMode);
       playTransmissionEnter();
 
       // Fires when the captured source itself disappears (the shared window/app/game was closed,

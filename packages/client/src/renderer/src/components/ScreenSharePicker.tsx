@@ -1,11 +1,17 @@
 import { useEffect, useState } from 'react';
 import type { ScreenSource } from '../types/window';
-import { getIncludeAudioPreference, setIncludeAudioPreference } from '../lib/screenSharePreferences';
+import {
+  getIncludeAudioPreference,
+  setIncludeAudioPreference,
+  getScreenQualityMode,
+  setScreenQualityMode,
+  type ScreenQualityMode
+} from '../lib/screenSharePreferences';
 import NativeLoopbackHelpModal from './NativeLoopbackHelpModal';
 import '../styles/ScreenSharePicker.css';
 
 interface ScreenSharePickerProps {
-  onSelect: (source: ScreenSource, includeAudio: boolean) => void;
+  onSelect: (source: ScreenSource, includeAudio: boolean, qualityMode: ScreenQualityMode) => void;
   onClose: () => void;
 }
 
@@ -15,6 +21,10 @@ export default function ScreenSharePicker({ onSelect, onClose }: ScreenSharePick
   // Starts from whatever was chosen last time (getIncludeAudioPreference), not always unchecked —
   // keeps the choice consistent across transmissions instead of resetting every time it's opened.
   const [includeAudio, setIncludeAudio] = useState(getIncludeAudioPreference);
+  // Same "remember last choice" pattern — pedido do Mozar: qual lado da troca banda/qualidade
+  // priorizar é decisão de quem compartilha, não algo fixo no app (webrtcMesh.ts's
+  // setScreenQualityMode).
+  const [qualityMode, setQualityMode] = useState<ScreenQualityMode>(getScreenQualityMode);
   // null while the check is in flight — the hint only makes sense once we actually know either way.
   const [isEchoFixAvailable, setIsEchoFixAvailable] = useState<boolean | null>(null);
   const [isHelpOpen, setIsHelpOpen] = useState(false);
@@ -88,6 +98,44 @@ export default function ScreenSharePicker({ onSelect, onClose }: ScreenSharePick
           {renderGroup('Aplicativos', windows)}
         </div>
 
+        <div className="screen-picker__quality-section">
+          <span className="screen-picker__quality-label">Se a banda apertar, priorizar:</span>
+          <div className="screen-picker__quality-options">
+            <button
+              type="button"
+              className={
+                'screen-picker__quality-option' +
+                (qualityMode === 'quality' ? ' screen-picker__quality-option--selected' : '')
+              }
+              onClick={() => {
+                setQualityMode('quality');
+                setScreenQualityMode('quality');
+              }}
+            >
+              <span className="screen-picker__quality-option-title">Qualidade</span>
+              <span className="screen-picker__quality-option-hint">
+                Mantém nitidez, perde fps — ideal pra texto, documentos, apresentações
+              </span>
+            </button>
+            <button
+              type="button"
+              className={
+                'screen-picker__quality-option' +
+                (qualityMode === 'smoothness' ? ' screen-picker__quality-option--selected' : '')
+              }
+              onClick={() => {
+                setQualityMode('smoothness');
+                setScreenQualityMode('smoothness');
+              }}
+            >
+              <span className="screen-picker__quality-option-title">Fluidez</span>
+              <span className="screen-picker__quality-option-hint">
+                Mantém os fps, perde nitidez — ideal pra jogos e conteúdo dinâmico
+              </span>
+            </button>
+          </div>
+        </div>
+
         <footer className="screen-picker__footer">
           <div className="screen-picker__audio-column">
             <label className="screen-picker__audio-toggle">
@@ -111,7 +159,7 @@ export default function ScreenSharePicker({ onSelect, onClose }: ScreenSharePick
           <button
             className="screen-picker__confirm"
             disabled={!selectedSource}
-            onClick={() => selectedSource && onSelect(selectedSource, includeAudio)}
+            onClick={() => selectedSource && onSelect(selectedSource, includeAudio, qualityMode)}
           >
             Compartilhar
           </button>

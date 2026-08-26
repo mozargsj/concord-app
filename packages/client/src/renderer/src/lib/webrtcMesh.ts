@@ -242,6 +242,16 @@ export class MeshManager {
   // Instead it's enforced per-connection via RTCRtpSender.replaceTrack(null), same mechanism
   // already used for device swaps, so it needs no renegotiation either.
   private micMuted = false;
+  // User-configurable (SettingsModal.tsx, lib/hardwareEncodePreference.ts), default on — set once
+  // at mesh creation via setHardwareEncodePreference(), read at track-add time by
+  // preferH264ForScreenVideo(). Not reactive mid-share on purpose: a codec preference only takes
+  // effect on the next offer/answer, so changing it while already sharing would need an explicit
+  // renegotiation to do anything — simpler to just have it apply the next time sharing starts.
+  private hardwareEncodePreferenceEnabled = true;
+  // Content-dependent, user-picked per share (ScreenSharePicker.tsx) — see setScreenQualityMode
+  // and applyScreenVideoDegradationPreference below. Default matches the app's original fixed
+  // behavior (screen content favored resolution over framerate before this was a choice).
+  private screenDegradationPreference: RTCDegradationPreference = 'maintain-resolution';
   // Soundboard mix (see playSoundboardClip) — a MediaStreamDestination shared by every
   // concurrently-playing clip, reference-counted so the sender only reverts to the plain mic
   // track once the last overlapping clip finishes.
@@ -426,6 +436,13 @@ export class MeshManager {
 
     this.micAnalyserSource = this.audioContext.createMediaStreamSource(new MediaStream([track]));
     this.micAnalyserSource.connect(this.micAnalyser);
+  }
+
+  /** User-configurable toggle for preferring H.264 (hardware-encode-capable) on screen-share
+   * video — see hardwareEncodePreferenceEnabled's own comment above for why this only affects the
+   * next screen share, not one already in progress. */
+  setHardwareEncodePreference(enabled: boolean): void {
+    this.hardwareEncodePreferenceEnabled = enabled;
   }
 
   /** Mutes/unmutes what's sent to peers only — capture and the local speaking analyser keep
@@ -942,15 +959,16 @@ export class MeshManager {
     void sender.setParameters(params).catch(() => {});
   }
 
-  /** Under bandwidth pressure, the BWE has to give something up — this tells it to give up
-   * framerate first and keep resolution, the opposite of the camera's default ('maintain-
-   * framerate' would make it, since a face mid-motion matters more than pixel sharpness there).
-   * Screen content is mostly static (a paused video call, a document, a slide) — losing fps is
-   * far less noticeable than losing enough resolution to make text illegible. Best-effort same
-   * as the audio ceiling above (setParameters() can reject right after addTrack). */
+  /** Content-dependent choice (text/slides want resolution kept under bad bandwidth, a shared
+   * game wants framerate kept — see setScreenQualityMode below) exposed to applyScreenVideo-
+   * DegradationPreference. */
+  setScreenQualityMode(mode: 'quality' | 'smoothness'): void {
+    this.screenDegradationPreference = mode === 'smoothness' ? 'maintain-framerate' : 'maintain-resolution';
+  }
+
   private applyScreenVideoDegradationPreference(sender: RTCRtpSender): void {
     const params = sender.getParameters();
-    params.degradationPreference = 'maintain-resolution';
+    params.degradationPreference = this.screenDegradationPreference;
     void sender.setParameters(params).catch(() => {});
   }
 
@@ -967,6 +985,8 @@ export class MeshManager {
    * lands on hardware on a given machine still depends on that machine's GPU driver, so this
    * stays best-effort (falls back to software H.264/VP8 transparently if the driver can't). */
   private preferH264ForScreenVideo(pc: RTCPeerConnection, sender: RTCRtpSender): void {
+    if (!this.hardwareEncodePreferenceEnabled) return; // user turned it off — leave Chromium's default order
+
     const transceiver = pc.getTransceivers().find((candidate) => candidate.sender === sender);
     if (!transceiver?.setCodecPreferences) return;
 
