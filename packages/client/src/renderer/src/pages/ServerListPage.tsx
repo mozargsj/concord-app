@@ -9,6 +9,7 @@ import ServerActionsModal from '../components/ServerActionsModal';
 import InviteCodeModal from '../components/InviteCodeModal';
 import ScreenSharePicker from '../components/ScreenSharePicker';
 import LoadingSpinner from '../components/LoadingSpinner';
+import ParticipantVolumeMenu from '../components/ParticipantVolumeMenu';
 import ProfilePage from './ProfilePage';
 import {
   ApiError,
@@ -23,6 +24,7 @@ import {
   reportClientError
 } from '../lib/api';
 import { useRoomConnection } from '../hooks/useRoomConnection';
+import { usePeerVolumeControl } from '../hooks/usePeerVolumeControl';
 import { getPreferredDeviceId } from '../lib/devicePreferences';
 import { loadCachedImage } from '../lib/imageCache';
 import {
@@ -74,6 +76,10 @@ export default function ServerListPage({
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [serverActionsMode, setServerActionsMode] = useState<'create' | 'join' | null>(null);
   const [inviteState, setInviteState] = useState<InviteState | null>(null);
+
+  // Lifted here (not local to RoomView) so RoomView and RoomSidebar — siblings — share one live
+  // copy of per-peer volume/mute state instead of only agreeing via localStorage on next mount.
+  const peerVolume = usePeerVolumeControl();
 
   // Just enough of selectedServer for useRoomConnection to know who to ask for the room's
   // server icon (its owner) and what to answer with if that owner is me — memoized so the
@@ -493,6 +499,8 @@ export default function ServerListPage({
         onRequestPeerSoundList={requestPeerSoundList}
         onRequestPeerSound={requestPeerSound}
         soundDownloadTick={soundDownloadTick}
+        onOpenVolumeMenu={peerVolume.openVolumeMenu}
+        activeVolumeMenuUserId={peerVolume.volumeMenu?.userId ?? null}
       />
 
       <div className="server-list-page__main">
@@ -517,6 +525,9 @@ export default function ServerListPage({
           onToggleCamera={handleToggleCamera}
           onSelectCamera={handleSelectCamera}
           onToggleScreenShare={handleToggleScreenShare}
+          getPeerVolume={peerVolume.getEffectiveVolume}
+          onOpenVolumeMenu={peerVolume.openVolumeMenu}
+          activeVolumeMenuUserId={peerVolume.volumeMenu?.userId ?? null}
         />
       </div>
 
@@ -549,6 +560,19 @@ export default function ServerListPage({
 
       {isScreenPickerOpen && (
         <ScreenSharePicker onSelect={handlePickScreenSource} onClose={() => setIsScreenPickerOpen(false)} />
+      )}
+
+      {peerVolume.volumeMenu && (
+        <ParticipantVolumeMenu
+          x={peerVolume.volumeMenu.x}
+          y={peerVolume.volumeMenu.y}
+          name={peerVolume.volumeMenu.name}
+          volume={peerVolume.getEffectivePeerSettings(peerVolume.volumeMenu.userId).volume}
+          isMuted={peerVolume.getEffectivePeerSettings(peerVolume.volumeMenu.userId).muted}
+          onVolumeChange={(value) => peerVolume.handlePeerVolumeChange(peerVolume.volumeMenu!.userId, value)}
+          onToggleMute={() => peerVolume.handleTogglePeerMute(peerVolume.volumeMenu!.userId)}
+          onClose={peerVolume.closeVolumeMenu}
+        />
       )}
     </div>
   );

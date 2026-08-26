@@ -6,8 +6,9 @@ import ConfirmModal from './components/ConfirmModal';
 import LoadingSpinner from './components/LoadingSpinner';
 import LoginPage from './pages/LoginPage';
 import ServerListPage from './pages/ServerListPage';
-import { getCurrentUser, setSessionToken } from './lib/api';
+import { TEST_MODE, getCurrentUser, setSessionToken } from './lib/api';
 import { clearStoredSessionToken, getStoredSessionToken, setStoredSessionToken } from './lib/session';
+import { clearStoredTestIdentity } from './lib/testIdentity';
 import { loadCachedImage } from './lib/imageCache';
 import './styles/App.css';
 
@@ -93,6 +94,11 @@ export default function App() {
   function handleLogout(): void {
     setSessionToken(null);
     void clearStoredSessionToken();
+    // [MODO TESTE] Without this, LoginPage's own stored-identity auto-login effect re-logs in
+    // instantly on remount — logout would look like it did nothing but leave the room. An
+    // explicit sign-out should stick even in test mode; real Google login has no equivalent
+    // auto-login to worry about.
+    if (TEST_MODE) clearStoredTestIdentity();
     setCurrentUser(null);
     setView('login');
   }

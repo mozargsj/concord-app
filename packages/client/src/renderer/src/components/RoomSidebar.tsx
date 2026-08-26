@@ -81,6 +81,12 @@ interface RoomSidebarProps {
   /** Bumped by ServerListPage every time a P2P sound download finishes — the trigger to refresh
    * the temp-cache list, since the download itself happens deep inside the mesh, not here. */
   soundDownloadTick: number;
+  /** Shared with RoomView via usePeerVolumeControl (lifted to ServerListPage) so muting/adjusting
+   * someone from either place stays in sync live, not just after a remount. */
+  onOpenVolumeMenu: (x: number, y: number, userId: string, name: string) => void;
+  /** userId of whoever's volume popup is currently open — drives the "clicked" highlight so the
+   * right-click action has visible feedback beyond the popup itself. */
+  activeVolumeMenuUserId: string | null;
 }
 
 export default function RoomSidebar({
@@ -117,7 +123,9 @@ export default function RoomSidebar({
   peerSoundLists,
   onRequestPeerSoundList,
   onRequestPeerSound,
-  soundDownloadTick
+  soundDownloadTick,
+  onOpenVolumeMenu,
+  activeVolumeMenuUserId
 }: RoomSidebarProps) {
   const [isCreatingRoom, setIsCreatingRoom] = useState(false);
   const [newRoomName, setNewRoomName] = useState('');
@@ -376,6 +384,8 @@ export default function RoomSidebar({
             isBroadcasting: boolean;
             isMicMuted: boolean;
             isDeafened: boolean;
+            // null for self — there's no incoming stream to adjust volume on for your own row.
+            userId: string | null;
           }[] = isJoined
             ? [
                 {
@@ -387,7 +397,8 @@ export default function RoomSidebar({
                   isSpeaking,
                   isBroadcasting: selfCameraOn || selfSharingScreen,
                   isMicMuted,
-                  isDeafened
+                  isDeafened,
+                  userId: null
                 },
                 ...peers.map((peer) => ({
                   key: peer.peerId,
@@ -403,7 +414,8 @@ export default function RoomSidebar({
                     (!!peer.personalStream && peer.personalStream.getVideoTracks().length > 0) ||
                     !!peer.screenStream,
                   isMicMuted: peer.isMicMuted,
-                  isDeafened: peer.isDeafened
+                  isDeafened: peer.isDeafened,
+                  userId: peer.userId
                 }))
               ]
             : [];
@@ -460,8 +472,26 @@ export default function RoomSidebar({
 
               {participants.length > 0 && (
                 <div className="room-sidebar__participants">
-                  {participants.map((participant) => (
-                    <div key={participant.key} className="room-sidebar__participant">
+                  {participants.map((participant) => {
+                    const isVolumeTarget = !participant.isSelf && !!participant.userId;
+                    const isVolumeMenuActive = isVolumeTarget && participant.userId === activeVolumeMenuUserId;
+                    return (
+                    <div
+                      key={participant.key}
+                      className={
+                        'room-sidebar__participant' +
+                        (isVolumeTarget ? ' room-sidebar__participant--volume-target' : '') +
+                        (isVolumeMenuActive ? ' room-sidebar__participant--volume-active' : '')
+                      }
+                      onContextMenu={
+                        isVolumeTarget
+                          ? (event) => {
+                              event.preventDefault();
+                              onOpenVolumeMenu(event.clientX, event.clientY, participant.userId!, participant.name);
+                            }
+                          : undefined
+                      }
+                    >
                       <span
                         className={
                           'room-sidebar__participant-avatar' +
@@ -492,7 +522,8 @@ export default function RoomSidebar({
                       {participant.isBroadcasting && <LiveBadge className="room-sidebar__live-badge" />}
                       {participant.isHost && <HostStarBadge className="room-sidebar__host-star" />}
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>

@@ -297,25 +297,36 @@
 .room-sidebar__participants {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: 2px 0 4px 28px;
+  gap: 8px;
+  padding: 4px 0 8px 28px;
 }
 
 .room-sidebar__participant {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 2px 4px;
+  gap: 10px;
+  padding: 4px 4px;
+  border-radius: var(--radius-sm);
+}
+
+/* Right-click-to-adjust-volume feedback — hover shows the row is actionable, the accent
+   background confirms which one the open popup (ParticipantVolumeMenu) is actually targeting. */
+.room-sidebar__participant--volume-target:hover {
+  background: var(--color-bg-elevated-hover);
+}
+
+.room-sidebar__participant--volume-active {
+  background: color-mix(in srgb, var(--color-accent) 20%, transparent);
 }
 
 .room-sidebar__participant-avatar {
-  width: 18px;
-  height: 18px;
+  width: 26px;
+  height: 26px;
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 10px;
+  font-size: 13px;
   font-weight: 700;
   color: #ffffff;
   flex-shrink: 0;
@@ -352,7 +363,7 @@
 
 .room-sidebar__participant-name {
   flex: 1;
-  font-size: 13px;
+  font-size: 15px;
   color: var(--color-text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;

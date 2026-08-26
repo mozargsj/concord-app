@@ -54,6 +54,17 @@
   background: #000000;
 }
 
+/* Right-click-to-adjust-volume feedback — hover shows the tile is actionable, the accent
+   outline confirms which one the open popup (ParticipantVolumeMenu) is actually targeting. */
+.room-view__participant-tile--volume-target:hover {
+  background: var(--color-bg-elevated-hover);
+}
+
+.room-view__participant-tile--volume-active {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
+}
+
 /* Locks the focused tile to 16:9 no matter the shape of the space around it —
    min()/cqw/cqh picks whichever axis is the limiting one, so the box never
    stretches past 16:9; the empty space around it reads as letterbox bars. */
