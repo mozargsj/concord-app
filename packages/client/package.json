@@ -1,7 +1,7 @@
 {
   "name": "@concord/client",
   "private": true,
-  "version": "0.0.53",
+  "version": "0.0.54",
   "description": "Concord — app P2P de áudio ao vivo e transmissão de tela, estilo Discord",
   "author": "Mozar",
   "main": "out/electron/main/index.js",
