@@ -120,6 +120,23 @@
   color: var(--color-text-primary);
 }
 
+.soundboard-popover__icon-button:disabled {
+  cursor: default;
+}
+
+.soundboard-popover__spin {
+  animation: soundboard-popover-spin 0.8s linear infinite;
+}
+
+@keyframes soundboard-popover-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .soundboard-popover__hint {
   margin: 0;
   font-size: 13px;

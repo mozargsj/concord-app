@@ -284,6 +284,18 @@ export class MeshManager {
     const answer = await entry.pc.createAnswer();
     await entry.pc.setLocalDescription(answer);
     this.opts.send({ type: 'sdp-answer', targetPeerId: fromPeerId, sdp: answer.sdp ?? '' });
+
+    // [Bug corrigido] A new joiner never saw an already-active screen share: getOrCreateConnection
+    // above adds every current local track (addLocalTracksTo) — mic/camera/screen — *before*
+    // createAnswer() runs, but an answer can only fill in m-lines the incoming offer already
+    // defined; it can't spontaneously add new ones. A joiner's own offer only has m-lines for
+    // *their* tracks (mic/camera, never screen, since they can't be sharing before even joining),
+    // so an existing sharer's screenVideo/screenAudio transceivers were created but left with no
+    // mid — never actually sent in that answer, and nothing afterward ever renegotiated to fix it.
+    // Any transceiver still missing a mid after this answer needs a follow-up offer from this side
+    // to actually get on the wire.
+    const hasUnnegotiatedTracks = entry.pc.getTransceivers().some((transceiver) => transceiver.mid === null);
+    if (hasUnnegotiatedTracks) void this.renegotiate(entry);
   }
 
   async handleAnswer(fromPeerId: string, sdp: string): Promise<void> {
@@ -546,6 +558,10 @@ export class MeshManager {
   async setLocalScreenTrack(stream: MediaStream | null): Promise<void> {
     const videoTrack = stream?.getVideoTracks()[0] ?? null;
     const audioTrack = stream?.getAudioTracks()[0] ?? null;
+    // Tells Chromium's encoder this is screen/text content, not a camera — it weighs spatial
+    // detail (sharp edges/text legibility) over temporal smoothness, the opposite trade-off a
+    // camera track wants. Standard MediaStreamTrack API, no custom encoding logic involved.
+    if (videoTrack) videoTrack.contentHint = 'detail';
 
     if (this.screenVideoTrack) this.screenStream.removeTrack(this.screenVideoTrack);
     if (this.screenAudioTrack) this.screenStream.removeTrack(this.screenAudioTrack);
@@ -686,7 +702,10 @@ export class MeshManager {
     }
     if (this.cameraTrack) entry.senders.camera = entry.pc.addTrack(this.cameraTrack, this.personalStream);
     if (this.screenVideoTrack) {
-      entry.senders.screenVideo = entry.pc.addTrack(this.screenVideoTrack, this.screenStream);
+      const sender = entry.pc.addTrack(this.screenVideoTrack, this.screenStream);
+      entry.senders.screenVideo = sender;
+      this.applyScreenVideoDegradationPreference(sender);
+      this.preferH264ForScreenVideo(entry.pc, sender);
     }
     if (this.screenAudioTrack) {
       const sender = entry.pc.addTrack(this.screenAudioTrack, this.screenStream);
@@ -923,6 +942,48 @@ export class MeshManager {
     void sender.setParameters(params).catch(() => {});
   }
 
+  /** Under bandwidth pressure, the BWE has to give something up — this tells it to give up
+   * framerate first and keep resolution, the opposite of the camera's default ('maintain-
+   * framerate' would make it, since a face mid-motion matters more than pixel sharpness there).
+   * Screen content is mostly static (a paused video call, a document, a slide) — losing fps is
+   * far less noticeable than losing enough resolution to make text illegible. Best-effort same
+   * as the audio ceiling above (setParameters() can reject right after addTrack). */
+  private applyScreenVideoDegradationPreference(sender: RTCRtpSender): void {
+    const params = sender.getParameters();
+    params.degradationPreference = 'maintain-resolution';
+    void sender.setParameters(params).catch(() => {});
+  }
+
+  /** Reorders the codec offer to put H.264 first, best-effort (falls back silently to whatever
+   * Chromium would've picked — VP8 by default — if H.264 isn't in this build's capability list,
+   * or if setCodecPreferences itself isn't available). Not a compression change by itself (H.264
+   * and VP8 are both lossy video codecs, similar quality/bitrate in software) — the real point is
+   * that only H.264 has a real shot at Chromium's hardware encoder path on Windows (NVENC/AMD/
+   * Quick Sync, all through the same generic Media Foundation Transform API — no per-vendor code
+   * needed here); VP8 in Chromium is software-only regardless of GPU. Confirmed working on real
+   * hardware (RTX 3080, this Electron/Chromium build): getStats() on the sender's outbound-rtp
+   * report showed `encoderImplementation: "MediaFoundationVideoEncodeAccelerator"` and
+   * `powerEfficientEncoder: true` — genuinely hardware-encoded, not just negotiated. Whether it
+   * lands on hardware on a given machine still depends on that machine's GPU driver, so this
+   * stays best-effort (falls back to software H.264/VP8 transparently if the driver can't). */
+  private preferH264ForScreenVideo(pc: RTCPeerConnection, sender: RTCRtpSender): void {
+    const transceiver = pc.getTransceivers().find((candidate) => candidate.sender === sender);
+    if (!transceiver?.setCodecPreferences) return;
+
+    const capabilities = RTCRtpSender.getCapabilities?.('video');
+    if (!capabilities) return;
+
+    const h264Codecs = capabilities.codecs.filter((codec) => codec.mimeType.toLowerCase() === 'video/h264');
+    if (h264Codecs.length === 0) return; // this build's Chromium doesn't offer H.264 at all
+
+    const otherCodecs = capabilities.codecs.filter((codec) => codec.mimeType.toLowerCase() !== 'video/h264');
+    try {
+      transceiver.setCodecPreferences([...h264Codecs, ...otherCodecs]);
+    } catch {
+      // invalid combination for this transceiver's current state — leave the default order
+    }
+  }
+
   private applyTrack(
     entry: PeerConnectionEntry,
     role: TrackRole,
@@ -938,6 +999,10 @@ export class MeshManager {
       const sender = entry.pc.addTrack(track, groupStream);
       entry.senders[role] = sender;
       if (role === 'screenAudio') this.raiseScreenAudioBitrateCeiling(sender);
+      if (role === 'screenVideo') {
+        this.applyScreenVideoDegradationPreference(sender);
+        this.preferH264ForScreenVideo(entry.pc, sender);
+      }
       return true;
     }
     if (!track && existing) {

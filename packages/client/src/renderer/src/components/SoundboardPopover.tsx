@@ -1,4 +1,4 @@
-import { Download, Pause, Play, Plus } from 'lucide-react';
+import { Download, Loader2, Pause, Play, Plus } from 'lucide-react';
 import { getAvatarColor } from '../lib/avatarColor';
 import type { OwnSound } from '../lib/soundCache';
 import type { SoundListEntry } from '../lib/webrtcMesh';
@@ -35,6 +35,8 @@ interface PlayModeProps {
   peerSounds: SoundListEntry[] | null;
   /** soundId -> already downloaded into the temporary preview cache. */
   downloadedSoundIds: Set<string>;
+  /** soundId -> download currently in flight (requested but not yet in downloadedSoundIds). */
+  downloadingSoundIds: Set<string>;
   onDownloadSound: (entry: SoundListEntry) => void;
   playingTempSoundId: string | null;
   onToggleTempPreview: (soundId: string) => void;
@@ -197,6 +199,7 @@ function PeerSoundsList(props: PlayModeProps) {
     <div className="soundboard-popover__list">
       {props.peerSounds.map((entry) => {
         const isDownloaded = props.downloadedSoundIds.has(entry.soundId);
+        const isDownloading = props.downloadingSoundIds.has(entry.soundId);
         const isPlaying = props.playingTempSoundId === entry.soundId;
         return (
           <div key={entry.soundId} className="soundboard-popover__sound soundboard-popover__sound--row">
@@ -219,6 +222,10 @@ function PeerSoundsList(props: PlayModeProps) {
                   <Plus size={14} />
                 </button>
               </>
+            ) : isDownloading ? (
+              <button className="soundboard-popover__icon-button" disabled title="Baixando…">
+                <Loader2 size={14} className="soundboard-popover__spin" />
+              </button>
             ) : (
               <button
                 className="soundboard-popover__icon-button"

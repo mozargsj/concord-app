@@ -1,0 +1,64 @@
+.native-loopback-help__backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+}
+
+.native-loopback-help {
+  width: 420px;
+  max-height: 80vh;
+  overflow-y: auto;
+  background: var(--color-bg-elevated);
+  border-radius: var(--radius-lg);
+  padding: 20px 24px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.native-loopback-help__header h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.native-loopback-help__intro {
+  margin: 0;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+}
+
+.native-loopback-help__steps {
+  margin: 0;
+  padding-left: 20px;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--color-text-primary);
+}
+
+.native-loopback-help__warning {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: rgba(240, 177, 50, 0.12);
+  color: var(--color-warning);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.native-loopback-help__fallback {
+  margin: 0;
+  font-size: 12px;
+  color: var(--color-text-muted);
+  line-height: 1.5;
+}
+
+.native-loopback-help__actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 4px;
+}

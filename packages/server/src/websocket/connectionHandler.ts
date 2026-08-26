@@ -1,6 +1,7 @@
 import type { WebSocket } from 'ws';
 import type { ClientToServerMessage } from '@concord/shared';
 import {
+  handleAvatarChanged,
   handleCandidateConfirm,
   handleDeviceSwitched,
   handleDisconnect,
@@ -48,6 +49,9 @@ export function handleConnection(socket: WebSocket): void {
           break;
         case 'screen-share-changed':
           handleScreenShareChanged(socket, message.isSharing);
+          break;
+        case 'avatar-changed':
+          handleAvatarChanged(socket);
           break;
       }
     } catch (error) {

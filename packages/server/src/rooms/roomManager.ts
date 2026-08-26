@@ -166,6 +166,15 @@ export function handleScreenShareChanged(socket: WebSocket, isSharing: boolean):
   broadcast(room, { type: 'peer-screen-share-changed', roomId: room.id, peerId: peer.id, isSharing }, peer.id);
 }
 
+export function handleAvatarChanged(socket: WebSocket): void {
+  const peer = peersBySocket.get(socket);
+  if (!peer) return;
+  const room = rooms.get(peer.roomId);
+  if (!room) return;
+  // Excludes the sender — they already have their own new avatar locally, nothing to re-fetch.
+  broadcast(room, { type: 'peer-avatar-changed', roomId: room.id, peerId: peer.id, userId: peer.userId }, peer.id);
+}
+
 export function handleDisconnect(socket: WebSocket): void {
   const peer = peersBySocket.get(socket);
   if (!peer) return;

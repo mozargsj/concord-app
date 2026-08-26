@@ -38,6 +38,11 @@ type SoundboardPopoverState = { mode: 'play' | 'config'; x: number; y: number };
 const ROLE_DONO = 1;
 const ROLE_ADMIN = 2;
 
+// Safety net for the soundboard "baixando" indicator — requestSound() has no failure signal of
+// its own (see downloadingSoundIds below), so this bounds how long a stalled/never-answered
+// request keeps the icon spinning.
+const SOUND_DOWNLOAD_TIMEOUT_MS = 20000;
+
 interface RoomSidebarProps {
   server: ServerSummary;
   myRole: number;
@@ -148,6 +153,12 @@ export default function RoomSidebar({
     avatarUrl: string | null;
   } | null>(null);
   const [tempSounds, setTempSounds] = useState<TempSound[]>([]);
+  // soundId -> currently mid-transfer over the 'sounds' data channel (requestSound() is
+  // fire-and-forget on the mesh side, no progress/failure signal comes back) — cleared either
+  // when the sound shows up in tempSounds (soundDownloadTick fired) or by the safety timeout
+  // below, so a peer that goes silent mid-transfer doesn't leave the icon spinning forever.
+  const [downloadingSoundIds, setDownloadingSoundIds] = useState<Set<string>>(new Set());
+  const downloadTimeoutsRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const [playingTempSoundId, setPlayingTempSoundId] = useState<string | null>(null);
   const playingTempAudioRef = useRef<HTMLAudioElement | null>(null);
   const [confirmAddTemp, setConfirmAddTemp] = useState<TempSound | null>(null);
@@ -189,10 +200,39 @@ export default function RoomSidebar({
     void refreshTempSounds();
   }, [soundDownloadTick]);
 
+  // Once a sound actually lands in the temp cache, it's done downloading — clear its spinner
+  // and cancel the safety timeout (whichever finishes first, this effect or the timeout, wins;
+  // both are safe to run since removing an id already gone from the set/map is a no-op).
+  useEffect(() => {
+    if (tempSounds.length === 0) return;
+    setDownloadingSoundIds((prev) => {
+      if (prev.size === 0) return prev;
+      const next = new Set(prev);
+      let changed = false;
+      for (const sound of tempSounds) {
+        if (next.delete(sound.id)) changed = true;
+      }
+      return changed ? next : prev;
+    });
+    for (const sound of tempSounds) {
+      const timeout = downloadTimeoutsRef.current.get(sound.id);
+      if (timeout) {
+        clearTimeout(timeout);
+        downloadTimeoutsRef.current.delete(sound.id);
+      }
+    }
+  }, [tempSounds]);
+
   useEffect(() => {
     return () => {
       activeSoundboardStopRef.current?.();
       playingTempAudioRef.current?.pause();
+      // Deliberately reads .current at cleanup time, not mount time — this ref holds a Map that
+      // grows over the component's whole lifetime as downloads start, not a DOM node whose
+      // identity effect this rule is meant to guard; capturing it at mount would just clear an
+      // empty map instead of whatever downloads are actually still pending at unmount.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+      for (const timeout of downloadTimeoutsRef.current.values()) clearTimeout(timeout);
     };
   }, []);
 
@@ -250,6 +290,18 @@ export default function RoomSidebar({
 
   function handleDownloadSound(entry: SoundListEntry) {
     if (!selectedSoundboardPeer) return;
+    if (downloadingSoundIds.has(entry.soundId)) return; // already in flight — ignore a repeat click
+    setDownloadingSoundIds((prev) => new Set(prev).add(entry.soundId));
+    const timeout = setTimeout(() => {
+      downloadTimeoutsRef.current.delete(entry.soundId);
+      setDownloadingSoundIds((prev) => {
+        if (!prev.has(entry.soundId)) return prev;
+        const next = new Set(prev);
+        next.delete(entry.soundId);
+        return next;
+      });
+    }, SOUND_DOWNLOAD_TIMEOUT_MS);
+    downloadTimeoutsRef.current.set(entry.soundId, timeout);
     onRequestPeerSound(selectedSoundboardPeer.peerId, entry.soundId, null);
   }
 
@@ -632,6 +684,7 @@ export default function RoomSidebar({
           onSelectPeer={handleSelectSoundboardPeer}
           peerSounds={selectedSoundboardPeer ? (peerSoundLists[selectedSoundboardPeer.peerId] ?? null) : null}
           downloadedSoundIds={new Set(tempSounds.map((sound) => sound.id))}
+          downloadingSoundIds={downloadingSoundIds}
           onDownloadSound={handleDownloadSound}
           playingTempSoundId={playingTempSoundId}
           onToggleTempPreview={handleToggleTempPreview}

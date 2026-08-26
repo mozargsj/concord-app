@@ -17,6 +17,21 @@ contextBridge.exposeInMainWorld('concord', {
     pickImage: () => ipcRenderer.invoke('media:pick-image'),
     pickAudio: () => ipcRenderer.invoke('media:pick-audio')
   },
+  processLoopback: {
+    start: (): Promise<boolean> => ipcRenderer.invoke('process-loopback:start'),
+    stop: () => ipcRenderer.send('process-loopback:stop'),
+    isAvailable: (): Promise<boolean> => ipcRenderer.invoke('process-loopback:is-available'),
+    onChunk: (callback: (chunk: Uint8Array) => void) => {
+      const listener = (_event: unknown, chunk: Uint8Array) => callback(chunk);
+      ipcRenderer.on('process-loopback:chunk', listener);
+      return () => ipcRenderer.removeListener('process-loopback:chunk', listener);
+    },
+    onStopped: (callback: () => void) => {
+      const listener = () => callback();
+      ipcRenderer.on('process-loopback:stopped', listener);
+      return () => ipcRenderer.removeListener('process-loopback:stopped', listener);
+    }
+  },
   imageCache: {
     save: (key: string, data: ArrayBuffer, mimeType: string) =>
       ipcRenderer.invoke('image-cache:save', key, data, mimeType),

@@ -132,6 +132,33 @@
   background: #d5363a;
 }
 
+.room-view__camera-wrap {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+.room-view__camera-wrap--gated video {
+  filter: blur(20px);
+  transform: scale(1.08);
+}
+
+.room-view__camera-gate-message {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: rgba(0, 0, 0, 0.4);
+  color: #ffffff;
+  font-size: 13px;
+  text-align: center;
+  padding: 0 16px;
+}
+
 .room-view__avatar {
   /* cqmin (not a plain % of width) — picks the smaller of the tile's own width/height, so the
      circle grows to fill as much of the tile as it can in *either* orientation without ever

@@ -3,7 +3,8 @@ import dotenv from 'dotenv';
 import { mkdir, readdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { loginWithGoogle } from './googleAuth';
-import { checkForUpdatesOnStartup } from './autoUpdate';
+import { checkForUpdatesOnStartup, isInstallingUpdate } from './autoUpdate';
+import './processLoopbackAudio';
 
 const isDev = !app.isPackaged;
 
@@ -135,7 +136,9 @@ function createMainWindow(): void {
 
   let isCloseConfirmed = false;
   window.on('close', (event) => {
-    if (isCloseConfirmed) return;
+    // The auto-updater closes this window itself to quit-and-install — that's not the user
+    // closing anything, so it must never hit the same confirmation dialog (autoUpdate.ts).
+    if (isCloseConfirmed || isInstallingUpdate()) return;
     event.preventDefault();
     void confirmAndClose(window, () => {
       isCloseConfirmed = true;

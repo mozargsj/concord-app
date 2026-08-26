@@ -28,7 +28,8 @@
     "package:test-dev": "npm run build:test-dev && electron-builder --config.productName=ConcordTest --config.appId=com.concord.app.test",
     "package:test-offline": "npm run build:test-offline && electron-builder --config.productName=ConcordTest --config.appId=com.concord.app.test",
     "package:test-real": "npm run build:test-real && electron-builder --config.productName=ConcordTestReal --config.appId=com.concord.app.test-real --config.publish.url=https://test-local.undersoft.tec.br/updates/",
-    "typecheck": "tsc -p tsconfig.renderer.json --noEmit && tsc -p tsconfig.electron.json --noEmit"
+    "typecheck": "tsc -p tsconfig.renderer.json --noEmit && tsc -p tsconfig.electron.json --noEmit",
+    "build:native": "node native/process-loopback/build.js"
   },
   "dependencies": {
     "@sapphi-red/web-noise-suppressor": "^0.4.0",
@@ -47,6 +48,8 @@
     "concurrently": "^8.2.2",
     "electron": "^31.4.0",
     "electron-builder": "^24.13.3",
+    "node-addon-api": "^8.9.2",
+    "node-gyp": "^11.5.0",
     "typescript": "^5.5.4",
     "vite": "^5.4.2",
     "wait-on": "^7.2.0"

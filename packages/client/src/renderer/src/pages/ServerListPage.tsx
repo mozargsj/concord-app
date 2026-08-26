@@ -27,6 +27,7 @@ import { useRoomConnection } from '../hooks/useRoomConnection';
 import { usePeerVolumeControl } from '../hooks/usePeerVolumeControl';
 import { getPreferredDeviceId } from '../lib/devicePreferences';
 import { loadCachedImage } from '../lib/imageCache';
+import { startExcludedLoopbackAudio, type LoopbackAudioSession } from '../lib/processLoopbackAudio';
 import {
   playCameraStart,
   playCameraStop,
@@ -138,6 +139,18 @@ export default function ServerListPage({
 
   const cameraStreamRef = useRef<MediaStream | null>(null);
   const screenStreamRef = useRef<MediaStream | null>(null);
+  // Only set when handlePickScreenSource used the native excluded-loopback audio path (Windows,
+  // addon available) instead of the legacy getUserMedia system-audio capture — its track lives
+  // on screenStreamRef like any other, but the native capture thread + AudioContext behind it
+  // need their own teardown call, which plain track.stop() doesn't reach.
+  const loopbackAudioSessionRef = useRef<LoopbackAudioSession | null>(null);
+
+  function stopScreenShareTracks() {
+    screenStreamRef.current?.getTracks().forEach((track) => track.stop());
+    screenStreamRef.current = null;
+    loopbackAudioSessionRef.current?.stop();
+    loopbackAudioSessionRef.current = null;
+  }
 
   useEffect(() => {
     listMyServers().then((servers) => {
@@ -201,9 +214,8 @@ export default function ServerListPage({
   useEffect(() => {
     if (selectedRoomId) return;
     cameraStreamRef.current?.getTracks().forEach((track) => track.stop());
-    screenStreamRef.current?.getTracks().forEach((track) => track.stop());
     cameraStreamRef.current = null;
-    screenStreamRef.current = null;
+    stopScreenShareTracks();
     setCameraStream(null);
     setScreenStream(null);
   }, [selectedRoomId]);
@@ -211,7 +223,7 @@ export default function ServerListPage({
   useEffect(() => {
     return () => {
       cameraStreamRef.current?.getTracks().forEach((track) => track.stop());
-      screenStreamRef.current?.getTracks().forEach((track) => track.stop());
+      stopScreenShareTracks();
     };
   }, []);
 
@@ -277,13 +289,18 @@ export default function ServerListPage({
     }
   }
 
+  // Shared by the manual "stop sharing" path and the shared-window-closed path below — both end
+  // up at the exact same cleanup, just triggered differently (same pattern as teardownCamera).
+  function stopScreenShare() {
+    stopScreenShareTracks();
+    setScreenStream(null);
+    setLocalScreenTrack(null);
+    playTransmissionExit();
+  }
+
   function handleToggleScreenShare() {
     if (screenStream) {
-      screenStream.getTracks().forEach((track) => track.stop());
-      screenStreamRef.current = null;
-      setScreenStream(null);
-      setLocalScreenTrack(null);
-      playTransmissionExit();
+      stopScreenShare();
       return;
     }
     setIsScreenPickerOpen(true);
@@ -291,6 +308,13 @@ export default function ServerListPage({
 
   async function handlePickScreenSource(source: ScreenSource, includeAudio: boolean) {
     setIsScreenPickerOpen(false);
+    // Excludes Concord's own audio from the loopback (processLoopbackAudio.ts) — fixes viewers
+    // hearing their own voice echoed back during a transmission with system audio (only reported
+    // with system audio on, matches: Concord's own playback of everyone else's mic was getting
+    // folded into the sharer's captured system audio and sent back out). Windows-only; returns
+    // null on any other platform or if the native addon isn't available/blocked, in which case
+    // the legacy whole-desktop-loopback capture below runs completely unchanged.
+    const loopbackSession = includeAudio ? await startExcludedLoopbackAudio() : null;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         // Electron's documented desktopCapturer pattern — legacy constraint shape is still
@@ -314,9 +338,15 @@ export default function ServerListPage({
         // funcionando, por nunca passar por esse objeto). Constraint legada (`mandatory`) só
         // aceita se misturar com outra propriedade padrão dentro do array `optional` — não solta
         // no mesmo objeto. Pedido de estéreo continua o mesmo, só a forma de pedir mudou.
-        audio: includeAudio
-          ? ({ mandatory: { chromeMediaSource: 'desktop' }, optional: [{ channelCount: 2 }] } as MediaTrackConstraints)
-          : false,
+        //
+        // includeAudio && !loopbackSession: só pede áudio por aqui quando o caminho nativo acima
+        // não rodou ou não deu certo — com ele, o áudio vem de loopbackSession.track em vez desta
+        // constraint, e pedir os dois ao mesmo tempo botaria dois sistemas de captura de sistema
+        // rodando ao mesmo tempo.
+        audio:
+          includeAudio && !loopbackSession
+            ? ({ mandatory: { chromeMediaSource: 'desktop' }, optional: [{ channelCount: 2 }] } as MediaTrackConstraints)
+            : false,
         video: {
           mandatory: {
             chromeMediaSource: 'desktop',
@@ -324,12 +354,32 @@ export default function ServerListPage({
           }
         } as MediaTrackConstraints
       });
+      if (loopbackSession) {
+        loopbackAudioSessionRef.current = loopbackSession;
+        stream.addTrack(loopbackSession.track);
+      }
       screenStreamRef.current = stream;
       setScreenStream(stream);
       setMediaError(null);
       setLocalScreenTrack(stream);
       playTransmissionEnter();
+
+      // Fires when the captured source itself disappears (the shared window/app/game was closed,
+      // not the user clicking "parar de compartilhar") — same rationale and guard as the camera's
+      // track.onended above: without this, the sharer's own state never updates, so nothing ever
+      // tells viewers to stop either (setLocalScreenTrack(null) is what sends screen-share-changed:
+      // false), leaving their tile stuck on a dead track forever instead of closing automatically.
+      const videoTrack = stream.getVideoTracks()[0];
+      if (videoTrack) {
+        videoTrack.onended = () => {
+          if (screenStreamRef.current !== stream) return; // stale handler from an already-replaced stream
+          stopScreenShare();
+          setMediaError('O aplicativo compartilhado foi fechado e a transmissão foi encerrada.');
+          void reportClientError('ScreenShareEndedUnexpectedly', 'Screen share video track ended without user action (shared window/app/process closed)');
+        };
+      }
     } catch (error) {
+      loopbackSession?.stop();
       setMediaError(error instanceof Error ? error.message : 'Não foi possível capturar a tela escolhida.');
       void reportClientError('ScreenCaptureError', error instanceof Error ? error.message : String(error), error instanceof Error ? error.stack : undefined);
     }

@@ -74,6 +74,16 @@ export interface ScreenShareChangedMessage {
   isSharing: boolean;
 }
 
+/** Avatar images are P2P-only (never touch this server, see decisions.md §3) — a peer only ever
+ * asks another for their avatar once, right when that peer is first seen (requestPeerImages in
+ * useRoomConnection.ts). Changing the picture mid-call leaves no observable trace of its own
+ * (no track, no state flag), so without this, everyone already connected keeps showing the old
+ * one until they leave and rejoin. Same "no other signal exists" rationale as device-switched
+ * above — broadcast explicitly so already-connected peers know to ask again. */
+export interface AvatarChangedMessage {
+  type: 'avatar-changed';
+}
+
 export type ClientToServerMessage =
   | JoinRoomMessage
   | SdpOfferMessage
@@ -84,7 +94,8 @@ export type ClientToServerMessage =
   | PingMessage
   | DeviceSwitchedMessage
   | MicStateMessage
-  | ScreenShareChangedMessage;
+  | ScreenShareChangedMessage
+  | AvatarChangedMessage;
 
 /** Relayed to the target peer with the sender's id attached, since the client-to-server shape has no envelope. */
 export interface SdpOfferRelayMessage extends SdpOfferMessage {
@@ -168,6 +179,16 @@ export interface PeerScreenShareChangedMessage {
   isSharing: boolean;
 }
 
+/** userId included directly (like peer-joined) rather than making the receiving client look one
+ * up from its own peer list — avoids any dependency on that list being up to date at the moment
+ * this arrives. */
+export interface PeerAvatarChangedMessage {
+  type: 'peer-avatar-changed';
+  roomId: string;
+  peerId: string;
+  userId: string;
+}
+
 export type ServerToClientMessage =
   | RoomJoinedMessage
   | JoinRejectedMessage
@@ -182,4 +203,5 @@ export type ServerToClientMessage =
   | PongMessage
   | PeerDeviceSwitchedMessage
   | PeerMicStateMessage
-  | PeerScreenShareChangedMessage;
+  | PeerScreenShareChangedMessage
+  | PeerAvatarChangedMessage;

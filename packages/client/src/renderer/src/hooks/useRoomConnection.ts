@@ -530,6 +530,14 @@ export function useRoomConnection(
             }));
           }
           break;
+        case 'peer-avatar-changed':
+          // Same request the initial peer-joined fetch makes (requestPeerImages) — the hash
+          // comparison on the other end naturally turns this into a real transfer only when the
+          // avatar actually changed, so re-asking unconditionally here is cheap and correct.
+          void loadCachedImage('avatar', message.userId).then((cached) => {
+            mesh.requestImage(message.peerId, 'avatar', message.userId, cached?.hash ?? null);
+          });
+          break;
       }
     });
 
@@ -575,6 +583,14 @@ export function useRoomConnection(
   useEffect(() => {
     signalingRef.current?.send({ type: 'mic-state', isMicMuted, isDeafened });
   }, [isMicMuted, isDeafened]);
+
+  // Fires on mount too (like mic-state above) — harmless, whoever's already in the room just
+  // re-asks and gets 'unchanged' back if nothing really changed. Without this, changing your
+  // avatar mid-call is invisible to everyone else until they leave and rejoin (peer-avatar-
+  // changed in messages.ts).
+  useEffect(() => {
+    signalingRef.current?.send({ type: 'avatar-changed' });
+  }, [myAvatarUrl]);
 
   function setLocalCameraTrack(track: MediaStreamTrack | null): void {
     void meshRef.current?.setLocalCameraTrack(track);

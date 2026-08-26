@@ -89,6 +89,13 @@ declare global {
         pickImage: () => Promise<PickedImage | null>;
         pickAudio: () => Promise<PickedAudio | null>;
       };
+      processLoopback: {
+        start: () => Promise<boolean>;
+        stop: () => void;
+        isAvailable: () => Promise<boolean>;
+        onChunk: (callback: (chunk: Uint8Array) => void) => () => void;
+        onStopped: (callback: () => void) => () => void;
+      };
       imageCache: {
         save: (key: string, data: ArrayBuffer, mimeType: string) => Promise<boolean>;
         load: (key: string) => Promise<CachedImage | null>;

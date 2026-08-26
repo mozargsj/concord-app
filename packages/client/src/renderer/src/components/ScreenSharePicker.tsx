@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { ScreenSource } from '../types/window';
 import { getIncludeAudioPreference, setIncludeAudioPreference } from '../lib/screenSharePreferences';
+import NativeLoopbackHelpModal from './NativeLoopbackHelpModal';
 import '../styles/ScreenSharePicker.css';
 
 interface ScreenSharePickerProps {
@@ -14,12 +15,30 @@ export default function ScreenSharePicker({ onSelect, onClose }: ScreenSharePick
   // Starts from whatever was chosen last time (getIncludeAudioPreference), not always unchecked —
   // keeps the choice consistent across transmissions instead of resetting every time it's opened.
   const [includeAudio, setIncludeAudio] = useState(getIncludeAudioPreference);
+  // null while the check is in flight — the hint only makes sense once we actually know either way.
+  const [isEchoFixAvailable, setIsEchoFixAvailable] = useState<boolean | null>(null);
+  const [isHelpOpen, setIsHelpOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     window.concord.media.getScreenSources().then((result) => {
       if (!cancelled) setSources(result);
     });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    window.concord.processLoopback
+      .isAvailable()
+      .then((available) => {
+        if (!cancelled) setIsEchoFixAvailable(available);
+      })
+      .catch(() => {
+        if (!cancelled) setIsEchoFixAvailable(false);
+      });
     return () => {
       cancelled = true;
     };
@@ -70,17 +89,24 @@ export default function ScreenSharePicker({ onSelect, onClose }: ScreenSharePick
         </div>
 
         <footer className="screen-picker__footer">
-          <label className="screen-picker__audio-toggle">
-            <input
-              type="checkbox"
-              checked={includeAudio}
-              onChange={(event) => {
-                setIncludeAudio(event.target.checked);
-                setIncludeAudioPreference(event.target.checked);
-              }}
-            />
-            Incluir áudio do sistema
-          </label>
+          <div className="screen-picker__audio-column">
+            <label className="screen-picker__audio-toggle">
+              <input
+                type="checkbox"
+                checked={includeAudio}
+                onChange={(event) => {
+                  setIncludeAudio(event.target.checked);
+                  setIncludeAudioPreference(event.target.checked);
+                }}
+              />
+              Incluir áudio do sistema
+            </label>
+            {includeAudio && isEchoFixAvailable === false && (
+              <button type="button" className="screen-picker__echo-hint" onClick={() => setIsHelpOpen(true)}>
+                ⚠ Correção de eco indisponível neste PC — como ativar
+              </button>
+            )}
+          </div>
 
           <button
             className="screen-picker__confirm"
@@ -91,6 +117,7 @@ export default function ScreenSharePicker({ onSelect, onClose }: ScreenSharePick
           </button>
         </footer>
       </div>
+      {isHelpOpen && <NativeLoopbackHelpModal onClose={() => setIsHelpOpen(false)} />}
     </div>
   );
 }

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Loader2 } from 'lucide-react';
 import type { UserProfile } from '@concord/shared';
 import Button from '../components/Button';
 import ConfirmModal from '../components/ConfirmModal';
@@ -92,7 +93,11 @@ export default function ProfilePage({ user, serverId, onClose, onUserChange, onL
           ) : (
             <span>{displayName.charAt(0).toUpperCase()}</span>
           )}
-          <span className="profile-page__avatar-overlay">{isUploadingAvatar ? '…' : 'Alterar'}</span>
+          <span
+            className={'profile-page__avatar-overlay' + (isUploadingAvatar ? ' profile-page__avatar-overlay--visible' : '')}
+          >
+            {isUploadingAvatar ? <Loader2 size={20} className="profile-page__avatar-spinner" /> : 'Alterar'}
+          </span>
         </button>
 
         <div className="profile-page__field">

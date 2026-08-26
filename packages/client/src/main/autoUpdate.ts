@@ -11,6 +11,19 @@ export interface UpdateStatusInfo {
   version?: string;
 }
 
+// [Bug corrigido] quitAndInstall() fecha a janela internamente pra poder sair do processo, o que
+// dispara o mesmo evento 'close' que o botão de fechar/Alt+F4 usam — e main/index.ts sempre pedia
+// confirmação nesse evento, sem diferenciar "o usuário está fechando" de "o update está se
+// instalando sozinho". Resultado: o update silencioso deixava de ser silencioso, mostrando "Tem
+// certeza que deseja fechar?" bem no meio de uma instalação automática. index.ts checa essa flag
+// antes de pedir confirmação — só entra em `true` logo antes do quitAndInstall(), então continua
+// pedindo confirmação normalmente pra qualquer fechamento de verdade iniciado pelo usuário.
+let installingUpdate = false;
+
+export function isInstallingUpdate(): boolean {
+  return installingUpdate;
+}
+
 /**
  * Checks for an update on every launch and installs it silently, no prompt — the renderer shows
  * a dynamic message/progress bar while it happens (see App.tsx's onUpdateStatus), driven by the
@@ -56,6 +69,7 @@ export function checkForUpdatesOnStartup(window: BrowserWindow, isDev: boolean):
   autoUpdater.on('update-downloaded', (info) => {
     console.log('[autoUpdate] update-downloaded', info);
     send({ status: 'updating', phase: 'installing', version: info.version });
+    installingUpdate = true;
     autoUpdater.quitAndInstall(true, true);
   });
 

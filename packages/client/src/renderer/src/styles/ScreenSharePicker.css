@@ -131,12 +131,33 @@
   justify-content: space-between;
 }
 
+.screen-picker__audio-column {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-start;
+}
+
 .screen-picker__audio-toggle {
   display: flex;
   align-items: center;
   gap: 8px;
   font-size: 13px;
   color: var(--color-text-secondary);
+}
+
+.screen-picker__echo-hint {
+  border: none;
+  background: none;
+  padding: 0;
+  font-size: 11px;
+  color: var(--color-warning);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.screen-picker__echo-hint:hover {
+  opacity: 0.85;
 }
 
 .screen-picker__confirm {

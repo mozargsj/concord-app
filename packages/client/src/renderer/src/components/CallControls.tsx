@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Mic, MicOff, Video, VideoOff, ChevronDown, ScreenShare, MoreHorizontal, PhoneOff } from 'lucide-react';
+import { Mic, MicOff, Video, VideoOff, ChevronDown, ScreenShare, MoreHorizontal, PhoneOff, Minimize2 } from 'lucide-react';
 import DeviceMenu from './DeviceMenu';
 import MutedHint from './MutedHint';
 import '../styles/CallControls.css';
@@ -15,6 +15,13 @@ interface CallControlsProps {
   isSharingScreen: boolean;
   onToggleScreenShare: () => void;
   onLeave: () => void;
+  /** A tile (screen or camera) is currently in fullscreen focus — see RoomView's focusedTileKey.
+   * While true, the red button below means "exit that focused view", not "leave the call": it
+   * sits in the same place as the tile's own "×"/Esc exit, so it's easy to reach for by habit
+   * mid-focus and had actually caused someone to leave the whole room by accident wanting only to
+   * stop viewing a transmission. */
+  isFocused: boolean;
+  onExitFocus: () => void;
 }
 
 export default function CallControls({
@@ -27,7 +34,9 @@ export default function CallControls({
   onSelectCamera,
   isSharingScreen,
   onToggleScreenShare,
-  onLeave
+  onLeave,
+  isFocused,
+  onExitFocus
 }: CallControlsProps) {
   const [openMenu, setOpenMenu] = useState<'mic' | 'camera' | null>(null);
 
@@ -93,9 +102,15 @@ export default function CallControls({
         </button>
       </div>
 
-      <button className="call-controls__hangup" title="Desconectar" onClick={onLeave}>
-        <PhoneOff size={18} />
-      </button>
+      {isFocused ? (
+        <button className="call-controls__hangup" title="Sair da transmissão" onClick={onExitFocus}>
+          <Minimize2 size={18} />
+        </button>
+      ) : (
+        <button className="call-controls__hangup" title="Desconectar" onClick={onLeave}>
+          <PhoneOff size={18} />
+        </button>
+      )}
     </div>
   );
 }

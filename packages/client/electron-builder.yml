@@ -11,6 +11,15 @@ files:
   - out/electron/**/*
   - out/renderer/**/*
   - package.json
+  # Native addon (packages/client/native/process-loopback) — excludes Concord's own audio from
+  # the loopback captured for screen-share system audio, see processLoopbackAudio.ts. Windows
+  # x64 only; missing on any other platform/arch, which the loader already treats as "native
+  # path unavailable" and falls back to the plain getUserMedia capture.
+  - native/process-loopback/build/Release/*.node
+asarUnpack:
+  # Native modules can't be dlopen'd from inside app.asar — Electron transparently redirects
+  # any read of this path to the matching file under app.asar.unpacked instead.
+  - native/process-loopback/build/Release/*.node
 # Packaged main process reads GOOGLE_OAUTH_CLIENT_ID/SECRET from a .env sitting next to the
 # installed .exe (main/index.ts) — process.cwd()-based dotenv resolution silently found nothing
 # there, since cwd is wherever the user launched the .exe from, never the install directory.

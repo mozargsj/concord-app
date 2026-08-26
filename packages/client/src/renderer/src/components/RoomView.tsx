@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { RoomSummary } from '@concord/shared';
 import type { RoomPeer } from '../hooks/useRoomConnection';
-import { HeadphoneOff, MicOff, X } from 'lucide-react';
+import { Eye, HeadphoneOff, MicOff, X } from 'lucide-react';
 import CallControls from './CallControls';
 import MediaStreamVideo from './MediaStreamVideo';
 import ScreenShareTile from './ScreenShareTile';
@@ -86,6 +86,12 @@ export default function RoomView({
   activeVolumeMenuUserId
 }: RoomViewProps) {
   const [focusedTileKey, setFocusedTileKey] = useState<string | null>(null);
+  // A remote peer's camera stays blurred/gated (same "clique para visualizar" idea as a screen
+  // share, decision from the Mozar) until clicked at least once — keyed by tile.key, same
+  // identifier focusedTileKey already uses. Never applies to the local user's own camera preview
+  // (showCamera below), matching ScreenShareTile's isOwnPreview exemption. Stays viewed for the
+  // rest of the session once clicked — no reset button for this one, unlike the screen tile's "×".
+  const [viewedCameraPeerIds, setViewedCameraPeerIds] = useState<Set<string>>(new Set());
 
   const peerMediaRef = useRef<Map<string, { hasVideo: boolean; hasScreen: boolean }>>(new Map());
 
@@ -249,7 +255,19 @@ export default function RoomView({
             ) : showCamera ? (
               <MediaStreamVideo stream={cameraStream} mirrored fit="cover" />
             ) : hasRemoteVideo ? (
-              <MediaStreamVideo stream={remoteStream!} muted={isDeafened} volume={effectiveVolume} fit="cover" />
+              <div
+                className={
+                  'room-view__camera-wrap' + (viewedCameraPeerIds.has(tile.key) ? '' : ' room-view__camera-wrap--gated')
+                }
+              >
+                <MediaStreamVideo stream={remoteStream!} muted={isDeafened} volume={effectiveVolume} fit="cover" />
+                {!viewedCameraPeerIds.has(tile.key) && (
+                  <div className="room-view__camera-gate-message">
+                    <Eye size={22} />
+                    <span>Clique para visualizar</span>
+                  </div>
+                )}
+              </div>
             ) : (
               <div
                 className={'room-view__avatar' + (speaking ? ' room-view__avatar--speaking' : '')}
@@ -291,7 +309,16 @@ export default function RoomView({
                 (isVolumeMenuActive ? ' room-view__participant-tile--volume-active' : '')
               }
               style={isFocused ? undefined : getGridItemStyle(index, tiles.length)}
-              onClick={isFocusable && !isFocused ? () => setFocusedTileKey(tile.key) : undefined}
+              onClick={
+                isFocusable && !isFocused
+                  ? () => {
+                      setFocusedTileKey(tile.key);
+                      if (hasRemoteVideo) {
+                        setViewedCameraPeerIds((prev) => (prev.has(tile.key) ? prev : new Set(prev).add(tile.key)));
+                      }
+                    }
+                  : undefined
+              }
               onContextMenu={
                 tile.kind === 'participant' && tile.userId
                   ? (event) => {
@@ -357,6 +384,8 @@ export default function RoomView({
         isSharingScreen={!!screenStream}
         onToggleScreenShare={onToggleScreenShare}
         onLeave={onLeave}
+        isFocused={focusedTileKey !== null}
+        onExitFocus={() => setFocusedTileKey(null)}
       />
     </div>
   );
