@@ -147,8 +147,14 @@ function createMainWindow(): void {
 
   // Waits for the page's own script (and its onUpdateStatus listener) to be ready before
   // sending anything — checkForUpdatesOnStartup's status events would otherwise risk arriving
-  // before the renderer is listening for them.
-  window.webContents.once('did-finish-load', () => {
+  // before the renderer is listening for them. `.on`, not `.once`: a Vite full-reload in dev (its
+  // fallback when HMR can't patch a module in place, e.g. after a broken import) fires
+  // `did-finish-load` again with a freshly-mounted App.tsx whose updateStatus resets to
+  // 'checking' — a one-shot listener here left that fresh mount waiting forever for a status
+  // message that was never coming again, stuck on the update screen. Harmless to re-run on any
+  // real reload in production too (checkForUpdatesOnStartup is a plain re-check, not a resource
+  // that needs cleanup between calls).
+  window.webContents.on('did-finish-load', () => {
     checkForUpdatesOnStartup(window, isDev);
   });
 

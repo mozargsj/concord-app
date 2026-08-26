@@ -3,6 +3,7 @@ import type { UserProfile } from '@concord/shared';
 import Button from '../components/Button';
 import ConfirmModal from '../components/ConfirmModal';
 import ImageCropModal from '../components/ImageCropModal';
+import ReportModal from '../components/ReportModal';
 import { updateProfile } from '../lib/api';
 import { pickImageFile, type PickedImageFile } from '../lib/imagePicker';
 import { saveCachedImage } from '../lib/imageCache';
@@ -10,18 +11,22 @@ import '../styles/ProfilePage.css';
 
 interface ProfilePageProps {
   user: UserProfile;
+  /** Whatever server was selected when Profile was opened, if any — forwarded to ReportModal so
+   * a bug/melhoria report keeps that context, purely optional (a report can be filed with none). */
+  serverId?: string;
   onClose: () => void;
   onUserChange: (user: UserProfile) => void;
   onLogout: () => void;
 }
 
-export default function ProfilePage({ user, onClose, onUserChange, onLogout }: ProfilePageProps) {
+export default function ProfilePage({ user, serverId, onClose, onUserChange, onLogout }: ProfilePageProps) {
   const [displayName, setDisplayName] = useState(user.displayName);
   const [isSavingName, setIsSavingName] = useState(false);
   const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
   const [pendingCrop, setPendingCrop] = useState<PickedImageFile | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLogoutConfirmOpen, setIsLogoutConfirmOpen] = useState(false);
+  const [isReportOpen, setIsReportOpen] = useState(false);
 
   async function handleSaveName() {
     const trimmed = displayName.trim();
@@ -119,6 +124,9 @@ export default function ProfilePage({ user, onClose, onUserChange, onLogout }: P
         {error && <p className="profile-page__error">{error}</p>}
 
         <div className="profile-page__logout-section">
+          <Button variant="ghost" onClick={() => setIsReportOpen(true)}>
+            Reportar um problema
+          </Button>
           <Button
             variant="danger"
             className="profile-page__logout"
@@ -137,6 +145,8 @@ export default function ProfilePage({ user, onClose, onUserChange, onLogout }: P
           onApply={handleApplyCrop}
         />
       )}
+
+      {isReportOpen && <ReportModal serverId={serverId} onClose={() => setIsReportOpen(false)} />}
 
       {isLogoutConfirmOpen && (
         <ConfirmModal

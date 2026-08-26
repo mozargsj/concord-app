@@ -2,6 +2,9 @@ import { useEffect, useState } from 'react';
 import type { ServerSummary } from '@concord/shared';
 import Button from './Button';
 import ImageCropModal from './ImageCropModal';
+import IllustratedNotice from './IllustratedNotice';
+import uploadFailedArt from '../assets/images/upload-failed.png';
+import { UPLOAD_FAILED_MESSAGES } from '../lib/errorMessages';
 import { ApiError, updateServer } from '../lib/api';
 import { pickImageFile, type PickedImageFile } from '../lib/imagePicker';
 import { saveCachedImage } from '../lib/imageCache';
@@ -29,6 +32,7 @@ export default function EditServerModal({ server, onClose, onServerUpdated }: Ed
   const [isPickingImage, setIsPickingImage] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isSaveFailure, setIsSaveFailure] = useState(false);
 
   useEffect(() => {
     return () => {
@@ -64,6 +68,7 @@ export default function EditServerModal({ server, onClose, onServerUpdated }: Ed
     if (!hasChanges) return;
     setIsSaving(true);
     setError(null);
+    setIsSaveFailure(false);
     try {
       let updated: ServerSummary = server;
       if (trimmedName && trimmedName !== server.name) {
@@ -76,7 +81,9 @@ export default function EditServerModal({ server, onClose, onServerUpdated }: Ed
       onServerUpdated(updated);
       onClose();
     } catch (err) {
-      setError(err instanceof ApiError && err.code === 'name-taken' ? 'Esse nome já está em uso.' : 'Não foi possível salvar as alterações.');
+      const isNameTaken = err instanceof ApiError && err.code === 'name-taken';
+      setError(isNameTaken ? 'Esse nome já está em uso.' : 'Não foi possível salvar as alterações.');
+      setIsSaveFailure(!isNameTaken);
     } finally {
       setIsSaving(false);
     }
@@ -119,7 +126,10 @@ export default function EditServerModal({ server, onClose, onServerUpdated }: Ed
           />
         </div>
 
-        {error && <p className="edit-server-modal__error">{error}</p>}
+        {error && isSaveFailure && (
+          <IllustratedNotice icon={uploadFailedArt} messages={UPLOAD_FAILED_MESSAGES} detail={error} />
+        )}
+        {error && !isSaveFailure && <p className="edit-server-modal__error">{error}</p>}
 
         <div className="edit-server-modal__actions">
           <Button variant="ghost" onClick={onClose}>

@@ -2,6 +2,9 @@ import { useEffect, useState, type FormEvent } from 'react';
 import type { ServerSummary } from '@concord/shared';
 import Button from './Button';
 import ImageCropModal from './ImageCropModal';
+import IllustratedNotice from './IllustratedNotice';
+import uploadFailedArt from '../assets/images/upload-failed.png';
+import { UPLOAD_FAILED_MESSAGES } from '../lib/errorMessages';
 import { ApiError, createServer, joinServerWithCode } from '../lib/api';
 import { pickImageFile, type PickedImageFile } from '../lib/imagePicker';
 import { saveCachedImage } from '../lib/imageCache';
@@ -22,6 +25,7 @@ export default function ServerActionsModal({ mode, onClose, onServerCreated, onS
   const [isPickingImage, setIsPickingImage] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
+  const [isCreateFailure, setIsCreateFailure] = useState(false);
 
   const [code, setCode] = useState('');
   const [isJoining, setIsJoining] = useState(false);
@@ -37,6 +41,7 @@ export default function ServerActionsModal({ mode, onClose, onServerCreated, onS
   async function handlePickImage() {
     setIsPickingImage(true);
     setCreateError(null);
+    setIsCreateFailure(false);
     try {
       const picked = await pickImageFile();
       if (picked) setPendingCropSource(picked);
@@ -62,10 +67,12 @@ export default function ServerActionsModal({ mode, onClose, onServerCreated, onS
     const trimmed = name.trim();
     if (!trimmed) {
       setCreateError('Digite um nome para o servidor.');
+      setIsCreateFailure(false);
       return;
     }
     setIsCreating(true);
     setCreateError(null);
+    setIsCreateFailure(false);
     try {
       const server = await createServer(trimmed);
       if (pendingIcon) {
@@ -75,7 +82,9 @@ export default function ServerActionsModal({ mode, onClose, onServerCreated, onS
         onServerCreated(server);
       }
     } catch (err) {
-      setCreateError(err instanceof ApiError && err.code === 'name-taken' ? 'Esse nome já está em uso.' : 'Não foi possível criar o servidor.');
+      const isNameTaken = err instanceof ApiError && err.code === 'name-taken';
+      setCreateError(isNameTaken ? 'Esse nome já está em uso.' : 'Não foi possível criar o servidor.');
+      setIsCreateFailure(!isNameTaken);
     } finally {
       setIsCreating(false);
     }
@@ -135,7 +144,10 @@ export default function ServerActionsModal({ mode, onClose, onServerCreated, onS
               onChange={(event) => setName(event.target.value)}
               autoFocus
             />
-            {createError && <p className="server-actions-modal__error">{createError}</p>}
+            {createError && isCreateFailure && (
+              <IllustratedNotice icon={uploadFailedArt} messages={UPLOAD_FAILED_MESSAGES} detail={createError} />
+            )}
+            {createError && !isCreateFailure && <p className="server-actions-modal__error">{createError}</p>}
             <Button type="submit" disabled={isCreating}>
               {isCreating ? 'Criando…' : 'Criar servidor'}
             </Button>

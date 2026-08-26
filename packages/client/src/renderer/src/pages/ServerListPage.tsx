@@ -53,6 +53,7 @@ interface InviteState {
   code: string | null;
   isLoading: boolean;
   error: string | null;
+  isForbidden: boolean;
 }
 
 export default function ServerListPage({
@@ -371,15 +372,17 @@ export default function ServerListPage({
 
   async function handleOpenInvite() {
     if (!selectedServerId) return;
-    setInviteState({ code: null, isLoading: true, error: null });
+    setInviteState({ code: null, isLoading: true, error: null, isForbidden: false });
     try {
       const code = await createInvite(selectedServerId);
-      setInviteState({ code, isLoading: false, error: null });
+      setInviteState({ code, isLoading: false, error: null, isForbidden: false });
     } catch (error) {
+      const isForbidden = error instanceof ApiError && error.code === 'forbidden';
       setInviteState({
         code: null,
         isLoading: false,
-        error: error instanceof ApiError ? 'Só admins ou o dono podem gerar convites.' : 'Não foi possível gerar o convite.'
+        error: isForbidden ? 'Só admins ou o dono podem gerar convites.' : 'Não foi possível gerar o convite.',
+        isForbidden
       });
       void reportClientError(
         'CreateInviteError',
@@ -422,6 +425,7 @@ export default function ServerListPage({
         {isProfileOpen && (
           <ProfilePage
             user={currentUser}
+            serverId={selectedServerId ?? undefined}
             onClose={() => setIsProfileOpen(false)}
             onUserChange={onCurrentUserChange}
             onLogout={onLogout}
@@ -534,6 +538,7 @@ export default function ServerListPage({
       {isProfileOpen && (
         <ProfilePage
           user={currentUser}
+          serverId={selectedServerId ?? undefined}
           onClose={() => setIsProfileOpen(false)}
           onUserChange={onCurrentUserChange}
           onLogout={onLogout}
@@ -554,6 +559,7 @@ export default function ServerListPage({
           code={inviteState.code}
           isLoading={inviteState.isLoading}
           error={inviteState.error}
+          isForbidden={inviteState.isForbidden}
           onClose={() => setInviteState(null)}
         />
       )}

@@ -1,6 +1,7 @@
 import type {
   ApiErrorResponse,
   CreateInviteResponse,
+  CreateReportRequest,
   CreateRoomRequest,
   CreateServerRequest,
   CreateServerResponse,
@@ -78,11 +79,42 @@ export function setSessionToken(token: string | null): void {
   sessionToken = token;
 }
 
+let onUnauthorized: (() => void) | null = null;
+
+/** App.tsx registers this once — every authenticated request goes through `request()` below, so
+ * this is the single choke point that catches a session going invalid both at boot (restoring a
+ * stale stored token) and mid-session (token expires — or the server's SESSION_SECRET rotates —
+ * while the app is already open), without every call site needing its own 401 handling. Only
+ * fires when a token was actually attached to the failing request — a bare 401 with no token
+ * attached means "never logged in", not "session expired". */
+export function setUnauthorizedHandler(handler: (() => void) | null): void {
+  onUnauthorized = handler;
+}
+
 function httpBaseUrl(): string {
   return import.meta.env.VITE_SIGNALING_URL.replace(/^wss:/, 'https:').replace(/^ws:/, 'http:');
 }
 
+/** Pure connectivity probe against GET /health — no session, no retries built in (caller decides
+ * polling/retry policy). Bypassed in TEST_MODE: that profile never talks to a real backend for
+ * account/session data in the first place (see api.ts header), so checking one here would only
+ * produce false negatives. Short timeout — this gates the loading screen, it shouldn't hang it. */
+export async function checkServerHealth(): Promise<boolean> {
+  if (TEST_MODE) return true;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5000);
+  try {
+    const response = await fetch(`${httpBaseUrl()}/health`, { signal: controller.signal });
+    return response.ok;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const hadToken = Boolean(sessionToken);
   const response = await fetch(`${httpBaseUrl()}${path}`, {
     ...init,
     headers: {
@@ -93,6 +125,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   });
   if (!response.ok) {
     const body = (await response.json().catch(() => null)) as ApiErrorResponse | null;
+    if (response.status === 401 && hadToken) onUnauthorized?.();
     throw new ApiError(body?.error ?? 'unknown-error', response.status);
   }
   return response.json() as Promise<T>;
@@ -314,6 +347,15 @@ export async function deleteUserSound(soundId: string): Promise<void> {
  * Must never itself throw or crash the caller (a logging failure is not a reason to compound the
  * original error), and is a no-op in TEST_MODE (no real backend to receive it).
  */
+/** Unlike reportClientError below (best-effort telemetry, swallows failures), this is a real
+ * user action with a form and a submit button — the caller needs to know if it actually went
+ * through, so failures propagate normally. Faked like every other account/server/room mutation
+ * in TEST_MODE (that profile never talks to the real backend, decisions.md). */
+export async function createReport(type: CreateReportRequest['type'], message: string, serverId?: string): Promise<void> {
+  if (TEST_MODE) return;
+  await request('/reports', { method: 'POST', body: JSON.stringify({ type, message, serverId } satisfies CreateReportRequest) });
+}
+
 export async function reportClientError(
   errorType: string,
   message: string,

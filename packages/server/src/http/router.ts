@@ -5,6 +5,7 @@ import type {
   ApiErrorResponse,
   ClientErrorReportRequest,
   CreateInviteResponse,
+  CreateReportRequest,
   CreateRoomRequest,
   CreateServerRequest,
   CreateServerResponse,
@@ -36,6 +37,7 @@ import * as roomsRepo from '../db/roomsRepo.js';
 import * as rolesRepo from '../db/rolesRepo.js';
 import * as authorizedUsersRepo from '../db/authorizedUsersRepo.js';
 import * as userSoundsRepo from '../db/userSoundsRepo.js';
+import * as reportsRepo from '../db/reportsRepo.js';
 import { createPresignedGetUrl, createPresignedUploadUrl, putObject } from '../aws/s3Client.js';
 import { signSessionToken, verifySessionToken } from '../auth/session.js';
 import { signInviteToken, verifyInviteToken } from '../auth/invite.js';
@@ -207,6 +209,12 @@ export async function handleHttpRequest(req: IncomingMessage, res: ServerRespons
   }
 
   try {
+    // Pure liveness probe — no auth, no DB — so the client can tell "server unreachable" apart
+    // from "server up but this request failed" before ever trying to log in.
+    if (method === 'GET' && segments.length === 1 && segments[0] === 'health') {
+      sendJson(res, 200, { status: 'ok' });
+      return;
+    }
     if (segments[0] === 'updates') {
       handleServeUpdateFile(req, res, segments);
       return;
@@ -280,6 +288,10 @@ export async function handleHttpRequest(req: IncomingMessage, res: ServerRespons
     }
     if (method === 'POST' && segments.length === 2 && segments[0] === 'logs' && segments[1] === 'client-error') {
       await handleClientErrorReport(req, res);
+      return;
+    }
+    if (method === 'POST' && segments.length === 1 && segments[0] === 'reports') {
+      await handleCreateReport(req, res);
       return;
     }
     if (
@@ -640,6 +652,23 @@ async function handleClientErrorReport(req: IncomingMessage, res: ServerResponse
     roomId: typeof context?.roomId === 'string' ? context.roomId : undefined
   });
 
+  sendJson(res, 200, {});
+}
+
+/** Bug/melhoria reportado pelo usuário via UI (decisions.md §7) — distinto do client-error acima
+ * (captura automática). Session required: this is always someone telling us something, not an
+ * anonymous crash. */
+async function handleCreateReport(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const userId = await requireSession(req, res);
+  if (!userId) return;
+
+  const body = await readJsonBody<CreateReportRequest>(req);
+  const message = body?.message?.trim();
+  if (!body?.type || (body.type !== 'bug' && body.type !== 'suggestion') || !message) {
+    return sendError(res, 400, 'invalid-request');
+  }
+
+  await reportsRepo.create({ userId, type: body.type, message, serverId: body.serverId });
   sendJson(res, 200, {});
 }
 

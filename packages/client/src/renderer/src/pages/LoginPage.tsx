@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import type { UserProfile } from '@concord/shared';
 import Button from '../components/Button';
+import LoginFailedModal from '../components/LoginFailedModal';
 import logo from '../assets/images/logo.png';
 import { TEST_MODE, login } from '../lib/api';
 import { clearStoredTestIdentity, getStoredTestIdentity, setStoredTestIdentity } from '../lib/testIdentity';
@@ -24,8 +25,17 @@ export default function LoginPage({ onContinue }: LoginPageProps) {
       const { email, displayName, avatarImageUrl } = await window.concord.auth.loginWithGoogle();
       const { user, sessionToken } = await login(email, displayName, avatarImageUrl);
       onContinue(user, sessionToken);
-    } catch {
-      setError('Não foi possível entrar com o Google. Tente novamente.');
+    } catch (err) {
+      // The loopback server (main/googleAuth.ts) only ever hears back if the browser actually
+      // completes the redirect — closing the tab instead leaves it waiting on nothing but its own
+      // timeout, which is the only way that case ever resolves. Worth a distinct message instead
+      // of the generic one, since "tente novamente" reads oddly for "you closed it yourself".
+      const timedOut = err instanceof Error && err.message.includes('google-oauth-timeout');
+      setError(
+        timedOut
+          ? 'Deu tempo esgotado esperando você terminar o login no navegador. Se fechou a aba sem querer, é só tentar de novo.'
+          : 'Não foi possível entrar com o Google. Tente novamente.'
+      );
     } finally {
       setIsSubmitting(false);
     }
@@ -110,8 +120,15 @@ export default function LoginPage({ onContinue }: LoginPageProps) {
           </Button>
         )}
 
-        {error && <p className="login-page__error">{error}</p>}
       </div>
+
+      {error && (
+        <LoginFailedModal
+          detail={error}
+          onBack={() => setError(null)}
+          onCancel={() => window.concord.windowControls.close()}
+        />
+      )}
     </div>
   );
 }

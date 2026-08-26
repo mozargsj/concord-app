@@ -1,0 +1,116 @@
+.report-modal__backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.report-modal {
+  width: 420px;
+  background: var(--color-bg-elevated);
+  border-radius: var(--radius-lg);
+  padding: 20px 24px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.report-modal__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.report-modal__header h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.report-modal__close {
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: 20px;
+  line-height: 1;
+  border-radius: var(--radius-sm);
+}
+
+.report-modal__close:hover {
+  background: var(--color-bg-elevated-hover);
+  color: var(--color-text-primary);
+}
+
+.report-modal__type {
+  display: flex;
+  gap: 8px;
+}
+
+.report-modal__type-option {
+  flex: 1;
+  height: 36px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-rail);
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.report-modal__type-option:hover {
+  background: var(--color-bg-elevated-hover);
+}
+
+.report-modal__type-option--active {
+  background: var(--color-accent);
+  color: #ffffff;
+}
+
+.report-modal__textarea {
+  width: 100%;
+  padding: 10px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-rail);
+  color: var(--color-text-primary);
+  font-size: 13px;
+  font-family: inherit;
+  resize: vertical;
+  box-sizing: border-box;
+}
+
+.report-modal__textarea:focus {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
+}
+
+.report-modal__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.report-modal__sent {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 0 4px;
+  text-align: center;
+}
+
+.report-modal__sent-icon {
+  width: 120px;
+  height: 120px;
+}
+
+.report-modal__sent-message {
+  margin: 0;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  max-width: 320px;
+}

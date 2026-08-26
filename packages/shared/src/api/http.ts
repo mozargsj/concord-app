@@ -129,3 +129,15 @@ export interface ClientErrorReportRequest {
   stack?: string;
   context?: Record<string, unknown>;
 }
+
+// decisions.md §7 — bug/melhoria reportado pelo usuário via UI, distinto da captura automática
+// de erro acima. Session required (unlike client-error) — this is a person telling us something,
+// always tied to whoever is logged in.
+export type ReportType = 'bug' | 'suggestion';
+
+export interface CreateReportRequest {
+  type: ReportType;
+  message: string;
+  /** Optional — a report can be filed from a screen with no server context (e.g. the profile page). */
+  serverId?: string;
+}

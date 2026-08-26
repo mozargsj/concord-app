@@ -1,15 +1,19 @@
 import { useState } from 'react';
 import Button from './Button';
+import IllustratedNotice from './IllustratedNotice';
+import accessDeniedArt from '../assets/images/access-denied.png';
+import { ACCESS_DENIED_MESSAGES } from '../lib/errorMessages';
 import '../styles/InviteCodeModal.css';
 
 interface InviteCodeModalProps {
   code: string | null;
   isLoading: boolean;
   error: string | null;
+  isForbidden: boolean;
   onClose: () => void;
 }
 
-export default function InviteCodeModal({ code, isLoading, error, onClose }: InviteCodeModalProps) {
+export default function InviteCodeModal({ code, isLoading, error, isForbidden, onClose }: InviteCodeModalProps) {
   const [copied, setCopied] = useState(false);
 
   async function handleCopy() {
@@ -34,7 +38,10 @@ export default function InviteCodeModal({ code, isLoading, error, onClose }: Inv
         </header>
 
         {isLoading && <p className="invite-code-modal__hint">Gerando convite…</p>}
-        {error && <p className="invite-code-modal__error">{error}</p>}
+        {error && isForbidden && (
+          <IllustratedNotice icon={accessDeniedArt} messages={ACCESS_DENIED_MESSAGES} detail={error} />
+        )}
+        {error && !isForbidden && <p className="invite-code-modal__error">{error}</p>}
 
         {code && (
           <>

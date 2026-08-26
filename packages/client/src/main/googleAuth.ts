@@ -7,7 +7,12 @@ import { getOAuthCallbackHtml } from './oauthCallbackPage';
 const AUTH_ENDPOINT = 'https://accounts.google.com/o/oauth2/v2/auth';
 const TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token';
 const JWKS_URI = 'https://www.googleapis.com/oauth2/v3/certs';
-const CALLBACK_TIMEOUT_MS = 5 * 60 * 1000;
+// Covers the "closed the browser tab instead of finishing login" case — the loopback server never
+// gets a request in that scenario (no HTTP round-trip happens at all), so a timeout is the only
+// way this ever resolves. Was 5 minutes, then 2 minutes; tightened further to 15s (Mozar's call —
+// a real Google consent flow with an account already signed in resolves in a couple seconds, so
+// this should only ever fire on an abandoned/closed attempt).
+const CALLBACK_TIMEOUT_MS = 15 * 1000;
 
 const jwks = createRemoteJWKSet(new URL(JWKS_URI));
 
