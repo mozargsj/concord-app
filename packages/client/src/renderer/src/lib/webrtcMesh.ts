@@ -3,7 +3,21 @@ import type { ImageCacheKind } from './imageCache';
 
 // STUN only, no TURN — explicit project decision (decisions.md §1), revisited only
 // with real ICE-failure data from the alpha phase.
-const ICE_SERVERS: RTCIceServer[] = [{ urls: 'stun:stun.l.google.com:19302' }];
+// Exported so lib/networkSelfTest.ts can run the exact same STUN gathering the real mesh does —
+// a self-test using a different server wouldn't actually predict anything about this app.
+//
+// [TEMP — teste de diagnóstico, 2026-08-27] Trocado de stun.l.google.com pra stun.cloudflare.com
+// pra descartar/confirmar a hipótese de que o STUN do Google especificamente estava degradado ou
+// limitando esses IPs de teste depois de dezenas de tentativas repetidas no mesmo dia — a chamada
+// real falhava com `errorCode=701 STUN binding request timed out` de forma consistente mesmo
+// depois de descartar firewall/Defender/VPN/DNS/loop de reconexão/interferência de compartilhar
+// tela, todos via teste real. Reverter pro Google (ou usar os dois) depois desse teste.
+export const ICE_SERVERS: RTCIceServer[] = [{ urls: 'stun:stun.cloudflare.com:3478' }];
+
+// How long iceConnectionState must stay 'disconnected' before it's reported as a real problem
+// (see the oniceconnectionstatechange handler) — long enough that a brief, self-healing network
+// blip doesn't get reported as if it were a stuck connection.
+const ICE_DISCONNECTED_REPORT_DELAY_MS = 8000;
 
 // getStats() poll for the "está falando" indicator — RFC 6464 audioLevel, per decisions.md.
 const SPEAKING_POLL_INTERVAL_MS = 200;
@@ -176,6 +190,28 @@ interface PeerConnectionEntry {
   // Same rationale as imageSendQueue — a sound-list answer and a sound-bytes answer (or two
   // bytes answers back to back) must not interleave their sends on the one shared channel.
   soundSendQueue: Promise<void>;
+  // Serializes every SDP-touching operation on this connection — outgoing renegotiate(), and
+  // incoming handleOffer()/handleAnswer() — onto one chain, same shape as imageSendQueue/
+  // soundSendQueue above. Before this existed, nothing stopped e.g. a local track-change
+  // renegotiate() from running concurrently with an incoming handleAnswer() for a still-in-flight
+  // offer on the very same RTCPeerConnection, which is exactly what produced the real "Failed to
+  // set remote answer sdp: The order of m-lines..." / "Called in wrong state: stable" errors seen
+  // in production logs (concord_system_logs) — two setLocalDescription/setRemoteDescription calls
+  // racing each other on one pc. Queuing makes every one of those operations see a pc state that
+  // reflects the *previous* operation having fully finished, never a half-applied one.
+  negotiationQueue: Promise<void>;
+  // Set when a renegotiate() is requested while the connection isn't 'stable' (an offer/answer
+  // round is already in flight) — rather than racing a second offer on top of the first, it's
+  // deferred and replayed the instant the in-flight round settles back to 'stable' (see
+  // maybeFlushRenegotiate). This is what replaces the old fixed 500ms "hope the answer landed by
+  // now" delay: the retry is triggered by the actual state transition, not a guessed timeout.
+  renegotiateNeeded: boolean;
+  // Deterministic per-connection glare resolution (the standard "perfect negotiation" polite/
+  // impolite rule): computed once from comparing this side's own peerId against the remote one,
+  // so both peers land on opposite roles for the same pair without any extra coordination message.
+  // The polite side rolls back its own in-flight offer and accepts the incoming one on collision;
+  // the impolite side ignores the incoming offer and keeps its own.
+  isPolite: boolean;
 }
 
 interface MeshManagerOptions {
@@ -202,10 +238,36 @@ interface MeshManagerOptions {
   /** A requested sound finished downloading from a peer — caller stashes it in the temporary
    * download cache (decisions.md: downloading ≠ adding to "meus áudios", that's a separate step). */
   onSoundReceived: (peerId: string, soundId: string, data: ArrayBuffer, mimeType: string) => void;
-  /** A peer connection actually failed (ICE or overall), or an ICE candidate errored out — the
-   * CGNAT/symmetric-NAT scenario decisions.md §1 already flags as the reason TURN might be
-   * needed. Optional: MeshManager works the same with or without a listener, this is diagnostics. */
-  onConnectionError?: (peerId: string, kind: 'ice-failed' | 'connection-failed' | 'ice-candidate-error', detail: string) => void;
+  /** A peer connection actually failed (ICE or overall), got stuck disconnected, or an ICE
+   * candidate errored out — the CGNAT/symmetric-NAT scenario decisions.md §1 already flags as the
+   * reason TURN might be needed. Optional: MeshManager works the same with or without a listener,
+   * this is diagnostics. 'ice-disconnected' exists separately from 'ice-failed' because Chromium
+   * doesn't always transition disconnected → failed — a connection can sit in 'disconnected'
+   * indefinitely with no media flowing and never fire the 'failed' case at all, which is exactly
+   * the kind of silent failure that left decisions.md's "TURN not needed, zero ICE failures
+   * logged" conclusion unverifiable (that conclusion also assumed this callback was even wired up
+   * for real connections, which it wasn't — see useRoomConnection.ts's fix). */
+  onConnectionError?: (
+    peerId: string,
+    kind:
+      | 'ice-failed'
+      | 'ice-disconnected'
+      | 'connection-failed'
+      | 'ice-candidate-error'
+      | 'ice-stats-summary'
+      | 'ice-candidate-apply-failed'
+      | 'negotiation-failed',
+    detail: string
+  ) => void;
+  /** Simplified per-peer status for a visual indicator (green/yellow/red dot on the avatar,
+   * RoomSidebar.tsx) — derived from iceConnectionState. 'connecting' covers 'new'/'checking' and
+   * a 'disconnected' still inside its grace window (see ICE_DISCONNECTED_REPORT_DELAY_MS); a
+   * connection that's actually up (or was, and hasn't been confirmed lost yet) shouldn't flash red
+   * for a blip that self-heals. 'failed' covers both a hard ICE failure and 'disconnected' that
+   * outlasted the grace window. Fires once right when the connection is created ('connecting') and
+   * again on every iceConnectionState change after that — no dedup needed, setting React state to
+   * an unchanged value is already a no-op. */
+  onConnectionStatusChange?: (peerId: string, status: 'connecting' | 'connected' | 'failed') => void;
 }
 
 /**
@@ -217,6 +279,10 @@ interface MeshManagerOptions {
  */
 export class MeshManager {
   private connections = new Map<string, PeerConnectionEntry>();
+  // Own peerId for this room — only used to pick a deterministic polite/impolite role per
+  // connection (see setSelfPeerId). Null until 'room-joined' arrives; every real connection is
+  // only ever created after that, so it's always set by the time it's needed.
+  private selfPeerId: string | null = null;
   private personalStream = new MediaStream();
   private screenStream = new MediaStream();
   private micTrack: MediaStreamTrack | null = null;
@@ -271,6 +337,22 @@ export class MeshManager {
   // Same buffering rationale as pendingImageRequestsByPeer, for the 'sounds' channel.
   private pendingSoundListRequestsByPeer = new Set<string>();
   private pendingSoundRequestsByPeer = new Map<string, { soundId: string; knownHash: string | null }[]>();
+  // [Bug corrigido, investigação de conectividade 2026-08-27] handleIceCandidate descartava em
+  // silêncio qualquer candidato que chegasse ANTES da entry desse peer existir (this.connections
+  // só ganha uma entry dentro de getOrCreateConnection, chamado a partir do primeiro offer/answer
+  // processado — um candidato do outro lado pode teoricamente chegar antes disso, mesma classe de
+  // corrida que pendingImageRequestsByPeer já existia pra resolver, só que faltava aqui). Dado
+  // real que motivou a correção: getStats() mostrando cada lado reunindo os próprios candidatos
+  // perfeitamente (inclusive srflx) mas "candidatos remotos recebidos: NENHUM" — o candidato do
+  // outro lado nunca era aplicado. Mesmo padrão de buffer-até-a-entry-existir, igual a
+  // pendingImageRequestsByPeer acima.
+  private pendingIceCandidatesByPeer = new Map<string, RTCIceCandidateInit[]>();
+  // [Diagnóstico, investigação de conectividade 2026-08-27] Contadores simples de "quantos
+  // candidatos eu tentei mandar" vs. "quantas mensagens de candidato eu de fato recebi por
+  // sinalização" por peer — a única forma de distinguir "nunca chegou a sair daqui" (bug de
+  // envio/relay do servidor) de "chegou e algo depois descartou" (bug de aplicação local, já
+  // descartado por getStats() mostrar candidatos locais reunidos perfeitamente).
+  private candidateCounters = new Map<string, { sent: number; receivedRaw: number }>();
 
   constructor(private opts: MeshManagerOptions) {
     this.speakingPollHandle = setInterval(() => void this.pollRemoteSpeaking(), SPEAKING_POLL_INTERVAL_MS);
@@ -287,13 +369,67 @@ export class MeshManager {
     void this.renegotiate(entry);
   }
 
-  async handleOffer(fromPeerId: string, sdp: string): Promise<void> {
+  /** Sets which peerId is "us" for this room — needed only to deterministically pick a polite/
+   * impolite role per connection (see PeerConnectionEntry.isPolite) the moment each one is
+   * created. Must be called before the first addExistingPeer/handleOffer for this room, which
+   * useRoomConnection.ts guarantees (it's set from the same 'room-joined' message that triggers
+   * the first addExistingPeer calls). */
+  setSelfPeerId(peerId: string): void {
+    this.selfPeerId = peerId;
+  }
+
+  handleOffer(fromPeerId: string, sdp: string): Promise<void> {
     const entry = this.getOrCreateConnection(fromPeerId);
+    // .catch() right here, not left to the caller — a rejection stored in entry.negotiationQueue
+    // itself would poison every later .then() chained onto it (offer/answer/renegotiate alike),
+    // permanently breaking this connection's negotiation instead of just this one failed round.
+    entry.negotiationQueue = entry.negotiationQueue.then(() => this.performHandleOffer(entry, sdp)).catch((error) => {
+      // [Bug corrigido, investigação de conectividade 2026-08-27] console.error sozinho só
+      // aparece no DevTools de quem tá com o problema na hora — nunca chegava aos logs remotos
+      // que eu consigo consultar. Se setRemoteDescription/createAnswer estiver falhando aqui, era
+      // exatamente o tipo de falha silenciosa que explicaria candidatos nunca aplicados (a
+      // resposta nunca completa, então remoteDescription nunca fica pronta pra receber nada).
+      console.error(`[MeshManager] handleOffer failed for ${entry.peerId}`, error);
+      this.opts.onConnectionError?.(
+        entry.peerId,
+        'negotiation-failed',
+        `handleOffer/performHandleOffer lançou: ${error instanceof Error ? error.message : String(error)}`
+      );
+    });
+    return entry.negotiationQueue;
+  }
+
+  private async performHandleOffer(entry: PeerConnectionEntry, sdp: string): Promise<void> {
+    // Glare: both sides decided to (re)negotiate at roughly the same time. entry.negotiationQueue
+    // guarantees this check only ever runs after any of our own in-flight offer/answer work has
+    // fully finished, so pc.signalingState here always reflects reality, never a half-applied
+    // state — that's what makes this check reliable (see negotiationQueue's own comment).
+    const offerCollision = entry.pc.signalingState !== 'stable';
+    if (offerCollision) {
+      if (!entry.isPolite) {
+        // Impolite: keep our own in-flight offer, ignore theirs. The polite peer on the other end
+        // resolves the same collision by rolling back and accepting our offer instead.
+        return;
+      }
+      await entry.pc.setLocalDescription({ type: 'rollback' });
+      // [Correção preventiva, investigação de conectividade 2026-08-27] Qualquer candidato
+      // remoto ainda em pendingCandidates nesse momento foi recebido enquanto esperava a
+      // remoteDescription da nossa própria oferta (agora abandonada pelo rollback) — não há
+      // garantia de que o sdpMid/sdpMLineIndex desses candidatos ainda corresponda a algo válido
+      // na remoteDescription nova que estamos prestes a aceitar (a oferta deles) em vez da nossa.
+      // Aplicar às cegas arrisca uma rejeição do addIceCandidate sem ganho nenhum. Descartar não é
+      // isento de custo (esses candidatos específicos se perdem, não são reenviados
+      // automaticamente por ninguém) — mas ICE não depende de nenhum candidato específico, só de
+      // pelo menos um par válido entre os que continuam sendo trocados depois da rodada nova
+      // começar, então o custo real é pequeno frente ao risco de aplicar algo incompatível.
+      entry.pendingCandidates = [];
+    }
+
     await entry.pc.setRemoteDescription({ type: 'offer', sdp });
     await this.flushPendingCandidates(entry);
     const answer = await entry.pc.createAnswer();
     await entry.pc.setLocalDescription(answer);
-    this.opts.send({ type: 'sdp-answer', targetPeerId: fromPeerId, sdp: answer.sdp ?? '' });
+    this.opts.send({ type: 'sdp-answer', targetPeerId: entry.peerId, sdp: answer.sdp ?? '' });
 
     // [Bug corrigido] A new joiner never saw an already-active screen share: getOrCreateConnection
     // above adds every current local track (addLocalTracksTo) — mic/camera/screen — *before*
@@ -301,27 +437,97 @@ export class MeshManager {
     // defined; it can't spontaneously add new ones. A joiner's own offer only has m-lines for
     // *their* tracks (mic/camera, never screen, since they can't be sharing before even joining),
     // so an existing sharer's screenVideo/screenAudio transceivers were created but left with no
-    // mid — never actually sent in that answer, and nothing afterward ever renegotiated to fix it.
-    // Any transceiver still missing a mid after this answer needs a follow-up offer from this side
-    // to actually get on the wire.
+    // mid — never actually sent in that answer. Any transceiver still missing a mid after this
+    // answer (also true right after the rollback-and-accept path above) needs a follow-up offer
+    // from this side to actually get on the wire — deferred via renegotiateNeeded/
+    // maybeFlushRenegotiate rather than a guessed setTimeout, so it fires exactly when this
+    // connection is actually back in a state that can take a new offer, not "probably by now".
     const hasUnnegotiatedTracks = entry.pc.getTransceivers().some((transceiver) => transceiver.mid === null);
-    if (hasUnnegotiatedTracks) void this.renegotiate(entry);
+    if (hasUnnegotiatedTracks) entry.renegotiateNeeded = true;
+    this.maybeFlushRenegotiate(entry);
   }
 
-  async handleAnswer(fromPeerId: string, sdp: string): Promise<void> {
+  handleAnswer(fromPeerId: string, sdp: string): Promise<void> {
     const entry = this.connections.get(fromPeerId);
-    if (!entry) return;
+    if (!entry) return Promise.resolve();
+    entry.negotiationQueue = entry.negotiationQueue.then(() => this.performHandleAnswer(entry, sdp)).catch((error) => {
+      // See handleOffer's own catch — same gap, same fix: console.error alone never reached the
+      // remote logs I can actually query.
+      console.error(`[MeshManager] handleAnswer failed for ${entry.peerId}`, error);
+      this.opts.onConnectionError?.(
+        entry.peerId,
+        'negotiation-failed',
+        `handleAnswer/performHandleAnswer lançou: ${error instanceof Error ? error.message : String(error)}`
+      );
+    });
+    return entry.negotiationQueue;
+  }
+
+  private async performHandleAnswer(entry: PeerConnectionEntry, sdp: string): Promise<void> {
+    if (entry.pc.signalingState !== 'have-local-offer') {
+      // A stale/duplicate answer for a round that isn't current any more — most commonly because
+      // we (as the polite peer) already rolled back that offer after a glare collision. Applying
+      // it now would only throw "Called in wrong state"; dropping it is correct, not a workaround.
+      // [Diagnóstico, investigação de conectividade 2026-08-27] Logado porque, se isso disparar
+      // FORA de uma colisão real, é exatamente o tipo de descarte silencioso (sem exceção, sem
+      // flushPendingCandidates nunca rodando) que explicaria candidatos presos no buffer pra
+      // sempre sem nenhum erro visível em lugar nenhum — todos os outros suspeitos já descartados.
+      this.opts.onConnectionError?.(
+        entry.peerId,
+        'negotiation-failed',
+        `handleAnswer descartado — signalingState era '${entry.pc.signalingState}', esperava 'have-local-offer'`
+      );
+      return;
+    }
     await entry.pc.setRemoteDescription({ type: 'answer', sdp });
     await this.flushPendingCandidates(entry);
+    this.maybeFlushRenegotiate(entry);
+  }
+
+  /** Replays a renegotiate() that had to be deferred (see renegotiateNeeded) now that this
+   * connection is back to 'stable' — called right after any operation that can produce that
+   * transition (an answer just applied, or an incoming offer just answered). */
+  private maybeFlushRenegotiate(entry: PeerConnectionEntry): void {
+    if (!entry.renegotiateNeeded) return;
+    entry.renegotiateNeeded = false;
+    entry.negotiationQueue = entry.negotiationQueue.then(() => this.performOffer(entry));
   }
 
   async handleIceCandidate(fromPeerId: string, candidateJson: string): Promise<void> {
-    const entry = this.connections.get(fromPeerId);
-    if (!entry) return;
+    // [Diagnóstico, investigação de conectividade 2026-08-27] Incrementado ANTES de qualquer
+    // parse/lookup — confirma que a mensagem 'ice-candidate' realmente chegou por sinalização,
+    // independente do que acontece depois (candidato inválido, entry ainda não existindo, etc.).
+    // Sem isso não dava pra distinguir "nunca chegou" de "chegou e algo depois descartou".
+    const counterEntry = this.candidateCounters.get(fromPeerId) ?? { sent: 0, receivedRaw: 0 };
+    counterEntry.receivedRaw += 1;
+    this.candidateCounters.set(fromPeerId, counterEntry);
     let candidate: RTCIceCandidateInit;
     try {
       candidate = JSON.parse(candidateJson);
-    } catch {
+    } catch (error) {
+      this.opts.onConnectionError?.(
+        fromPeerId,
+        'ice-candidate-apply-failed',
+        `JSON.parse falhou: ${error instanceof Error ? error.message : String(error)} — raw: ${candidateJson.slice(0, 200)}`
+      );
+      return;
+    }
+    // See onicecandidate's own comment — same rationale, same 3-sample cap, other side of the
+    // comparison (what we actually parsed out of the raw signaling payload for this candidate).
+    if (counterEntry.receivedRaw <= 3) {
+      this.opts.onConnectionError?.(
+        fromPeerId,
+        'ice-candidate-apply-failed',
+        `RECEBIDO #${counterEntry.receivedRaw}: candidate="${candidate.candidate}" sdpMid=${candidate.sdpMid} sdpMLineIndex=${candidate.sdpMLineIndex} ufrag=${candidate.usernameFragment}`
+      );
+    }
+    const entry = this.connections.get(fromPeerId);
+    if (!entry) {
+      // See pendingIceCandidatesByPeer's own comment — buffered instead of dropped, flushed into
+      // the real entry's own pendingCandidates the moment getOrCreateConnection makes one.
+      const queued = this.pendingIceCandidatesByPeer.get(fromPeerId) ?? [];
+      queued.push(candidate);
+      this.pendingIceCandidatesByPeer.set(fromPeerId, queued);
       return;
     }
     if (!entry.pc.remoteDescription) {
@@ -330,8 +536,17 @@ export class MeshManager {
     }
     try {
       await entry.pc.addIceCandidate(candidate);
-    } catch {
-      // stale/invalid candidate — safe to drop
+    } catch (error) {
+      // [Diagnóstico, investigação de conectividade 2026-08-27] Antes descartava em silêncio total
+      // — dado real motivou expor isso: contadores confirmaram que os candidatos CHEGAM por
+      // sinalização (enviados de um lado batem com recebidos do outro), mas getStats() nunca
+      // mostrava nenhum candidato remoto aplicado. Essa é a única explicação que sobra: addIceCandidate
+      // está rejeitando todos eles, e sem logar o erro de verdade não dava pra saber por quê.
+      this.opts.onConnectionError?.(
+        fromPeerId,
+        'ice-candidate-apply-failed',
+        `addIceCandidate rejeitou: ${error instanceof Error ? error.message : String(error)} — candidate: ${JSON.stringify(candidate).slice(0, 300)}`
+      );
     }
   }
 
@@ -343,6 +558,8 @@ export class MeshManager {
     this.pendingImageRequestsByPeer.delete(peerId);
     this.pendingSoundListRequestsByPeer.delete(peerId);
     this.pendingSoundRequestsByPeer.delete(peerId);
+    this.pendingIceCandidatesByPeer.delete(peerId);
+    this.candidateCounters.delete(peerId);
     this.speakingStateByPeer.delete(peerId);
     this.opts.onRemoteStreamsChange(peerId, { personal: null, screen: null });
   }
@@ -620,7 +837,7 @@ export class MeshManager {
     const entry: PeerConnectionEntry = {
       peerId,
       pc,
-      pendingCandidates: [],
+      pendingCandidates: this.pendingIceCandidatesByPeer.get(peerId) ?? [],
       personalStreamId: null,
       screenStreamId: null,
       personalStream: null,
@@ -634,11 +851,17 @@ export class MeshManager {
       pendingSoundListRequest: this.pendingSoundListRequestsByPeer.has(peerId),
       pendingSoundRequests: this.pendingSoundRequestsByPeer.get(peerId) ?? [],
       incomingSoundTransfer: null,
-      soundSendQueue: Promise.resolve()
+      soundSendQueue: Promise.resolve(),
+      negotiationQueue: Promise.resolve(),
+      renegotiateNeeded: false,
+      // See PeerConnectionEntry.isPolite — deterministic as long as both sides compare the same
+      // two ids (their own + the other's), which they always do, each from their own perspective.
+      isPolite: (this.selfPeerId ?? '') < peerId
     };
     this.pendingImageRequestsByPeer.delete(peerId);
     this.pendingSoundListRequestsByPeer.delete(peerId);
     this.pendingSoundRequestsByPeer.delete(peerId);
+    this.pendingIceCandidatesByPeer.delete(peerId);
     this.connections.set(peerId, entry);
 
     // Only fires on the answering side — the offering side already has its own channel
@@ -654,6 +877,23 @@ export class MeshManager {
 
     pc.onicecandidate = (event) => {
       if (!event.candidate) return;
+      const counterEntry = this.candidateCounters.get(peerId) ?? { sent: 0, receivedRaw: 0 };
+      counterEntry.sent += 1;
+      this.candidateCounters.set(peerId, counterEntry);
+      // [Diagnóstico, investigação de conectividade 2026-08-27] Conteúdo bruto dos 3 primeiros
+      // candidatos enviados por conexão — último nível de detalhe disponível depois que contadores
+      // (sinalização confirmadamente entrega tudo) e captura de exceção (nada lança erro em
+      // handleOffer/handleAnswer/addIceCandidate) não encontraram o ponto exato da perda. Só os 3
+      // primeiros pra não inundar o log — o suficiente pra comparar visualmente contra o que o
+      // outro lado realmente recebe (ver handleIceCandidate).
+      if (counterEntry.sent <= 3) {
+        const c = event.candidate;
+        this.opts.onConnectionError?.(
+          peerId,
+          'ice-candidate-apply-failed',
+          `ENVIADO #${counterEntry.sent}: candidate="${c.candidate}" sdpMid=${c.sdpMid} sdpMLineIndex=${c.sdpMLineIndex} ufrag=${c.usernameFragment}`
+        );
+      }
       this.opts.send({
         type: 'ice-candidate',
         targetPeerId: peerId,
@@ -661,22 +901,69 @@ export class MeshManager {
       });
     };
 
+    // 'disconnected' is common and often transient (brief network blip that self-heals within a
+    // couple seconds) — Chromium doesn't always follow it up with 'failed' either, so a connection
+    // can also just sit in 'disconnected' forever with no media flowing and no further event ever
+    // firing. Debounced: only reported if it's still 'disconnected' this long later, so a real
+    // stuck connection is distinguishable from normal transient noise.
+    let disconnectedTimer: ReturnType<typeof setTimeout> | null = null;
     pc.oniceconnectionstatechange = () => {
+      if (disconnectedTimer) {
+        clearTimeout(disconnectedTimer);
+        disconnectedTimer = null;
+      }
       if (pc.iceConnectionState === 'failed') {
         this.opts.onConnectionError?.(peerId, 'ice-failed', `iceConnectionState=failed (peer ${peerId})`);
+        this.opts.onConnectionStatusChange?.(peerId, 'failed');
+        void this.logIceStatsSummary(entry, 'falha real (iceConnectionState=failed, veredito do navegador)');
+      } else if (pc.iceConnectionState === 'disconnected') {
+        // Still 'connecting' (yellow), not 'failed' (red) yet — see onConnectionStatusChange's own
+        // comment on why a transient blip shouldn't flash red before the grace window confirms it.
+        this.opts.onConnectionStatusChange?.(peerId, 'connecting');
+        disconnectedTimer = setTimeout(() => {
+          disconnectedTimer = null;
+          if (pc.iceConnectionState === 'disconnected') {
+            this.opts.onConnectionError?.(
+              peerId,
+              'ice-disconnected',
+              `iceConnectionState stuck at disconnected for ${ICE_DISCONNECTED_REPORT_DELAY_MS}ms (peer ${peerId})`
+            );
+            this.opts.onConnectionStatusChange?.(peerId, 'failed');
+            void this.logIceStatsSummary(
+              entry,
+              `timeout interno (${ICE_DISCONNECTED_REPORT_DELAY_MS}ms em 'disconnected', o navegador NÃO chegou a declarar 'failed' sozinho — se o autoteste de rede funciona, a causa é algo nosso, não a rede)`
+            );
+          }
+        }, ICE_DISCONNECTED_REPORT_DELAY_MS);
+      } else if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
+        this.opts.onConnectionStatusChange?.(peerId, 'connected');
+      } else {
+        // 'new' / 'checking' / 'closed' — 'closed' only happens after removePeer() already tore
+        // this down and dropped the peer from state, so this call is harmless dead code for it.
+        this.opts.onConnectionStatusChange?.(peerId, 'connecting');
       }
     };
+    // Fresh connection, nothing negotiated yet — matches pc.iceConnectionState's own initial
+    // value ('new'), emitted once up front so the indicator starts yellow immediately instead of
+    // whatever default the caller's state initializes to before the first real event fires.
+    this.opts.onConnectionStatusChange?.(peerId, 'connecting');
     pc.onconnectionstatechange = () => {
       if (pc.connectionState === 'failed') {
         this.opts.onConnectionError?.(peerId, 'connection-failed', `connectionState=failed (peer ${peerId})`);
+        void this.logIceStatsSummary(entry, 'falha real (connectionState=failed, veredito do navegador)');
       }
     };
     pc.onicecandidateerror = (event) => {
+      // [Diagnóstico, investigação de conectividade 2026-08-27] `url`/`address`/`port` incluídos
+      // de propósito — sem isso não dava pra confirmar se "STUN binding request timed out" era
+      // sobre o servidor STUN configurado (gathering) ou sobre a checagem direta entre os dois
+      // peers (Chromium usa o mesmo mecanismo de erro pra ambos, e o texto sozinho não distingue).
+      // `url` vazio/ausente aqui é o sinal de que é a segunda opção.
       const iceError = event as RTCPeerConnectionIceErrorEvent;
       this.opts.onConnectionError?.(
         peerId,
         'ice-candidate-error',
-        `errorCode=${iceError.errorCode} ${iceError.errorText ?? ''}`.trim()
+        `errorCode=${iceError.errorCode} ${iceError.errorText ?? ''} url=${iceError.url || '(nenhuma — não é o servidor STUN)'} local=${iceError.address ?? '?'}:${iceError.port ?? '?'}`.trim()
       );
     };
 
@@ -1033,13 +1320,32 @@ export class MeshManager {
     return false;
   }
 
-  private async renegotiate(entry: PeerConnectionEntry): Promise<void> {
+  private renegotiate(entry: PeerConnectionEntry): Promise<void> {
+    entry.negotiationQueue = entry.negotiationQueue.then(() => this.performOffer(entry));
+    return entry.negotiationQueue;
+  }
+
+  private async performOffer(entry: PeerConnectionEntry): Promise<void> {
+    if (entry.pc.signalingState !== 'stable') {
+      // An offer/answer round is already in flight on this connection (ours or theirs) —
+      // negotiationQueue means this is never a race, just a real "not yet done" — defer this
+      // request and replay it the instant the in-flight round actually settles.
+      entry.renegotiateNeeded = true;
+      return;
+    }
     try {
       const offer = await entry.pc.createOffer();
       await entry.pc.setLocalDescription(offer);
       this.opts.send({ type: 'sdp-offer', targetPeerId: entry.peerId, sdp: offer.sdp ?? '' });
-    } catch {
-      // best-effort — a failed renegotiation leaves media as it was rather than tearing down the call
+    } catch (error) {
+      // Best-effort by design (a failed renegotiation leaves media as it was rather than tearing
+      // down the call) — but silent before this was another blind spot in the same investigation
+      // as handleOffer/handleAnswer's own catch, so it's now reported too instead of swallowed.
+      this.opts.onConnectionError?.(
+        entry.peerId,
+        'negotiation-failed',
+        `renegotiate/performOffer lançou: ${error instanceof Error ? error.message : String(error)}`
+      );
     }
   }
 
@@ -1049,9 +1355,68 @@ export class MeshManager {
     for (const candidate of queued) {
       try {
         await entry.pc.addIceCandidate(candidate);
-      } catch {
-        // stale/invalid candidate — safe to drop
+      } catch (error) {
+        // Same diagnostic rationale as handleIceCandidate's own catch — this is the OTHER call
+        // site for addIceCandidate (candidates that arrived before remoteDescription was set,
+        // buffered here until now), so it needs the same visibility.
+        this.opts.onConnectionError?.(
+          entry.peerId,
+          'ice-candidate-apply-failed',
+          `addIceCandidate (flush) rejeitou: ${error instanceof Error ? error.message : String(error)} — candidate: ${JSON.stringify(candidate).slice(0, 300)}`
+        );
       }
+    }
+  }
+
+  /** [Diagnóstico, investigação de conectividade 2026-08-27] Dump de getStats() assim que uma
+   * conexão real chega a 'failed' — lista os candidatos que cada lado realmente reuniu (tipo,
+   * protocolo) e o estado de cada par tentado entre eles. Sem isso não dava pra saber se os dois
+   * lados sequer chegaram a trocar candidato nenhum entre si (bug de sinalização) ou se trocaram
+   * e a checagem direta peer-a-peer que falhou de verdade (NAT/firewall no meio, cenário de
+   * TURN). Só roda em falha real, não em toda chamada — getStats() tem custo, não é pra rodar
+   * toda hora. `reason` distingue as duas formas de chegar aqui: falha real declarada pelo
+   * próprio navegador (`iceConnectionState`/`connectionState` === 'failed') vs. o timeout de
+   * `ICE_DISCONNECTED_REPORT_DELAY_MS` que ESTE código impõe sobre um 'disconnected' sustentado —
+   * pedido do Mozar: se for o timeout interno E o autoteste de rede (que usa STUN de verdade)
+   * funciona normalmente, a causa não pode ser a rede, só pode ser algo neste código. */
+  private async logIceStatsSummary(entry: PeerConnectionEntry, reason: string): Promise<void> {
+    try {
+      const stats = await entry.pc.getStats();
+      const candidates = new Map<string, string>();
+      const localCandidates: string[] = [];
+      const remoteCandidates: string[] = [];
+      const pairs: string[] = [];
+      stats.forEach((report: RTCStats & Record<string, unknown>) => {
+        if (report.type === 'local-candidate' || report.type === 'remote-candidate') {
+          const label = `${report.candidateType}/${report.protocol}`;
+          candidates.set(report.id, `${report.type === 'local-candidate' ? 'local' : 'remote'}:${label}`);
+          (report.type === 'local-candidate' ? localCandidates : remoteCandidates).push(label);
+        }
+      });
+      stats.forEach((report: RTCStats & Record<string, unknown>) => {
+        if (report.type !== 'candidate-pair') return;
+        const local = candidates.get(report.localCandidateId as string) ?? '?';
+        const remote = candidates.get(report.remoteCandidateId as string) ?? '?';
+        pairs.push(`[${report.state}] ${local} <-> ${remote}`);
+      });
+      // Quando não há par nenhum, isso é o que de fato distingue as duas causas possíveis: se
+      // localCandidates está vazio, esse lado nem conseguiu reunir candidato próprio (mesma falha
+      // de STUN vista em onicecandidateerror); se remoteCandidates está vazio mas local não,
+      // reuniu os próprios mas nunca recebeu nenhum do outro peer (aponta pra sinalização, não
+      // STUN) — os dois vazios juntos com candidato local presente seria o cenário clássico de
+      // symmetric NAT/TURN necessário.
+      const counters = this.candidateCounters.get(entry.peerId) ?? { sent: 0, receivedRaw: 0 };
+      const counterSummary = `enviados=${counters.sent} recebidos-por-sinalização=${counters.receivedRaw}`;
+      const summary = pairs.length
+        ? `[${reason}] ${pairs.join(' | ')} (${counterSummary})`
+        : `[${reason}] nenhum par formado — candidatos locais: ${localCandidates.length ? localCandidates.join(', ') : 'NENHUM'}; candidatos remotos recebidos: ${remoteCandidates.length ? remoteCandidates.join(', ') : 'NENHUM'} (${counterSummary})`;
+      this.opts.onConnectionError?.(
+        entry.peerId,
+        'ice-stats-summary',
+        summary
+      );
+    } catch {
+      // getStats() falhando não deve mascarar o erro real que motivou a chamada — best-effort.
     }
   }
 

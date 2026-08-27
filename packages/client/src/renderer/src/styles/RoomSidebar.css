@@ -319,6 +319,15 @@
   background: color-mix(in srgb, var(--color-accent) 20%, transparent);
 }
 
+/* Wraps the avatar circle + its status dot. Needs to exist separately from
+   .room-sidebar__participant-avatar because that one has overflow:hidden (clips the image into a
+   circle) — a dot positioned to stick out past the circle's edge would get clipped too if it were
+   a child of that element instead of a sibling inside this non-clipping wrapper. */
+.room-sidebar__avatar-wrap {
+  position: relative;
+  flex-shrink: 0;
+}
+
 .room-sidebar__participant-avatar {
   width: 26px;
   height: 26px;
@@ -329,9 +338,37 @@
   font-size: 13px;
   font-weight: 700;
   color: #ffffff;
-  flex-shrink: 0;
   overflow: hidden;
   box-shadow: 0 0 0 2px transparent;
+}
+
+/* Status real de conexão P2P (ICE), não só "está na sala" — ver MeshManager.onConnectionStatusChange.
+   bottom:0/right:0 alinha o canto do quadrado do dot com o canto do quadrado do avatar; o
+   translate empurra mais 35% do próprio tamanho do dot pra fora, resultando na metade sobreposta/
+   metade pra fora do círculo do avatar (mesma convenção visual do indicador de "online" do
+   Discord/Slack). */
+.room-sidebar__connection-dot {
+  position: absolute;
+  bottom: 0;
+  right: 0;
+  transform: translate(35%, 35%);
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid var(--color-bg-elevated);
+  box-sizing: content-box;
+}
+
+.room-sidebar__connection-dot--connecting {
+  background: var(--color-warning);
+}
+
+.room-sidebar__connection-dot--connected {
+  background: var(--color-online);
+}
+
+.room-sidebar__connection-dot--failed {
+  background: var(--color-danger);
 }
 
 .room-sidebar__participant-avatar-image {

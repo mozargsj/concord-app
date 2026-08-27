@@ -64,6 +64,11 @@ interface InviteState {
 // isn't actually reachable yet (e.g. the network interface came up before real WAN routing did).
 const RECONNECT_RETRY_INTERVAL_MS = 3000;
 
+// How long connectivity must look actually down before treating it as real — see the effect's own
+// comment below. Long enough to ignore a brief wifi blip (the kind WebRTC's own ICE already rides
+// out on its own), short enough that a genuine outage is still noticed quickly.
+const OFFLINE_DEBOUNCE_MS = 5000;
+
 export default function ServerListPage({
   currentUser,
   onCurrentUserChange,
@@ -230,32 +235,68 @@ export default function ServerListPage({
   // (an interface coming back up doesn't mean real WAN routing works yet) — that's why 'online'
   // moves to 'reconnecting' rather than immediately declaring success; the effect below confirms
   // with a real health check before doing that.
+  //
+  // [Bug corrigido, achado numa investigação real de conexão] Isso reagia à primeira notícia de
+  // queda — inclusive uma oscilação breve de alguns segundos, comum em wifi real — saindo da sala
+  // e voltando (setSelectedRoomId) assim que a saúde do servidor confirmava "online" de novo. Cada
+  // volta recria a RTCPeerConnection do zero (peerId novo do servidor), incluindo uma nova coleta
+  // de candidato ICE. Numa rede com oscilações frequentes (não bloqueada, só instável), isso vira
+  // um ciclo: a oscilação seguinte interrompe a negociação ICE antes dela terminar, gerando outra
+  // saída-e-volta, sem nunca dar tempo da chamada estabilizar — sintoma real observado: múltiplos
+  // `peerId` distintos e falhas de STUN repetidas num teste de poucos minutos, mesmo com a rede
+  // comprovadamente capaz de STUN (autoteste de rede bem-sucedido nos dois lados, ver
+  // decisions.md). WebRTC já tem seu próprio mecanismo de tolerância a oscilação breve (ICE
+  // reconecta sozinho); sair da sala inteira é um remédio pesado demais pra isso. Agora só reage
+  // depois de OFFLINE_DEBOUNCE_MS de queda contínua — uma oscilação mais curta que isso nunca
+  // chega a virar estado nenhum, a sala e a chamada nem percebem.
   useEffect(() => {
-    if (!navigator.onLine) setConnectivityStatus('offline');
+    let offlineDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 
-    function handleOffline() {
+    function declareOffline() {
+      offlineDebounceTimer = null;
       if (selectedServerId && selectedRoomId) {
         reconnectTargetRef.current = { serverId: selectedServerId, roomId: selectedRoomId };
       }
       setConnectivityStatus('offline');
     }
 
+    if (!navigator.onLine) offlineDebounceTimer = setTimeout(declareOffline, OFFLINE_DEBOUNCE_MS);
+
+    function handleOffline() {
+      if (offlineDebounceTimer) return; // already waiting on one
+      offlineDebounceTimer = setTimeout(declareOffline, OFFLINE_DEBOUNCE_MS);
+    }
+
     function handleOnline() {
+      // Blip never actually confirmed as real — cancel silently, nothing in the app ever knew.
+      if (offlineDebounceTimer) {
+        clearTimeout(offlineDebounceTimer);
+        offlineDebounceTimer = null;
+        return;
+      }
       setConnectivityStatus((prev) => (prev === 'offline' ? 'reconnecting' : prev));
     }
 
     window.addEventListener('offline', handleOffline);
     window.addEventListener('online', handleOnline);
     return () => {
+      if (offlineDebounceTimer) clearTimeout(offlineDebounceTimer);
       window.removeEventListener('offline', handleOffline);
       window.removeEventListener('online', handleOnline);
     };
   }, [selectedServerId, selectedRoomId]);
 
-  // While 'reconnecting', poll GET /health until it actually succeeds (rather than trusting the
-  // 'online' event alone), then rejoin whatever server/room was active when connectivity dropped.
+  // Poll GET /health until it actually succeeds, for 'reconnecting' AND 'offline' alike — not
+  // just 'reconnecting'. [Bug corrigido] 'offline' used to only ever clear via the browser's own
+  // 'online' event, but navigator.onLine's initial read can be a false negative right at window
+  // startup (a known Chromium/Electron quirk — the network stack isn't always done initializing
+  // yet), and if the interface was never actually toggled afterward, that event never fires,
+  // leaving the app stuck on NoInternetScreen forever despite a perfectly working connection. A
+  // real health check is ground truth regardless of what navigator.onLine believes, so it now
+  // drives recovery from both states the same way; rejoining a room only actually happens if
+  // reconnectTargetRef was set (i.e. connectivity genuinely dropped while in a room).
   useEffect(() => {
-    if (connectivityStatus !== 'reconnecting') return;
+    if (connectivityStatus !== 'reconnecting' && connectivityStatus !== 'offline') return;
     let cancelled = false;
 
     async function attempt() {

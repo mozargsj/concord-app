@@ -9,6 +9,8 @@ import {
 } from '../lib/micSensitivity';
 import { getRnnoiseEnabled, setRnnoiseEnabled } from '../lib/noiseSuppressionSettings';
 import { getHardwareEncodePreference, setHardwareEncodePreference } from '../lib/hardwareEncodePreference';
+import { runNetworkSelfTest, type NetworkSelfTestResult } from '../lib/networkSelfTest';
+import { reportClientError } from '../lib/api';
 import {
   MASTER_VOLUME_DEFAULT,
   MASTER_VOLUME_MAX,
@@ -29,6 +31,10 @@ export default function SettingsModal({ onClose, onNoiseSuppressionChange }: Set
   const [threshold, setThreshold] = useState(MIC_SENSITIVITY_DEFAULT);
   const [isRnnoiseEnabled, setIsRnnoiseEnabled] = useState(true);
   const [isHardwareEncodeEnabled, setIsHardwareEncodeEnabled] = useState(true);
+  // [Diagnóstico, investigação de conectividade 2026-08-27] Ver lib/networkSelfTest.ts — 'idle'
+  // até o usuário clicar, nunca roda sozinho.
+  const [networkTestStatus, setNetworkTestStatus] = useState<'idle' | 'running' | 'done'>('idle');
+  const [networkTestResult, setNetworkTestResult] = useState<NetworkSelfTestResult | null>(null);
   const [masterVolume, setMasterVolumeState] = useState(MASTER_VOLUME_DEFAULT);
   // Placeholder input level — same nature as the "está falando" mock in RoomView.tsx:
   // stand-in until the real gate reads audioLevel via getStats() (~20-50ms poll, per
@@ -84,6 +90,23 @@ export default function SettingsModal({ onClose, onNoiseSuppressionChange }: Set
     const next = !isHardwareEncodeEnabled;
     setIsHardwareEncodeEnabled(next);
     setHardwareEncodePreference(next);
+  }
+
+  async function handleRunNetworkTest() {
+    setNetworkTestStatus('running');
+    setNetworkTestResult(null);
+    const result = await runNetworkSelfTest();
+    setNetworkTestResult(result);
+    setNetworkTestStatus('done');
+    const types = result.candidates.map((c) => c.type);
+    void reportClientError(
+      'NetworkSelfTestResult',
+      result.hasReflexiveOrRelay
+        ? `srflx/relay encontrado (${types.join(', ')})`
+        : `Nenhum srflx/relay (${types.join(', ') || 'nenhum candidato'}) — erros: ${result.errorTexts.join('; ') || 'nenhum'}`,
+      undefined,
+      { hasReflexiveOrRelay: result.hasReflexiveOrRelay, types, errorTexts: result.errorTexts }
+    );
   }
 
   const isGateOpen = mockLevel >= threshold;
@@ -189,6 +212,37 @@ export default function SettingsModal({ onClose, onNoiseSuppressionChange }: Set
               className="settings-modal__checkbox"
             />
           </label>
+        </div>
+
+        <div className="settings-modal__section">
+          <span className="settings-modal__label">Testar minha rede</span>
+          <p className="settings-modal__hint">
+            Verifica se sua rede consegue abrir uma conexão direta com outra pessoa — mesmo
+            teste da página <em>concord.undersoft.tec.br/teste-conexao.html</em>, só que rodando
+            aqui dentro do próprio Concord.
+          </p>
+          <button
+            type="button"
+            className="settings-modal__network-test-button"
+            onClick={() => void handleRunNetworkTest()}
+            disabled={networkTestStatus === 'running'}
+          >
+            {networkTestStatus === 'running' ? 'Testando...' : 'Testar minha rede'}
+          </button>
+          {networkTestStatus === 'done' && networkTestResult && (
+            <p
+              className={
+                'settings-modal__network-test-result' +
+                (networkTestResult.hasReflexiveOrRelay
+                  ? ' settings-modal__network-test-result--good'
+                  : ' settings-modal__network-test-result--bad')
+              }
+            >
+              {networkTestResult.hasReflexiveOrRelay
+                ? 'Sua rede parece pronta — encontramos um endereço público.'
+                : 'Não encontramos um endereço público. Resultado enviado pra análise.'}
+            </p>
+          )}
         </div>
       </div>
     </div>

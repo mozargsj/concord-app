@@ -111,6 +111,10 @@ export interface RoomPeer {
    * webrtcMesh.ts) — null until then, even if the peer has an avatar set, since there's no
    * central store this could come from otherwise (decisions.md). */
   avatarUrl: string | null;
+  /** Visual dot on the avatar (RoomSidebar.tsx) — driven by MeshManager's onConnectionStatusChange
+   * (derived from iceConnectionState). Starts 'connecting' the instant the peer is known, before
+   * any real ICE event has fired yet — matches the connection's own actual starting state. */
+  connectionStatus: 'connecting' | 'connected' | 'failed';
 }
 
 interface RoomConnectionState {
@@ -389,12 +393,29 @@ export function useRoomConnection(
       onLocalSpeakingChange: (isSpeaking) => {
         setState((prev) => ({ ...prev, selfIsSpeaking: isSpeaking }));
       },
+      // [Feature nova] Bolinha verde/amarela/vermelha no avatar (RoomSidebar.tsx) — status real de
+      // conexão por peer, não só "está na sala" (que o servidor já garante) — ICE pode ficar preso
+      // sem nunca completar mesmo com o peer presente na sala.
+      onConnectionStatusChange: (peerId, status) => {
+        setState((prev) => ({
+          ...prev,
+          peers: prev.peers.map((peer) => (peer.peerId === peerId ? { ...peer, connectionStatus: status } : peer))
+        }));
+      },
       onImageRequest,
       onImageReceived,
       onSoundListRequest,
       onSoundListReceived,
       onSoundRequest,
-      onSoundReceived
+      onSoundReceived,
+      // [Bug corrigido] Nunca era passado aqui (só existia no ramo TEST_OFFLINE acima) — toda
+      // falha real de ICE/conexão em produção era descartada em silêncio (onConnectionError é
+      // opcional em MeshManagerOptions, então o `?.()` interno virava no-op sem avisar ninguém).
+      // Isso invalidava qualquer conclusão tirada da ausência de `WebRTCConnectionError` nos logs
+      // reais — a ausência não provava que o ICE nunca falhou, só que a falha nunca tinha como ser
+      // registrada.
+      onConnectionError: (peerId, kind, detail) =>
+        void reportClientError('WebRTCConnectionError', detail, undefined, { peerId, kind })
     });
     meshRef.current = mesh;
     mesh.setHardwareEncodePreference(getHardwareEncodePreference());
@@ -418,6 +439,7 @@ export function useRoomConnection(
           // na sala" only had sound in TEST_MODE (a click-triggered stand-in, ServerListPage.tsx)
           // since production had no real event to hang it on — this is that real event.
           playRoomJoin();
+          mesh.setSelfPeerId(message.peerId);
           setState((prev) => ({
             ...prev,
             selfPeerId: message.peerId,
@@ -431,7 +453,8 @@ export function useRoomConnection(
               isSpeaking: false,
               isMicMuted: false,
               isDeafened: false,
-              avatarUrl: null
+              avatarUrl: null,
+              connectionStatus: 'connecting'
             }))
           }));
           for (const peer of message.peers) {
@@ -454,7 +477,8 @@ export function useRoomConnection(
                 isSpeaking: false,
                 isMicMuted: false,
                 isDeafened: false,
-                avatarUrl: null
+                avatarUrl: null,
+                connectionStatus: 'connecting'
               }
             ]
           }));
@@ -601,7 +625,12 @@ export function useRoomConnection(
 
   // qualityMode only matters when starting a share (ScreenSharePicker.tsx passes the choice made
   // there) — set before setLocalScreenTrack so it's already in place when the sender gets created.
+  // [Bug corrigido] setHardwareEncodePreference used to only be read once, at mesh creation (room
+  // join) — toggling it in Settings mid-room had zero effect until leaving and rejoining, which
+  // isn't what "vale a partir da próxima transmissão" (SettingsModal.tsx's own hint text) promises.
+  // Re-reading it fresh here, right as a share actually starts, makes that promise true.
   function setLocalScreenTrack(stream: MediaStream | null, qualityMode?: 'quality' | 'smoothness'): void {
+    if (stream) meshRef.current?.setHardwareEncodePreference(getHardwareEncodePreference());
     if (qualityMode) meshRef.current?.setScreenQualityMode(qualityMode);
     void meshRef.current?.setLocalScreenTrack(stream);
     // Explicit signal (see messages.ts) — the WebRTC-level "track ended" alone was unreliable for

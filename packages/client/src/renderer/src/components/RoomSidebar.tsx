@@ -438,6 +438,9 @@ export default function RoomSidebar({
             isDeafened: boolean;
             // null for self — there's no incoming stream to adjust volume on for your own row.
             userId: string | null;
+            // null for self — no P2P connection to yourself, so no dot to show (see the render
+            // below, which only draws one when this isn't null).
+            connectionStatus: 'connecting' | 'connected' | 'failed' | null;
           }[] = isJoined
             ? [
                 {
@@ -450,7 +453,8 @@ export default function RoomSidebar({
                   isBroadcasting: selfCameraOn || selfSharingScreen,
                   isMicMuted,
                   isDeafened,
-                  userId: null
+                  userId: null,
+                  connectionStatus: null
                 },
                 ...peers.map((peer) => ({
                   key: peer.peerId,
@@ -467,7 +471,8 @@ export default function RoomSidebar({
                     !!peer.screenStream,
                   isMicMuted: peer.isMicMuted,
                   isDeafened: peer.isDeafened,
-                  userId: peer.userId
+                  userId: peer.userId,
+                  connectionStatus: peer.connectionStatus
                 }))
               ]
             : [];
@@ -544,21 +549,38 @@ export default function RoomSidebar({
                           : undefined
                       }
                     >
-                      <span
-                        className={
-                          'room-sidebar__participant-avatar' +
-                          (participant.isSpeaking ? ' room-sidebar__participant-avatar--speaking' : '')
-                        }
-                        style={participant.avatarUrl ? undefined : { background: getAvatarColor(participant.name) }}
-                      >
-                        {participant.avatarUrl ? (
-                          <img
-                            src={participant.avatarUrl}
-                            alt=""
-                            className="room-sidebar__participant-avatar-image"
+                      <span className="room-sidebar__avatar-wrap">
+                        <span
+                          className={
+                            'room-sidebar__participant-avatar' +
+                            (participant.isSpeaking ? ' room-sidebar__participant-avatar--speaking' : '')
+                          }
+                          style={participant.avatarUrl ? undefined : { background: getAvatarColor(participant.name) }}
+                        >
+                          {participant.avatarUrl ? (
+                            <img
+                              src={participant.avatarUrl}
+                              alt=""
+                              className="room-sidebar__participant-avatar-image"
+                            />
+                          ) : (
+                            participant.name.charAt(0)
+                          )}
+                        </span>
+                        {participant.connectionStatus && (
+                          <span
+                            className={
+                              'room-sidebar__connection-dot room-sidebar__connection-dot--' +
+                              participant.connectionStatus
+                            }
+                            title={
+                              participant.connectionStatus === 'connected'
+                                ? 'Conectado'
+                                : participant.connectionStatus === 'connecting'
+                                  ? 'Conectando...'
+                                  : 'Falha de conexão'
+                            }
                           />
-                        ) : (
-                          participant.name.charAt(0)
                         )}
                       </span>
                       <span className="room-sidebar__participant-name">{participant.name}</span>

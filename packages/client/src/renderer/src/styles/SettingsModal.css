@@ -165,3 +165,37 @@
   accent-color: var(--color-accent);
   margin-top: 2px;
 }
+
+.settings-modal__network-test-button {
+  padding: 8px 16px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--color-accent);
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.settings-modal__network-test-button:hover:not(:disabled) {
+  background: var(--color-accent-hover);
+}
+
+.settings-modal__network-test-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.settings-modal__network-test-result {
+  margin: 10px 0 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.settings-modal__network-test-result--good {
+  color: var(--color-online);
+}
+
+.settings-modal__network-test-result--bad {
+  color: var(--color-danger);
+}
