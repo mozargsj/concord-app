@@ -1,7 +1,14 @@
 import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
-import { Eye, Volume2, VolumeX, X } from 'lucide-react';
+import { Eye, Volume2, VolumeX, WifiOff, X } from 'lucide-react';
 import MediaStreamVideo from './MediaStreamVideo';
+import searchingArt from '../assets/images/investigando.png';
 import '../styles/ScreenShareTile.css';
+
+// How long to wait for the first real video frame before telling the viewer the connection
+// itself seems to have failed, instead of leaving them staring at a black tile with no
+// explanation (see decisions.md — reported as a real bug where the tile went black with no
+// feedback at all, root cause still being tracked down separately).
+const SEARCHING_TIMEOUT_MS = 10000;
 
 interface ScreenShareTileProps {
   stream: MediaStream;
@@ -55,8 +62,43 @@ export default function ScreenShareTile({
   const [volumePercent, setVolumePercent] = useState(100);
   const [isMuted, setIsMuted] = useState(false);
   const [isVolumeSliderOpen, setIsVolumeSliderOpen] = useState(false);
+  // Tracks whether the <video> element has actually started painting real frames yet, separate
+  // from isLive (which just means "we're trying to show it") — a track can be connected with
+  // zero frames ever arriving (the exact "tela preta" bug reported in real testing), and without
+  // this the viewer had no way to tell "still connecting" from "broken".
+  const [hasReceivedFrame, setHasReceivedFrame] = useState(isOwnPreview);
+  const [connectionFailed, setConnectionFailed] = useState(false);
+  // Bumped by the retry button to re-run the waiting-for-frame effect below without needing
+  // isLive itself to change (it doesn't, on a retry — the tile is already "live", just stuck).
+  const [retryTick, setRetryTick] = useState(0);
   const visibleVideoRef = useRef<HTMLVideoElement>(null);
   const audioVideoRef = useRef<HTMLVideoElement>(null);
+
+  // Own-preview never needs this — it's the local capture, frames are never in question. For a
+  // peer's tile, every time it goes live (first click, or a retry) this waits for a real 'playing'
+  // event on the video element before trusting it; SEARCHING_TIMEOUT_MS without one means
+  // something's actually wrong, not just a normal connection delay.
+  useEffect(() => {
+    if (!isLive || isOwnPreview) return;
+    setHasReceivedFrame(false);
+    setConnectionFailed(false);
+    const video = visibleVideoRef.current;
+    const timeout = setTimeout(() => setConnectionFailed(true), SEARCHING_TIMEOUT_MS);
+    function handlePlaying() {
+      clearTimeout(timeout);
+      setHasReceivedFrame(true);
+    }
+    video?.addEventListener('playing', handlePlaying);
+    return () => {
+      clearTimeout(timeout);
+      video?.removeEventListener('playing', handlePlaying);
+    };
+  }, [isLive, isOwnPreview, retryTick]);
+
+  function handleRetrySearching(event: ReactMouseEvent) {
+    event.stopPropagation();
+    setRetryTick((tick) => tick + 1);
+  }
 
   useEffect(() => {
     function handleWindowBlur() {
@@ -146,9 +188,32 @@ export default function ScreenShareTile({
       )}
 
       {isLive ? (
-        // muted — the hidden element above already owns audio playback for this stream; playing
-        // it here too would double it up.
-        <MediaStreamVideo stream={stream} fit="contain" muted videoRef={visibleVideoRef} />
+        <div className="screen-share-tile__live-wrap">
+          {/* muted — the hidden element above already owns audio playback for this stream;
+              playing it here too would double it up. Stays mounted even while the searching/
+              failed overlay covers it, since it's the same element whose 'playing' event the
+              effect above is listening for — swapping it out would mean it never fires. */}
+          <MediaStreamVideo stream={stream} fit="contain" muted videoRef={visibleVideoRef} />
+          {!hasReceivedFrame && !connectionFailed && (
+            <div className="screen-share-tile__overlay screen-share-tile__overlay--searching">
+              <div className="screen-share-tile__message">
+                <img src={searchingArt} alt="" className="screen-share-tile__searching-icon" />
+                <span>Buscando transmissão...</span>
+              </div>
+            </div>
+          )}
+          {connectionFailed && (
+            <div className="screen-share-tile__overlay screen-share-tile__overlay--failed">
+              <div className="screen-share-tile__message">
+                <WifiOff size={22} />
+                <span>Não foi possível carregar essa transmissão.</span>
+                <button type="button" className="screen-share-tile__retry" onClick={handleRetrySearching}>
+                  Tentar novamente
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
       ) : (
         <button type="button" className="screen-share-tile__overlay" onClick={handleStartViewing}>
           {frozenFrameUrl && <img src={frozenFrameUrl} alt="" className="screen-share-tile__frozen-image" />}

@@ -9,8 +9,32 @@
   padding: 0 8px;
 }
 
+/* .title-bar__left and .title-bar__actions share the same flex-basis-0 growth so they always end
+   up the same width regardless of their (different) content — that's what keeps .title-bar__center
+   sitting at the true midpoint of the whole bar instead of drifting toward whichever side is
+   narrower (previously .title-bar__center alone had flex:1, which only centers within the space
+   left over after .title-bar__actions — not the same as the bar's actual center). */
+.title-bar__left,
+.title-bar__actions {
+  flex: 1 1 0;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.title-bar__left {
+  justify-content: flex-start;
+}
+
+.title-bar__version {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  opacity: 0.6;
+  white-space: nowrap;
+}
+
 .title-bar__center {
-  flex: 1;
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -32,8 +56,7 @@
 }
 
 .title-bar__actions {
-  display: flex;
-  align-items: center;
+  justify-content: flex-end;
   gap: 8px;
   -webkit-app-region: no-drag;
 }

@@ -19,6 +19,10 @@ export default function TitleBar({ title }: TitleBarProps) {
   return (
     <>
       <header className="title-bar">
+      <div className="title-bar__left">
+        <span className="title-bar__version">v{__APP_VERSION__}</span>
+      </div>
+
       <div className="title-bar__center">
         <img src={logo} alt="" className="title-bar__logo" />
         <span className="title-bar__title">{title}</span>

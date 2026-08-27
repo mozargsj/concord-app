@@ -20,6 +20,39 @@
   overflow: hidden;
 }
 
+.screen-share-tile__live-wrap {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.screen-share-tile__overlay--searching,
+.screen-share-tile__overlay--failed {
+  background: rgba(0, 0, 0, 0.65);
+  cursor: default;
+}
+
+.screen-share-tile__searching-icon {
+  width: 56px;
+  height: 56px;
+}
+
+.screen-share-tile__retry {
+  margin-top: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.1);
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 14px;
+  cursor: pointer;
+}
+
+.screen-share-tile__retry:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
 .screen-share-tile__frozen-image {
   position: absolute;
   inset: 0;
