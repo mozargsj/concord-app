@@ -4,7 +4,7 @@ import { SignalingClient, type SignalingStatus } from '../lib/signalingClient';
 import { MeshManager, type SoundListEntry } from '../lib/webrtcMesh';
 import { getPreferredDeviceId } from '../lib/devicePreferences';
 import { playDeviceSwitch, playRoomJoin, playRoomLeave } from '../lib/soundEffects';
-import { TEST_OFFLINE, reportClientError } from '../lib/api';
+import { TEST_OFFLINE, getSessionToken, reportClientError } from '../lib/api';
 import { fetchImageBytes, loadCachedImage, saveCachedImage, type ImageCacheKind } from '../lib/imageCache';
 import { listOwnSounds, loadOwnSoundBytes } from '../lib/soundCache';
 import { saveTempSound } from '../lib/soundTempCache';
@@ -368,6 +368,14 @@ export function useRoomConnection(
       };
     }
 
+    // A room always belongs to a server (join-room now needs serverId to let the signaling server
+    // check real membership, roomManager.ts) — no server context means there's structurally
+    // nothing valid to connect to yet, not a state worth attempting a WS connection over.
+    if (!server) {
+      setState(initialState);
+      return;
+    }
+
     const signaling = new SignalingClient();
     signalingRef.current = signaling;
     const pendingPings = new Map<string, number>();
@@ -579,7 +587,14 @@ export function useRoomConnection(
       mesh.setLocalMicTrack(pipeline.track);
     });
 
-    signaling.connect(import.meta.env.VITE_SIGNALING_URL, roomId, displayName, userId);
+    signaling.connect(
+      import.meta.env.VITE_SIGNALING_URL,
+      roomId,
+      server.id,
+      displayName,
+      userId,
+      getSessionToken() ?? ''
+    );
 
     const pingInterval = setInterval(() => {
       const nonce = Math.random().toString(36).slice(2);

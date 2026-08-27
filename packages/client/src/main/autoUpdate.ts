@@ -41,6 +41,15 @@ export function checkForUpdatesOnStartup(window: BrowserWindow, isDev: boolean):
     return;
   }
 
+  // [Achado] did-finish-load can fire more than once (index.ts uses .on(), not .once(), on
+  // purpose — see its own comment, for Vite full-reloads in dev). Without this, every call here
+  // stacked a fresh set of listeners onto this module-level autoUpdater singleton instead of
+  // replacing them, so a real 'update-downloaded' would fire quitAndInstall() once per accumulated
+  // registration. Scoped to just the events registered below (not a bare removeAllListeners()) so
+  // this never touches any listener electron-updater itself might register on its own emitter.
+  for (const event of ['update-available', 'update-not-available', 'error', 'download-progress', 'update-downloaded'] as const) {
+    autoUpdater.removeAllListeners(event);
+  }
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = false;
 

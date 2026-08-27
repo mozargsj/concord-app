@@ -46,12 +46,20 @@ const LOCAL_SPEAKING_RELEASE_HOLD_MS = 400;
 // sequential meta-then-chunks protocol needs no sequence numbers).
 const IMAGE_CHUNK_SIZE = 16 * 1024;
 const IMAGE_CHUNK_HIGH_WATER = 1024 * 1024;
+// [Achado de segurança] `meta` frames declare their own `size` — nothing capped it before, so a
+// malicious/misbehaving peer could claim an arbitrary size and have this side accumulate chunks
+// into `incomingImageTransfer.chunks` without bound (real or not, `handleImageChunk` just keeps
+// pushing until `received >= size`). 25MB is far above any real avatar/server icon this app ever
+// produces.
+const MAX_IMAGE_TRANSFER_BYTES = 25 * 1024 * 1024;
 
 // Soundboard clip transfer over the 'sounds' data channel — same chunked-transfer shape as
 // images, plus a list-req/list step first since (unlike one avatar per owner) a peer can have
 // many sounds and the UI needs their names/emojis before anyone downloads bytes.
 const SOUND_CHUNK_SIZE = 16 * 1024;
 const SOUND_CHUNK_HIGH_WATER = 1024 * 1024;
+// Same rationale as MAX_IMAGE_TRANSFER_BYTES — soundboard clips are short, this is generous headroom.
+const MAX_SOUND_TRANSFER_BYTES = 25 * 1024 * 1024;
 
 interface SpeakingState {
   isSpeaking: boolean;
@@ -530,6 +538,31 @@ export class MeshManager {
       this.pendingIceCandidatesByPeer.set(fromPeerId, queued);
       return;
     }
+    // [Corrigido, investigação de conectividade 2026-08-27] Antes, o resto deste método (checar
+    // remoteDescription, aplicar via addIceCandidate) rodava fora de entry.negotiationQueue —
+    // diferente de handleOffer/handleAnswer/renegotiate, que são todos serializados nela. Um
+    // candidato podia chegar por sinalização bem no meio de uma colisão de oferta em andamento
+    // (rollback + aceitar a oferta do outro lado, ver performHandleOffer), ver remoteDescription
+    // como "existe" (a antiga, ainda não rolada de volta) e acabar aplicado depois, já contra a
+    // SDP nova — sdpMid/sdpMLineIndex/ufrag de uma rodada, candidato de outra. Bate exatamente com
+    // as hipóteses "candidato não corresponde ao SDP ativo" e "lifecycle/ordem de negociação"
+    // levantadas na investigação. Enfileirar aqui, mesmo padrão das outras operações que tocam
+    // SDP/ICE nesta conexão, elimina a race por construção: este candidato só é checado/aplicado
+    // depois que qualquer rollback/setRemoteDescription em andamento já tiver terminado de verdade.
+    entry.negotiationQueue = entry.negotiationQueue
+      .then(() => this.performHandleIceCandidate(entry, candidate))
+      .catch((error) => {
+        console.error(`[MeshManager] handleIceCandidate failed for ${entry.peerId}`, error);
+        this.opts.onConnectionError?.(
+          entry.peerId,
+          'ice-candidate-apply-failed',
+          `handleIceCandidate/performHandleIceCandidate lançou: ${error instanceof Error ? error.message : String(error)}`
+        );
+      });
+    return entry.negotiationQueue;
+  }
+
+  private async performHandleIceCandidate(entry: PeerConnectionEntry, candidate: RTCIceCandidateInit): Promise<void> {
     if (!entry.pc.remoteDescription) {
       entry.pendingCandidates.push(candidate);
       return;
@@ -543,7 +576,7 @@ export class MeshManager {
       // mostrava nenhum candidato remoto aplicado. Essa é a única explicação que sobra: addIceCandidate
       // está rejeitando todos eles, e sem logar o erro de verdade não dava pra saber por quê.
       this.opts.onConnectionError?.(
-        fromPeerId,
+        entry.peerId,
         'ice-candidate-apply-failed',
         `addIceCandidate rejeitou: ${error instanceof Error ? error.message : String(error)} — candidate: ${JSON.stringify(candidate).slice(0, 300)}`
       );
@@ -1030,7 +1063,17 @@ export class MeshManager {
 
     channel.onmessage = (event) => {
       if (typeof event.data === 'string') {
-        void this.handleImageControl(entry, channel, JSON.parse(event.data) as ImageControlFrame);
+        // [Achado de segurança] JSON.parse() sem try/catch aqui lançava direto dentro do
+        // onmessage — um peer malicioso/com bug mandando um frame malformado quebrava esse
+        // handler pra essa conexão inteira. handleIceCandidate já tinha esse cuidado, esse canal
+        // não tinha.
+        let frame: ImageControlFrame;
+        try {
+          frame = JSON.parse(event.data) as ImageControlFrame;
+        } catch {
+          return;
+        }
+        void this.handleImageControl(entry, channel, frame);
         return;
       }
       this.handleImageChunk(entry, event.data as ArrayBuffer);
@@ -1076,6 +1119,7 @@ export class MeshManager {
     }
 
     if (frame.t === 'meta') {
+      if (typeof frame.size !== 'number' || frame.size <= 0 || frame.size > MAX_IMAGE_TRANSFER_BYTES) return;
       entry.incomingImageTransfer = {
         kind: frame.kind,
         ownerId: frame.ownerId,
@@ -1136,7 +1180,15 @@ export class MeshManager {
 
     channel.onmessage = (event) => {
       if (typeof event.data === 'string') {
-        void this.handleSoundControl(entry, channel, JSON.parse(event.data) as SoundControlFrame);
+        // Same fix as setupImagesChannel's own onmessage — JSON.parse() without a try/catch here
+        // let a malformed frame from a peer throw uncaught inside this handler.
+        let frame: SoundControlFrame;
+        try {
+          frame = JSON.parse(event.data) as SoundControlFrame;
+        } catch {
+          return;
+        }
+        void this.handleSoundControl(entry, channel, frame);
         return;
       }
       this.handleSoundChunk(entry, event.data as ArrayBuffer);
@@ -1191,6 +1243,7 @@ export class MeshManager {
       return;
     }
     if (frame.t === 'meta') {
+      if (typeof frame.size !== 'number' || frame.size <= 0 || frame.size > MAX_SOUND_TRANSFER_BYTES) return;
       entry.incomingSoundTransfer = {
         soundId: frame.soundId,
         mimeType: frame.mimeType,

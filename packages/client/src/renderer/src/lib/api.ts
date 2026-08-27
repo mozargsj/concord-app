@@ -79,6 +79,13 @@ export function setSessionToken(token: string | null): void {
   sessionToken = token;
 }
 
+/** Read access for callers that need the raw token itself, not just the Authorization header this
+ * module already attaches — currently just useRoomConnection.ts, which sends it over the
+ * signaling WebSocket so the server can verify room membership on join (roomManager.ts). */
+export function getSessionToken(): string | null {
+  return sessionToken;
+}
+
 let onUnauthorized: (() => void) | null = null;
 
 /** App.tsx registers this once — every authenticated request goes through `request()` below, so

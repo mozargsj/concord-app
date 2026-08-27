@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { createReadStream, existsSync, statSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 import type {
   ApiErrorResponse,
   ClientErrorReportRequest,
@@ -78,8 +78,14 @@ function handleServeUpdateFile(req: IncomingMessage, res: ServerResponse, segmen
     return;
   }
 
+  // [Achado de segurança] filePath.startsWith(UPDATES_DIR) alone (no trailing separator) also
+  // matches a sibling path that merely shares the same string prefix — e.g. UPDATES_DIR
+  // "/opt/concord/updates" would wrongly accept "/opt/concord/updates-backup/anything". Requiring
+  // the separator (or an exact match, for the directory itself) makes this a real containment
+  // check instead of a string-prefix coincidence.
   const filePath = resolve(join(UPDATES_DIR, ...segments.slice(1)));
-  if (!filePath.startsWith(UPDATES_DIR) || !existsSync(filePath) || !statSync(filePath).isFile()) {
+  const isInsideUpdatesDir = filePath === UPDATES_DIR || filePath.startsWith(UPDATES_DIR + sep);
+  if (!isInsideUpdatesDir || !existsSync(filePath) || !statSync(filePath).isFile()) {
     res.writeHead(404, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...CORS_HEADERS });
     res.end(JSON.stringify({ error: 'not-found' } satisfies ApiErrorResponse));
     return;
@@ -97,9 +103,25 @@ function sendError(res: ServerResponse, status: number, error: string): void {
   sendJson(res, status, { error } satisfies ApiErrorResponse);
 }
 
+// [Achado de segurança] Sem isso, readJsonBody acumulava o corpo inteiro em memória antes de
+// validar qualquer coisa — inclusive em rotas públicas sem sessão (POST /logs/client-error), o
+// que deixava qualquer um mandar um corpo gigante pra consumir memória do processo. 1MiB é bem
+// acima de qualquer payload real deste app (avatar/ícone/som vão direto pro S3 via URL presignada,
+// nunca por aqui — o corpo JSON mais pesado de verdade é um stack trace de erro).
+const MAX_JSON_BODY_BYTES = 1024 * 1024;
+
 async function readJsonBody<T>(req: IncomingMessage): Promise<T | null> {
   const chunks: Buffer[] = [];
-  for await (const chunk of req) chunks.push(chunk as Buffer);
+  let total = 0;
+  for await (const chunk of req) {
+    const buf = chunk as Buffer;
+    total += buf.byteLength;
+    if (total > MAX_JSON_BODY_BYTES) {
+      req.destroy();
+      return null;
+    }
+    chunks.push(buf);
+  }
   if (chunks.length === 0) return null;
   try {
     return JSON.parse(Buffer.concat(chunks).toString('utf8')) as T;
@@ -353,7 +375,20 @@ async function handleLogin(req: IncomingMessage, res: ServerResponse): Promise<v
 
   let record = await usersRepo.findByEmail(email);
   const isNewUser = !record;
-  if (!record) record = await usersRepo.create({ email, displayName });
+  if (!record) {
+    try {
+      record = await usersRepo.create({ email, displayName });
+    } catch (error) {
+      if (!(error instanceof usersRepo.UserCreateConflictError)) throw error;
+      // Lost a race against a concurrent first login for the same email (see usersRepo.create's
+      // own comment) — the winner's row already exists now, so this request just logs into that
+      // account instead of failing. isNewUser stays true below, so the avatar-import step can
+      // still run redundantly against the now-existing record — harmless, just a wasted fetch in
+      // an already-rare race.
+      record = await usersRepo.findByEmail(email);
+      if (!record) throw error;
+    }
+  }
 
   if (isNewUser && body?.avatarImageUrl) {
     const key = await importAvatarFromUrl(record.user_id, body.avatarImageUrl);
@@ -385,9 +420,15 @@ async function handleUpdateMe(req: IncomingMessage, res: ServerResponse): Promis
   if (!existing) return sendError(res, 404, 'user-not-found');
 
   const body = await readJsonBody<UpdateProfileRequest>(req);
+  const avatarKey = body?.avatarKey || undefined;
+  // [Achado de segurança] handlePresignUpload only ever hands out a key under `avatars/${userId}-
+  // ...` — without re-checking that prefix here, this endpoint would happily bind ANY key the
+  // client sends (including one belonging to someone else, if guessed/known) to this user's
+  // profile, and toUserProfile would then hand back a presigned GET URL for it.
+  if (avatarKey && !avatarKey.startsWith(`avatars/${userId}-`)) return sendError(res, 403, 'forbidden');
   await usersRepo.updateProfile(userId, {
     displayName: body?.displayName?.trim() || undefined,
-    avatarKey: body?.avatarKey || undefined
+    avatarKey
   });
 
   const updated = await usersRepo.findById(userId);
@@ -414,16 +455,27 @@ async function handleCreateServer(req: IncomingMessage, res: ServerResponse): Pr
   const body = await readJsonBody<CreateServerRequest>(req);
   const name = body?.name?.trim();
   if (!name) return sendError(res, 400, 'name-required');
+  const iconKey = body?.iconKey ?? null;
+  // Same rationale as handleUpdateMe's avatarKey check — handlePresignUpload only ever hands out
+  // a server-icon key under `servers/${userId}-...` (the creator's own id, since the server
+  // doesn't exist yet at upload time), so anything else isn't a key this request legitimately owns.
+  if (iconKey && !iconKey.startsWith(`servers/${userId}-`)) return sendError(res, 403, 'forbidden');
 
   const owner = await usersRepo.findById(userId);
   if (!owner) return sendError(res, 404, 'user-not-found');
+  // Fast pre-checks for the common case's error messages — the real guard against a concurrent
+  // double-submit is the transaction inside serversRepo.createOwned below.
   if (owner.owned_server_id) return sendError(res, 409, 'already-owns-server');
-
   const existing = await serversRepo.findByNameLower(name.toLowerCase());
   if (existing) return sendError(res, 409, 'name-taken');
 
-  const record = await serversRepo.create({ name, iconKey: body?.iconKey ?? null, ownerUserId: userId });
-  await usersRepo.setOwnedServer(userId, record.server_id);
+  let record: serversRepo.ServerRecord;
+  try {
+    record = await serversRepo.createOwned({ name, iconKey, ownerUserId: userId });
+  } catch (error) {
+    if (error instanceof serversRepo.ServerCreateConflictError) return sendError(res, 409, error.reason);
+    throw error;
+  }
   await authorizedUsersRepo.authorize(record.server_id, userId);
   await rolesRepo.setRank(record.server_id, userId, Role.Dono);
 

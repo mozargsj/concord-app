@@ -27,7 +27,11 @@ export function createSignalingServer(port: number, tls?: TlsOptions): WebSocket
     ? createHttpsServer({ cert: readFileSync(tls.certPath), key: readFileSync(tls.keyPath) }, requestHandler)
     : createHttpServer(requestHandler);
 
-  const wss = new WebSocketServer({ server });
+  // No maxPayload set otherwise falls back to ws's own default (100MiB) — far above anything a
+  // real signaling message needs (SDP offers/answers are a few KB, ICE candidates a few hundred
+  // bytes). 128KiB leaves generous headroom for an unusually large multi-track SDP while capping
+  // how much a hostile/misbehaving client can force this process to buffer per message.
+  const wss = new WebSocketServer({ server, maxPayload: 128 * 1024 });
   wss.on('connection', handleConnection);
   server.listen(port);
   return wss;

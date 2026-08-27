@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { GetCommand, PutCommand, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
+import { GetCommand, QueryCommand, TransactWriteCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { getDynamoClient } from '../aws/dynamoClient.js';
 import { env } from '../config/env.js';
 
@@ -13,8 +13,25 @@ export interface UserRecord {
   created_at: number;
 }
 
-function tableName(): string {
+/** Exported so serversRepo.ts's cross-table transaction (createOwned) can reference this table
+ * name without duplicating the `${prefix}users` convention. */
+export function tableName(): string {
   return `${env.dynamodbTablePrefix}users`;
+}
+
+function emailLockTableName(): string {
+  return `${env.dynamodbTablePrefix}email_locks`;
+}
+
+export class UserCreateConflictError extends Error {
+  constructor(public reason: 'email-taken') {
+    super(reason);
+  }
+}
+
+function conditionalCheckFailedAt(error: unknown, index: number): boolean {
+  const reasons = (error as { CancellationReasons?: { Code?: string }[] } | undefined)?.CancellationReasons;
+  return reasons?.[index]?.Code === 'ConditionalCheckFailed';
 }
 
 export async function findByEmail(email: string): Promise<UserRecord | null> {
@@ -37,17 +54,48 @@ export async function findById(id: string): Promise<UserRecord | null> {
   return (result.Item as UserRecord | undefined) ?? null;
 }
 
+/**
+ * [Corrigido, achado de segurança] The old version checked findByEmail then Put separately — two
+ * concurrent requests for the same brand-new email could both pass that check before either write
+ * landed, creating two user rows for one email (email_lower-index has no uniqueness enforcement
+ * of its own, it's just a query index). A DynamoDB ConditionExpression only guards the item being
+ * written, never another item sharing an attribute value, so real uniqueness needs a second
+ * "reservation" item keyed by the unique value itself — written atomically alongside the real
+ * user row via TransactWriteItems. If the lock already exists, the whole transaction is cancelled
+ * and nothing is written (see UserCreateConflictError — callers like handleLogin can recover by
+ * re-fetching the row the winner just created, since "log in with this email" has a sane fallback
+ * that "create a server with this name" doesn't).
+ */
 export async function create(params: { email: string; displayName: string }): Promise<UserRecord> {
+  const emailLower = params.email.trim().toLowerCase();
   const record: UserRecord = {
     user_id: randomUUID(),
     email: params.email.trim(),
-    email_lower: params.email.trim().toLowerCase(),
+    email_lower: emailLower,
     display_name: params.displayName.trim().slice(0, 60),
     avatar_key: null,
     owned_server_id: null,
     created_at: Date.now()
   };
-  await getDynamoClient().send(new PutCommand({ TableName: tableName(), Item: record }));
+  try {
+    await getDynamoClient().send(
+      new TransactWriteCommand({
+        TransactItems: [
+          {
+            Put: {
+              TableName: emailLockTableName(),
+              Item: { email_lower: emailLower, user_id: record.user_id },
+              ConditionExpression: 'attribute_not_exists(email_lower)'
+            }
+          },
+          { Put: { TableName: tableName(), Item: record } }
+        ]
+      })
+    );
+  } catch (error) {
+    if (conditionalCheckFailedAt(error, 0)) throw new UserCreateConflictError('email-taken');
+    throw error;
+  }
   return record;
 }
 
@@ -74,17 +122,6 @@ export async function updateProfile(
       Key: { user_id: id },
       UpdateExpression: `SET ${sets.join(', ')}`,
       ExpressionAttributeValues: values
-    })
-  );
-}
-
-export async function setOwnedServer(id: string, serverId: string): Promise<void> {
-  await getDynamoClient().send(
-    new UpdateCommand({
-      TableName: tableName(),
-      Key: { user_id: id },
-      UpdateExpression: 'SET owned_server_id = :server_id',
-      ExpressionAttributeValues: { ':server_id': serverId }
     })
   );
 }

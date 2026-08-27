@@ -55,7 +55,16 @@ ipcMain.handle('process-loopback:start', (event) => {
       clearTimeout(timeoutHandle);
       resolve(ok);
     };
-    const timeoutHandle = setTimeout(() => settle(false), START_TIMEOUT_MS);
+    // [Achado, "captura fantasma"] Before this, a timeout only resolved the promise false and
+    // never told the addon to stop — if WASAPI's ActivateAudioInterfaceAsync ends up completing
+    // AFTER this fires (plausible under system load), the native capture starts for real with
+    // nobody left holding a reference that would ever call stop() on it. addon.stop() here is
+    // safe to call even if activation never actually started (same call the explicit
+    // 'process-loopback:stop' IPC handler already makes unconditionally).
+    const timeoutHandle = setTimeout(() => {
+      settle(false);
+      addon.stop();
+    }, START_TIMEOUT_MS);
 
     addon.start(process.pid, (type, payload) => {
       switch (type) {

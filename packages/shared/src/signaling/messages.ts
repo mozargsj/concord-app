@@ -1,8 +1,20 @@
 export interface JoinRoomMessage {
   type: 'join-room';
   roomId: string;
+  /** Server the room belongs to — the signaling server uses this + sessionToken to confirm the
+   * joiner is actually a member of that server before letting them into the room (see
+   * roomManager.ts). Without it there was no way to check room membership at all. */
+  serverId: string;
   displayName: string;
+  /** Client-claimed identity — only trusted as a fallback when sessionToken doesn't verify AND
+   * the server has ALLOW_UNAUTHENTICATED_ROOMS set (local/test-dev signaling only, never
+   * production — see env.ts). Otherwise the server derives the real userId from sessionToken and
+   * ignores this field entirely. */
   userId: string;
+  /** Verified server-side via verifySessionToken (auth/session.ts) — same token already used for
+   * every HTTP call. Before this, join-room had no session check at all: anyone who knew/guessed
+   * a roomId could join and claim any userId. */
+  sessionToken: string;
 }
 
 export interface SdpOfferMessage {
@@ -123,7 +135,7 @@ export interface RoomJoinedMessage {
 export interface JoinRejectedMessage {
   type: 'join-rejected';
   roomId: string;
-  reason: 'room-full';
+  reason: 'room-full' | 'unauthorized' | 'forbidden';
 }
 
 export interface PeerJoinedMessage {

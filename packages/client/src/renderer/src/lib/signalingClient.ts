@@ -24,7 +24,14 @@ export class SignalingClient {
   // assim que o socket abre.
   private pendingSends: ClientToServerMessage[] = [];
 
-  connect(url: string, roomId: string, displayName: string, userId: string): void {
+  connect(
+    url: string,
+    roomId: string,
+    serverId: string,
+    displayName: string,
+    userId: string,
+    sessionToken: string
+  ): void {
     this.setStatus('connecting');
     this.pendingSends = [];
     const ws = new WebSocket(url);
@@ -32,7 +39,7 @@ export class SignalingClient {
 
     ws.onopen = () => {
       this.setStatus('connected');
-      this.send({ type: 'join-room', roomId, displayName, userId });
+      this.send({ type: 'join-room', roomId, serverId, displayName, userId, sessionToken });
       const queued = this.pendingSends;
       this.pendingSends = [];
       for (const message of queued) this.send(message);

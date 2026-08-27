@@ -10,7 +10,12 @@ export const env = {
   },
   dynamodbTablePrefix: process.env.DYNAMODB_TABLE_PREFIX ?? 'concord_',
   s3ServerIconsBucket: process.env.S3_SERVER_ICONS_BUCKET ?? '',
-  sessionSecret: process.env.SESSION_SECRET ?? ''
+  sessionSecret: process.env.SESSION_SECRET ?? '',
+  // Dev/test-only escape hatch for join-room's session/membership check (roomManager.ts) — lets
+  // the client's TEST_MODE (api.ts, fake login/server/room, no real backend account) exercise the
+  // real signaling/WebRTC mesh without a real session token. Must never be set to 'true' on the
+  // production signaling server — only on a local/test-real instance's own .env.
+  allowUnauthenticatedRooms: process.env.ALLOW_UNAUTHENTICATED_ROOMS === 'true'
 };
 
 export function hasAwsRegion(): boolean {

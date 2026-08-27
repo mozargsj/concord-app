@@ -7,6 +7,11 @@ import type {
   SdpOfferMessage,
   ServerToClientMessage
 } from '@concord/shared';
+import { verifySessionToken } from '../auth/session.js';
+import { env } from '../config/env.js';
+import * as serversRepo from '../db/serversRepo.js';
+import * as roomsRepo from '../db/roomsRepo.js';
+import * as rolesRepo from '../db/rolesRepo.js';
 
 const ROOM_CAP = 10;
 const CANDIDATE_BATCH_SIZE = 3;
@@ -48,8 +53,44 @@ function broadcast(room: Room, message: ServerToClientMessage, excludePeerId?: s
   }
 }
 
-export function joinRoom(socket: WebSocket, roomId: string, displayName: string, userId: string): void {
+/**
+ * [Corrigido, achado de segurança] Antes, join-room aceitava roomId/displayName/userId direto do
+ * client sem checar sessão nenhuma nem se o usuário de fato pertence ao servidor da sala — qualquer
+ * um que descobrisse um roomId entrava, podendo inclusive se passar por qualquer userId (usado em
+ * mute-per-person, busca de avatar, etc.). Agora exige o mesmo sessionToken já usado em toda
+ * chamada HTTP, verificado aqui e usado como fonte de verdade do userId (o campo userId do client
+ * só é usado como fallback quando ALLOW_UNAUTHENTICATED_ROOMS está ligado — dev/test-mode local,
+ * nunca em produção), e confere que esse userId é dono ou tem rank no servidor dono da sala.
+ */
+export async function joinRoom(
+  socket: WebSocket,
+  roomId: string,
+  serverId: string,
+  displayName: string,
+  claimedUserId: string,
+  sessionToken: string
+): Promise<void> {
   if (peersBySocket.has(socket)) return; // one room per socket at a time
+
+  const verifiedUserId = await verifySessionToken(sessionToken);
+  let userId: string;
+  if (verifiedUserId) {
+    const server = await serversRepo.findById(serverId);
+    const roomRecord = server ? await roomsRepo.findById(serverId, roomId) : null;
+    const isMember =
+      server !== null &&
+      (verifiedUserId === server.owner_user_id || (await rolesRepo.getRank(serverId, verifiedUserId)) !== null);
+    if (!server || !roomRecord || !isMember) {
+      send(socket, { type: 'join-rejected', roomId, reason: 'forbidden' });
+      return;
+    }
+    userId = verifiedUserId;
+  } else if (env.allowUnauthenticatedRooms) {
+    userId = claimedUserId;
+  } else {
+    send(socket, { type: 'join-rejected', roomId, reason: 'unauthorized' });
+    return;
+  }
 
   let room = rooms.get(roomId);
   if (!room) {
@@ -63,11 +104,10 @@ export function joinRoom(socket: WebSocket, roomId: string, displayName: string,
   }
 
   const existingPeers = [...room.peers.values()];
-  // displayName/userId come from an untrusted client and are rebroadcast to strangers in the
-  // room — trim/cap rather than trusting verbatim. userId lets peers attribute a shared-room
-  // participant to a persistent account (e.g. to fetch their avatar over the mesh's own data
-  // channel) — it's not used for any authorization decision, so a spoofed value only misleads
-  // other clients' local caches, never grants access to anything.
+  // displayName is still untrusted client input, rebroadcast to strangers in the room — trim/cap
+  // rather than trusting verbatim. userId is now either verified above (sessionToken) or, only in
+  // the dev-only unauthenticated-rooms bypass, the client's own claim — trim/cap either way as a
+  // last defensive measure, but it's no longer blindly trusted for authorization in the normal path.
   const safeDisplayName = displayName.trim().slice(0, 60) || 'Peer';
   const safeUserId = userId.trim().slice(0, 100) || randomUUID();
   const peer: Peer = {
