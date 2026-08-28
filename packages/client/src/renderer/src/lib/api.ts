@@ -380,6 +380,23 @@ export async function reportClientError(
   }
 }
 
+/**
+ * [Teste de conectividade 2026-08-27] Busca credenciais TURN de curta duração (servidor local
+ * gera via Cloudflare Realtime, ver router.ts) pra usar como fallback de NAT traversal ao lado do
+ * STUN de sempre (webrtcMesh.ts ICE_SERVERS). Best-effort: qualquer falha (backend sem TURN
+ * configurado, offline, TEST_MODE sem sessão real) devolve lista vazia — quem chama já trata isso
+ * como "sem TURN disponível, segue só com STUN".
+ */
+export async function fetchTurnCredentials(): Promise<RTCIceServer[]> {
+  if (TEST_MODE) return [];
+  try {
+    const result = await request<{ iceServers: RTCIceServer[] }>('/webrtc/turn-credentials');
+    return result.iceServers;
+  } catch {
+    return [];
+  }
+}
+
 export async function uploadToPresignedUrl(
   uploadUrl: string,
   data: ArrayBuffer,

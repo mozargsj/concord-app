@@ -42,6 +42,7 @@ import { createPresignedGetUrl, createPresignedUploadUrl, putObject } from '../a
 import { signSessionToken, verifySessionToken } from '../auth/session.js';
 import { signInviteToken, verifyInviteToken } from '../auth/invite.js';
 import { logError } from '../logging/errorLog.js';
+import { env } from '../config/env.js';
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -306,6 +307,10 @@ export async function handleHttpRequest(req: IncomingMessage, res: ServerRespons
     }
     if (method === 'POST' && segments.length === 2 && segments[0] === 'uploads' && segments[1] === 'presign') {
       await handlePresignUpload(req, res);
+      return;
+    }
+    if (method === 'GET' && segments.length === 2 && segments[0] === 'webrtc' && segments[1] === 'turn-credentials') {
+      await handleGetTurnCredentials(req, res);
       return;
     }
     if (method === 'POST' && segments.length === 2 && segments[0] === 'logs' && segments[1] === 'client-error') {
@@ -701,7 +706,12 @@ async function handleClientErrorReport(req: IncomingMessage, res: ServerResponse
     route: body.errorType,
     userId: userId ?? undefined,
     serverId,
-    roomId: typeof context?.roomId === 'string' ? context.roomId : undefined
+    roomId: typeof context?.roomId === 'string' ? context.roomId : undefined,
+    // [Diagnóstico, adicionado 2026-08-27] webrtcMesh.ts's onConnectionError sends both on every
+    // call (see useRoomConnection.ts's wiring) — previously dropped here despite arriving, losing
+    // exactly the fields needed to tell which peer/event-kind a log line was about.
+    peerId: typeof context?.peerId === 'string' ? context.peerId : undefined,
+    kind: typeof context?.kind === 'string' ? context.kind : undefined
   });
 
   sendJson(res, 200, {});
@@ -740,4 +750,48 @@ async function handlePresignUpload(req: IncomingMessage, res: ServerResponse): P
   const uploadUrl = await createPresignedUploadUrl(key, body.contentType);
   const response: PresignUploadResponse = { uploadUrl, key };
   sendJson(res, 200, response);
+}
+
+// 4h — comfortably longer than any real call session, short enough that a leaked credential
+// (it's handed to the renderer, same trust level as everything else client-side) stops working
+// on its own well before a full day passes.
+const TURN_CREDENTIAL_TTL_SECONDS = 4 * 60 * 60;
+
+/**
+ * [Teste de conectividade 2026-08-27] Minta credenciais TURN de curta duração via Cloudflare
+ * Realtime, sob demanda, autenticado — nunca expõe env.turnApiToken (o secret permanente) pro
+ * client, só o par username/credential de vida curta que a própria Cloudflare gera. Existe
+ * especificamente pra descartar (ou confirmar) falta de TURN como causa da falha total de
+ * conectividade P2P observada com testers reais; se TURN_KEY_ID/TURN_API_TOKEN não estiverem
+ * configurados, responde com iceServers vazio e o client cai de volta pro STUN-only de sempre.
+ */
+async function handleGetTurnCredentials(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const userId = await requireSession(req, res);
+  if (!userId) return;
+
+  if (!env.turnKeyId || !env.turnApiToken) {
+    sendJson(res, 200, { iceServers: [] });
+    return;
+  }
+
+  try {
+    const cfResponse = await fetch(`https://rtc.live.cloudflare.com/v1/turn/keys/${env.turnKeyId}/credentials/generate`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${env.turnApiToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ttl: TURN_CREDENTIAL_TTL_SECONDS })
+    });
+    if (!cfResponse.ok) {
+      await logError(new Error(`Cloudflare TURN credential generation failed: ${cfResponse.status}`), {
+        source: 'http',
+        route: 'GET /webrtc/turn-credentials'
+      });
+      sendJson(res, 200, { iceServers: [] });
+      return;
+    }
+    const data = (await cfResponse.json()) as { iceServers: { urls: string[]; username: string; credential: string } };
+    sendJson(res, 200, { iceServers: [data.iceServers] });
+  } catch (error) {
+    await logError(error, { source: 'http', route: 'GET /webrtc/turn-credentials' });
+    sendJson(res, 200, { iceServers: [] });
+  }
 }

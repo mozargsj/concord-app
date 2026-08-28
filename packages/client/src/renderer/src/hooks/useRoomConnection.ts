@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import type { DeviceKind, ServerToClientMessage } from '@concord/shared';
 import { SignalingClient, type SignalingStatus } from '../lib/signalingClient';
-import { MeshManager, type SoundListEntry } from '../lib/webrtcMesh';
+import { MeshManager, setTurnIceServers, type SoundListEntry } from '../lib/webrtcMesh';
 import { getPreferredDeviceId } from '../lib/devicePreferences';
 import { playDeviceSwitch, playRoomJoin, playRoomLeave } from '../lib/soundEffects';
-import { TEST_OFFLINE, getSessionToken, reportClientError } from '../lib/api';
+import { TEST_OFFLINE, fetchTurnCredentials, getSessionToken, reportClientError } from '../lib/api';
 import { fetchImageBytes, loadCachedImage, saveCachedImage, type ImageCacheKind } from '../lib/imageCache';
 import { listOwnSounds, loadOwnSoundBytes } from '../lib/soundCache';
 import { saveTempSound } from '../lib/soundTempCache';
@@ -587,24 +587,50 @@ export function useRoomConnection(
       mesh.setLocalMicTrack(pipeline.track);
     });
 
-    signaling.connect(
-      import.meta.env.VITE_SIGNALING_URL,
-      roomId,
-      server.id,
-      displayName,
-      userId,
-      getSessionToken() ?? ''
-    );
+    let pingInterval: ReturnType<typeof setInterval> | null = null;
 
-    const pingInterval = setInterval(() => {
-      const nonce = Math.random().toString(36).slice(2);
-      pendingPings.set(nonce, performance.now());
-      signaling.send({ type: 'ping', nonce });
-    }, PING_INTERVAL_MS);
+    // [TEMP — teste de conectividade 2026-08-27] Busca o fallback TURN (setTurnIceServers,
+    // webrtcMesh.ts) e só então conecta a sinalização — garante que TODA conexão desta sala,
+    // inclusive a primeira (getOrCreateConnection lê turnIceServers na hora de criar cada
+    // RTCPeerConnection), já nasce com TURN disponível, em vez de arriscar a corrida de um peer
+    // chegar antes do fetch terminar. fetchTurnCredentials nunca lança (api.ts) — pior caso aqui é
+    // lista vazia, mesmo comportamento de antes (STUN-only).
+    void fetchTurnCredentials().then((turnServers) => {
+      if (cancelled) return;
+      setTurnIceServers(turnServers);
+      // [Diagnóstico, adicionado 2026-08-27] Confirma, por sala/sessão (não por peer — isto roda
+      // uma vez só, antes de qualquer RTCPeerConnection existir), se o fetch de credenciais TURN
+      // deu certo e o que exatamente veio: lista vazia aqui já explicaria uma sessão inteira sem
+      // TURN nenhum, sem precisar inferir isso indiretamente da ausência de candidato `relay` nos
+      // logs por peer mais abaixo.
+      void reportClientError(
+        'TurnCredentialsFetch',
+        turnServers.length > 0
+          ? `${turnServers.length} iceServer(s) TURN recebido(s): ${turnServers.map((s) => JSON.stringify(s.urls)).join(' | ')}`
+          : 'lista vazia — sem TURN disponível nesta sessão (backend sem TURN configurado, fetch falhou, ou TEST_MODE)',
+        undefined,
+        { roomId, serverId: server.id }
+      );
+
+      signaling.connect(
+        import.meta.env.VITE_SIGNALING_URL,
+        roomId,
+        server.id,
+        displayName,
+        userId,
+        getSessionToken() ?? ''
+      );
+
+      pingInterval = setInterval(() => {
+        const nonce = Math.random().toString(36).slice(2);
+        pendingPings.set(nonce, performance.now());
+        signaling.send({ type: 'ping', nonce });
+      }, PING_INTERVAL_MS);
+    });
 
     return () => {
       cancelled = true;
-      clearInterval(pingInterval);
+      if (pingInterval) clearInterval(pingInterval);
       mesh.closeAll();
       micCleanupRef.current?.();
       micCleanupRef.current = null;

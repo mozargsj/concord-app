@@ -14,6 +14,20 @@ import type { ImageCacheKind } from './imageCache';
 // tela, todos via teste real. Reverter pro Google (ou usar os dois) depois desse teste.
 export const ICE_SERVERS: RTCIceServer[] = [{ urls: 'stun:stun.cloudflare.com:3478' }];
 
+// [TEMP — teste de conectividade 2026-08-27] Fallback TURN opcional, além do STUN-only de sempre
+// (ICE_SERVERS acima, que networkSelfTest.ts continua usando sozinho — o autoteste é sobre STUN
+// puro, não deve mudar de significado por causa disto). Vazio até useRoomConnection.ts chamar
+// setTurnIceServers com o que api.ts.fetchTurnCredentials trouxer do servidor — nenhuma conexão
+// existente é afetada, só as criadas depois (getOrCreateConnection lê isto no momento da criação).
+// Existe só pra descartar/confirmar TURN como causa da falha total de conectividade observada em
+// teste real — reverter (remover isto e voltar `new RTCPeerConnection({ iceServers: ICE_SERVERS })`
+// puro) depois desse teste, per decisions.md §1.
+let turnIceServers: RTCIceServer[] = [];
+
+export function setTurnIceServers(servers: RTCIceServer[]): void {
+  turnIceServers = servers;
+}
+
 // How long iceConnectionState must stay 'disconnected' before it's reported as a real problem
 // (see the oniceconnectionstatechange handler) — long enough that a brief, self-healing network
 // blip doesn't get reported as if it were a stuck connection.
@@ -220,6 +234,21 @@ interface PeerConnectionEntry {
   // The polite side rolls back its own in-flight offer and accepts the incoming one on collision;
   // the impolite side ignores the incoming offer and keeps its own.
   isPolite: boolean;
+  // [Diagnóstico, investigação de conectividade 2026-08-27] Data/hora de criação desta conexão —
+  // todo log daqui pra frente inclui um `t+Nms` relativo a isto, já que os logs do servidor (
+  // console.error puro, sem timestamp) não davam pra reconstruir a ordem/tempo real dos eventos
+  // entre process/candidato/estado sem isso.
+  connectionCreatedAt: number;
+  // Garante que logIceStatsSummary só roda uma vez no primeiro sucesso desta conexão — sem isso,
+  // toda oscilação connected->disconnected->connected voltaria a disparar o dump inteiro de novo.
+  hasLoggedSuccessStats: boolean;
+}
+
+/** [Diagnóstico, investigação de conectividade 2026-08-27] `t+Nms` desde a criação da conexão —
+ * prefixo comum pra todo log deste arquivo, pra dar pra reconstruir a ordem real dos eventos
+ * (offer/answer/candidato/mudança de estado) batendo os logs de peers diferentes uns com os outros. */
+function elapsedSince(entry: PeerConnectionEntry): string {
+  return `t+${Date.now() - entry.connectionCreatedAt}ms`;
 }
 
 interface MeshManagerOptions {
@@ -264,7 +293,14 @@ interface MeshManagerOptions {
       | 'ice-candidate-error'
       | 'ice-stats-summary'
       | 'ice-candidate-apply-failed'
-      | 'negotiation-failed',
+      | 'negotiation-failed'
+      // [Diagnóstico, adicionado 2026-08-27] Timeline completa de estado (antes só o veredito
+      // final de falha era reportado) — ver os call sites em getOrCreateConnection.
+      | 'ice-state-change'
+      | 'connection-state-change'
+      | 'signaling-state-change'
+      | 'ice-gathering-state-change'
+      | 'ice-gathering-complete',
     detail: string
   ) => void;
   /** Simplified per-peer status for a visual indicator (green/yellow/red dot on the avatar,
@@ -355,12 +391,37 @@ export class MeshManager {
   // outro lado nunca era aplicado. Mesmo padrão de buffer-até-a-entry-existir, igual a
   // pendingImageRequestsByPeer acima.
   private pendingIceCandidatesByPeer = new Map<string, RTCIceCandidateInit[]>();
-  // [Diagnóstico, investigação de conectividade 2026-08-27] Contadores simples de "quantos
-  // candidatos eu tentei mandar" vs. "quantas mensagens de candidato eu de fato recebi por
-  // sinalização" por peer — a única forma de distinguir "nunca chegou a sair daqui" (bug de
-  // envio/relay do servidor) de "chegou e algo depois descartou" (bug de aplicação local, já
-  // descartado por getStats() mostrar candidatos locais reunidos perfeitamente).
-  private candidateCounters = new Map<string, { sent: number; receivedRaw: number }>();
+  // [Diagnóstico, investigação de conectividade 2026-08-27, expandido] Rastreia o ciclo de vida
+  // completo de um candidato remoto por peer, não só "chegou por sinalização":
+  //   sent               → candidatos nossos que onicecandidate gerou e mandamos por sinalização
+  //   receivedRaw        → mensagens 'ice-candidate' que de fato chegaram por sinalização
+  //   bufferedNoRemoteDesc → desses, quantos foram bufferizados (remoteDescription ainda não
+  //                          existia) em vez de aplicados na hora — se isso ficar muito maior que
+  //                          `applied`, o candidato provavelmente está preso pra sempre porque
+  //                          flushPendingCandidates nunca roda pra essa conexão
+  //   applied            → addIceCandidate() retornou sucesso (direto ou via flush)
+  //   rejected           → addIceCandidate() lançou (direto ou via flush)
+  // sent+receivedRaw sozinhos só provam que a sinalização entrega — não provam que o candidato
+  // chega a ser usado pelo RTCPeerConnection. applied/bufferedNoRemoteDesc/rejected juntos devem
+  // somar receivedRaw; se não somarem, tem um 4º destino não rastreado ainda.
+  private candidateCounters = new Map<
+    string,
+    { sent: number; receivedRaw: number; applied: number; bufferedNoRemoteDesc: number; rejected: number }
+  >();
+
+  private getCandidateCounters(peerId: string): {
+    sent: number;
+    receivedRaw: number;
+    applied: number;
+    bufferedNoRemoteDesc: number;
+    rejected: number;
+  } {
+    const existing = this.candidateCounters.get(peerId);
+    if (existing) return existing;
+    const fresh = { sent: 0, receivedRaw: 0, applied: 0, bufferedNoRemoteDesc: 0, rejected: 0 };
+    this.candidateCounters.set(peerId, fresh);
+    return fresh;
+  }
 
   constructor(private opts: MeshManagerOptions) {
     this.speakingPollHandle = setInterval(() => void this.pollRemoteSpeaking(), SPEAKING_POLL_INTERVAL_MS);
@@ -506,9 +567,8 @@ export class MeshManager {
     // parse/lookup — confirma que a mensagem 'ice-candidate' realmente chegou por sinalização,
     // independente do que acontece depois (candidato inválido, entry ainda não existindo, etc.).
     // Sem isso não dava pra distinguir "nunca chegou" de "chegou e algo depois descartou".
-    const counterEntry = this.candidateCounters.get(fromPeerId) ?? { sent: 0, receivedRaw: 0 };
+    const counterEntry = this.getCandidateCounters(fromPeerId);
     counterEntry.receivedRaw += 1;
-    this.candidateCounters.set(fromPeerId, counterEntry);
     let candidate: RTCIceCandidateInit;
     try {
       candidate = JSON.parse(candidateJson);
@@ -520,9 +580,10 @@ export class MeshManager {
       );
       return;
     }
-    // See onicecandidate's own comment — same rationale, same 3-sample cap, other side of the
-    // comparison (what we actually parsed out of the raw signaling payload for this candidate).
-    if (counterEntry.receivedRaw <= 3) {
+    // See onicecandidate's own comment — same rationale, same 12-sample cap (ampliado de 3 em
+    // 2026-08-27 pra dar mais amostra num teste real com testers), outro lado da comparação (o que
+    // de fato foi parseado do payload de sinalização recebido pra este candidato).
+    if (counterEntry.receivedRaw <= 12) {
       this.opts.onConnectionError?.(
         fromPeerId,
         'ice-candidate-apply-failed',
@@ -536,6 +597,14 @@ export class MeshManager {
       const queued = this.pendingIceCandidatesByPeer.get(fromPeerId) ?? [];
       queued.push(candidate);
       this.pendingIceCandidatesByPeer.set(fromPeerId, queued);
+      // [Diagnóstico, adicionado 2026-08-27] Esta entry (this.connections) só existe a partir do
+      // primeiro offer/answer processado — se isto disparar bastante, o candidato está
+      // sistematicamente chegando ANTES da negociação SDP começar deste lado, não só num caso raro.
+      this.opts.onConnectionError?.(
+        fromPeerId,
+        'ice-candidate-apply-failed',
+        `bufferizado em pendingIceCandidatesByPeer (entry da conexão ainda não existe) — fila agora com ${queued.length}`
+      );
       return;
     }
     // [Corrigido, investigação de conectividade 2026-08-27] Antes, o resto deste método (checar
@@ -563,22 +632,47 @@ export class MeshManager {
   }
 
   private async performHandleIceCandidate(entry: PeerConnectionEntry, candidate: RTCIceCandidateInit): Promise<void> {
+    const counters = this.getCandidateCounters(entry.peerId);
     if (!entry.pc.remoteDescription) {
+      // [Diagnóstico, adicionado 2026-08-27] Este era o único ramo de todo o fluxo de candidato
+      // sem NENHUM log — se remoteDescription nunca fica pronta pra esta conexão por algum motivo
+      // (sem nenhuma exceção em handleOffer/handleAnswer, que já são logadas), todo candidato
+      // recebido cairia aqui pra sempre, silenciosamente, e é exatamente essa a explicação que
+      // sobrava sem prova nenhuma até agora. bufferedNoRemoteDesc conta quantos; se esse número
+      // ficar muito maior que `applied` no resumo final, é isso que está acontecendo.
+      counters.bufferedNoRemoteDesc += 1;
+      this.opts.onConnectionError?.(
+        entry.peerId,
+        'ice-candidate-apply-failed',
+        `bufferizado em entry.pendingCandidates (remoteDescription ainda não existe, signalingState=${entry.pc.signalingState}) — fila agora com ${entry.pendingCandidates.length + 1}, ${elapsedSince(entry)}`
+      );
       entry.pendingCandidates.push(candidate);
       return;
     }
     try {
       await entry.pc.addIceCandidate(candidate);
+      counters.applied += 1;
+      // [Diagnóstico, adicionado 2026-08-27] Sucesso nunca tinha log nenhum — só o fracasso. Sem
+      // isto não dava pra confirmar se addIceCandidate estava sendo chamado com sucesso silencioso
+      // (contraditório com getStats() vazio) ou nunca chegando a ser chamado de verdade.
+      if (counters.applied <= 12) {
+        this.opts.onConnectionError?.(
+          entry.peerId,
+          'ice-candidate-apply-failed',
+          `APLICADO #${counters.applied}: addIceCandidate resolveu sem erro — candidate="${candidate.candidate}" sdpMid=${candidate.sdpMid}, ${elapsedSince(entry)}`
+        );
+      }
     } catch (error) {
       // [Diagnóstico, investigação de conectividade 2026-08-27] Antes descartava em silêncio total
       // — dado real motivou expor isso: contadores confirmaram que os candidatos CHEGAM por
       // sinalização (enviados de um lado batem com recebidos do outro), mas getStats() nunca
       // mostrava nenhum candidato remoto aplicado. Essa é a única explicação que sobra: addIceCandidate
       // está rejeitando todos eles, e sem logar o erro de verdade não dava pra saber por quê.
+      counters.rejected += 1;
       this.opts.onConnectionError?.(
         entry.peerId,
         'ice-candidate-apply-failed',
-        `addIceCandidate rejeitou: ${error instanceof Error ? error.message : String(error)} — candidate: ${JSON.stringify(candidate).slice(0, 300)}`
+        `addIceCandidate rejeitou: ${error instanceof Error ? error.message : String(error)} — candidate: ${JSON.stringify(candidate).slice(0, 300)}, ${elapsedSince(entry)}`
       );
     }
   }
@@ -866,7 +960,7 @@ export class MeshManager {
     const existing = this.connections.get(peerId);
     if (existing) return existing;
 
-    const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+    const pc = new RTCPeerConnection({ iceServers: [...ICE_SERVERS, ...turnIceServers] });
     const entry: PeerConnectionEntry = {
       peerId,
       pc,
@@ -889,7 +983,9 @@ export class MeshManager {
       renegotiateNeeded: false,
       // See PeerConnectionEntry.isPolite — deterministic as long as both sides compare the same
       // two ids (their own + the other's), which they always do, each from their own perspective.
-      isPolite: (this.selfPeerId ?? '') < peerId
+      isPolite: (this.selfPeerId ?? '') < peerId,
+      connectionCreatedAt: Date.now(),
+      hasLoggedSuccessStats: false
     };
     this.pendingImageRequestsByPeer.delete(peerId);
     this.pendingSoundListRequestsByPeer.delete(peerId);
@@ -909,22 +1005,29 @@ export class MeshManager {
     };
 
     pc.onicecandidate = (event) => {
-      if (!event.candidate) return;
-      const counterEntry = this.candidateCounters.get(peerId) ?? { sent: 0, receivedRaw: 0 };
+      if (!event.candidate) {
+        // [Diagnóstico, adicionado 2026-08-27] Candidato nulo = "terminei de reunir" (fim do
+        // gathering) — sinal explícito complementar a onicegatheringstatechange abaixo, direto no
+        // ponto onde a última entrega de fato acontece.
+        this.opts.onConnectionError?.(
+          peerId,
+          'ice-gathering-complete',
+          `onicecandidate(null) — fim do gathering deste lado, ${elapsedSince(entry)}`
+        );
+        return;
+      }
+      const counterEntry = this.getCandidateCounters(peerId);
       counterEntry.sent += 1;
-      this.candidateCounters.set(peerId, counterEntry);
-      // [Diagnóstico, investigação de conectividade 2026-08-27] Conteúdo bruto dos 3 primeiros
-      // candidatos enviados por conexão — último nível de detalhe disponível depois que contadores
-      // (sinalização confirmadamente entrega tudo) e captura de exceção (nada lança erro em
-      // handleOffer/handleAnswer/addIceCandidate) não encontraram o ponto exato da perda. Só os 3
-      // primeiros pra não inundar o log — o suficiente pra comparar visualmente contra o que o
-      // outro lado realmente recebe (ver handleIceCandidate).
-      if (counterEntry.sent <= 3) {
+      // [Diagnóstico, investigação de conectividade 2026-08-27, ampliado 2026-08-27] Conteúdo
+      // bruto dos candidatos enviados por conexão (cap ampliado de 3 pra 12 pra dar mais amostra
+      // num teste real, e agora inclui `type` explicitamente — host/srflx/relay/prflx — pra
+      // confirmar visualmente se o TURN novo está de fato gerando candidato relay).
+      if (counterEntry.sent <= 12) {
         const c = event.candidate;
         this.opts.onConnectionError?.(
           peerId,
           'ice-candidate-apply-failed',
-          `ENVIADO #${counterEntry.sent}: candidate="${c.candidate}" sdpMid=${c.sdpMid} sdpMLineIndex=${c.sdpMLineIndex} ufrag=${c.usernameFragment}`
+          `ENVIADO #${counterEntry.sent} type=${c.type ?? '?'}: candidate="${c.candidate}" sdpMid=${c.sdpMid} sdpMLineIndex=${c.sdpMLineIndex} ufrag=${c.usernameFragment}, ${elapsedSince(entry)}`
         );
       }
       this.opts.send({
@@ -941,6 +1044,14 @@ export class MeshManager {
     // stuck connection is distinguishable from normal transient noise.
     let disconnectedTimer: ReturnType<typeof setTimeout> | null = null;
     pc.oniceconnectionstatechange = () => {
+      // [Diagnóstico, adicionado 2026-08-27] Toda transição, incondicional — antes só 'failed'/
+      // 'disconnected' geravam log; 'checking'/'connected'/'completed' nunca apareciam em lugar
+      // nenhum, então não dava pra ver quanto tempo cada fase da negociação realmente levou.
+      this.opts.onConnectionError?.(
+        peerId,
+        'ice-state-change',
+        `iceConnectionState=${pc.iceConnectionState}, ${elapsedSince(entry)}`
+      );
       if (disconnectedTimer) {
         clearTimeout(disconnectedTimer);
         disconnectedTimer = null;
@@ -970,6 +1081,15 @@ export class MeshManager {
         }, ICE_DISCONNECTED_REPORT_DELAY_MS);
       } else if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
         this.opts.onConnectionStatusChange?.(peerId, 'connected');
+        // [Diagnóstico, adicionado 2026-08-27] Dump de getStats() também no PRIMEIRO sucesso, não
+        // só na falha — sem isto não dava pra comparar o par que efetivamente funcionou (host?
+        // srflx? relay/TURN?) contra os que falham, nem confirmar que os contadores
+        // aplicados/rejeitados fazem sentido quando tudo dá certo. Só uma vez por conexão
+        // (hasLoggedSuccessStats) pra não repetir a cada oscilação connected<->completed.
+        if (!entry.hasLoggedSuccessStats) {
+          entry.hasLoggedSuccessStats = true;
+          void this.logIceStatsSummary(entry, 'sucesso (iceConnectionState=connected/completed)');
+        }
       } else {
         // 'new' / 'checking' / 'closed' — 'closed' only happens after removePeer() already tore
         // this down and dropped the peer from state, so this call is harmless dead code for it.
@@ -981,10 +1101,41 @@ export class MeshManager {
     // whatever default the caller's state initializes to before the first real event fires.
     this.opts.onConnectionStatusChange?.(peerId, 'connecting');
     pc.onconnectionstatechange = () => {
+      // [Diagnóstico, adicionado 2026-08-27] Toda transição — mesma razão do
+      // oniceconnectionstatechange acima: connectionState é o veredito "geral" (ICE + DTLS juntos)
+      // e antes só aparecia no log quando já tinha dado 'failed'.
+      this.opts.onConnectionError?.(
+        peerId,
+        'connection-state-change',
+        `connectionState=${pc.connectionState}, ${elapsedSince(entry)}`
+      );
       if (pc.connectionState === 'failed') {
         this.opts.onConnectionError?.(peerId, 'connection-failed', `connectionState=failed (peer ${peerId})`);
         void this.logIceStatsSummary(entry, 'falha real (connectionState=failed, veredito do navegador)');
       }
+    };
+    // [Diagnóstico, adicionado 2026-08-27] Timeline da negociação SDP em si (new/have-local-offer/
+    // have-remote-offer/stable/...) — complementa ice-state-change/connection-state-change, que só
+    // cobrem o lado ICE/geral. Junto dos outros dois, dá pra reconstruir a ordem exata offer →
+    // answer → candidatos → conexão de qualquer round de negociação, incluindo colisões (um
+    // rollback aparece como uma transição extra de volta pra 'stable').
+    pc.onsignalingstatechange = () => {
+      this.opts.onConnectionError?.(
+        peerId,
+        'signaling-state-change',
+        `signalingState=${pc.signalingState}, ${elapsedSince(entry)}`
+      );
+    };
+    // [Diagnóstico, adicionado 2026-08-27] Quando o gathering muda de fase — em especial 'complete'
+    // — confirma rápido, sem esperar falha nenhuma, que este lado terminou de reunir candidatos
+    // (combinado com os ENVIADO #N/type acima pra ver se algum deles foi `relay`, ou seja, se a
+    // alocação TURN nova realmente gerou candidato).
+    pc.onicegatheringstatechange = () => {
+      this.opts.onConnectionError?.(
+        peerId,
+        'ice-gathering-state-change',
+        `iceGatheringState=${pc.iceGatheringState}, ${elapsedSince(entry)}`
+      );
     };
     pc.onicecandidateerror = (event) => {
       // [Diagnóstico, investigação de conectividade 2026-08-27] `url`/`address`/`port` incluídos
@@ -996,7 +1147,7 @@ export class MeshManager {
       this.opts.onConnectionError?.(
         peerId,
         'ice-candidate-error',
-        `errorCode=${iceError.errorCode} ${iceError.errorText ?? ''} url=${iceError.url || '(nenhuma — não é o servidor STUN)'} local=${iceError.address ?? '?'}:${iceError.port ?? '?'}`.trim()
+        `errorCode=${iceError.errorCode} ${iceError.errorText ?? ''} url=${iceError.url || '(nenhuma — não é o servidor STUN)'} local=${iceError.address ?? '?'}:${iceError.port ?? '?'}, ${elapsedSince(entry)}`.trim()
       );
     };
 
@@ -1405,30 +1556,46 @@ export class MeshManager {
   private async flushPendingCandidates(entry: PeerConnectionEntry): Promise<void> {
     const queued = entry.pendingCandidates;
     entry.pendingCandidates = [];
+    const counters = this.getCandidateCounters(entry.peerId);
+    // [Diagnóstico, adicionado 2026-08-27] Confirma que este flush de fato roda e quando —
+    // remoteDescription acabou de ser setada (só é chamado logo depois disso, ver
+    // performHandleOffer/performHandleAnswer) e é o único lugar que esvazia pendingCandidates.
+    if (queued.length > 0) {
+      this.opts.onConnectionError?.(
+        entry.peerId,
+        'ice-candidate-apply-failed',
+        `flushPendingCandidates rodando com ${queued.length} candidato(s) bufferizado(s), ${elapsedSince(entry)}`
+      );
+    }
     for (const candidate of queued) {
       try {
         await entry.pc.addIceCandidate(candidate);
+        counters.applied += 1;
       } catch (error) {
         // Same diagnostic rationale as handleIceCandidate's own catch — this is the OTHER call
         // site for addIceCandidate (candidates that arrived before remoteDescription was set,
         // buffered here until now), so it needs the same visibility.
+        counters.rejected += 1;
         this.opts.onConnectionError?.(
           entry.peerId,
           'ice-candidate-apply-failed',
-          `addIceCandidate (flush) rejeitou: ${error instanceof Error ? error.message : String(error)} — candidate: ${JSON.stringify(candidate).slice(0, 300)}`
+          `addIceCandidate (flush) rejeitou: ${error instanceof Error ? error.message : String(error)} — candidate: ${JSON.stringify(candidate).slice(0, 300)}, ${elapsedSince(entry)}`
         );
       }
     }
   }
 
-  /** [Diagnóstico, investigação de conectividade 2026-08-27] Dump de getStats() assim que uma
-   * conexão real chega a 'failed' — lista os candidatos que cada lado realmente reuniu (tipo,
+  /** [Diagnóstico, investigação de conectividade 2026-08-27, ampliado] Dump de getStats() quando
+   * uma conexão real chega a 'failed' — lista os candidatos que cada lado realmente reuniu (tipo,
    * protocolo) e o estado de cada par tentado entre eles. Sem isso não dava pra saber se os dois
    * lados sequer chegaram a trocar candidato nenhum entre si (bug de sinalização) ou se trocaram
    * e a checagem direta peer-a-peer que falhou de verdade (NAT/firewall no meio, cenário de
-   * TURN). Só roda em falha real, não em toda chamada — getStats() tem custo, não é pra rodar
-   * toda hora. `reason` distingue as duas formas de chegar aqui: falha real declarada pelo
-   * próprio navegador (`iceConnectionState`/`connectionState` === 'failed') vs. o timeout de
+   * TURN). Desde 2026-08-27 também roda no PRIMEIRO sucesso (connected/completed) — ver o call
+   * site em oniceconnectionstatechange — pra comparar o par que funcionou contra os que falham.
+   * Ainda não roda em toda chamada — getStats() tem custo, não é pra rodar toda hora, só nos dois
+   * eventos que realmente decidem algo (primeira falha, primeiro sucesso). `reason` distingue as
+   * formas de chegar aqui: falha real declarada pelo próprio navegador
+   * (`iceConnectionState`/`connectionState` === 'failed') vs. o timeout de
    * `ICE_DISCONNECTED_REPORT_DELAY_MS` que ESTE código impõe sobre um 'disconnected' sustentado —
    * pedido do Mozar: se for o timeout interno E o autoteste de rede (que usa STUN de verdade)
    * funciona normalmente, a causa não pode ser a rede, só pode ser algo neste código. */
@@ -1458,11 +1625,15 @@ export class MeshManager {
       // reuniu os próprios mas nunca recebeu nenhum do outro peer (aponta pra sinalização, não
       // STUN) — os dois vazios juntos com candidato local presente seria o cenário clássico de
       // symmetric NAT/TURN necessário.
-      const counters = this.candidateCounters.get(entry.peerId) ?? { sent: 0, receivedRaw: 0 };
-      const counterSummary = `enviados=${counters.sent} recebidos-por-sinalização=${counters.receivedRaw}`;
+      const counters = this.getCandidateCounters(entry.peerId);
+      // applied+bufferedNoRemoteDesc+rejected deveria bater com receivedRaw — se não bater, sobrou
+      // candidato em algum estado intermediário (ainda dentro do negotiationQueue, por exemplo) no
+      // exato instante deste dump; `emAndamento` deixa isso explícito em vez de forçar a soma.
+      const emAndamento = counters.receivedRaw - (counters.applied + counters.bufferedNoRemoteDesc + counters.rejected);
+      const counterSummary = `enviados=${counters.sent} recebidos-por-sinalização=${counters.receivedRaw} aplicados=${counters.applied} bufferizados-sem-remoteDesc=${counters.bufferedNoRemoteDesc} rejeitados=${counters.rejected} em-andamento=${emAndamento}`;
       const summary = pairs.length
-        ? `[${reason}] ${pairs.join(' | ')} (${counterSummary})`
-        : `[${reason}] nenhum par formado — candidatos locais: ${localCandidates.length ? localCandidates.join(', ') : 'NENHUM'}; candidatos remotos recebidos: ${remoteCandidates.length ? remoteCandidates.join(', ') : 'NENHUM'} (${counterSummary})`;
+        ? `[${reason}] ${pairs.join(' | ')} (${counterSummary}, ${elapsedSince(entry)})`
+        : `[${reason}] nenhum par formado — candidatos locais: ${localCandidates.length ? localCandidates.join(', ') : 'NENHUM'}; candidatos remotos recebidos: ${remoteCandidates.length ? remoteCandidates.join(', ') : 'NENHUM'} (${counterSummary}, ${elapsedSince(entry)})`;
       this.opts.onConnectionError?.(
         entry.peerId,
         'ice-stats-summary',
