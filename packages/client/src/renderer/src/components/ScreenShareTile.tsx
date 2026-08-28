@@ -36,13 +36,12 @@ interface ScreenShareTileProps {
  * either way — this only ever touches local rendering of whatever tile it's given.
  *
  * Losing window focus (Concord in the background) auto-pauses the *visual* side of an
- * already-live tile — captures the current frame to a canvas first, so the paused state shows a
- * frozen (blurred) picture rather than going blank. Audio (for a peer's tile, never the
- * own-preview one — see isOwnPreview) is a separate, always-on element once viewing has started
- * at all (hasStartedViewing) — it keeps playing through a focus loss, since only the decode/paint
- * side is what needed pausing for resource savings. Regaining focus resumes the own-preview tile
- * automatically; a peer's tile instead waits for another click, same as the rest of the app's
- * click-to-toggle interactions.
+ * already-live own-preview tile — captures the current frame to a canvas first, so the paused
+ * state shows a frozen (blurred) picture rather than going blank, and resumes automatically once
+ * Concord is focused again. A peer's tile (isOwnPreview false) is unaffected by focus loss once
+ * a viewer has clicked to watch it — it keeps decoding/painting in the background same as if
+ * Concord were focused; the only blur a viewer ever sees is the pre-click gate placeholder, which
+ * a click (and the explicit "×" close) is what dismisses and restores, never window focus.
  *
  * The close (X) button lives here rather than in RoomView, even though it also has to unfocus
  * the tile (RoomView's own state) — for a peer's tile, closing is a full reset back to "never
@@ -100,16 +99,29 @@ export default function ScreenShareTile({
     setRetryTick((tick) => tick + 1);
   }
 
+  // Grabs whatever the visible <video> is currently showing onto a canvas, for the placeholder
+  // to display in place of a live feed — used both by the own-preview auto-pause below and by a
+  // viewer's explicit close, so the tile never just goes blank between "was showing something"
+  // and "back to the click gate". Returns null when there's nothing real to capture yet (video
+  // never reached a frame — same guard as before).
+  function captureFrozenFrame(): string | null {
+    const video = visibleVideoRef.current;
+    if (!video || video.videoWidth === 0) return null;
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    canvas.getContext('2d')?.drawImage(video, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL('image/jpeg', 0.7);
+  }
+
   useEffect(() => {
     function handleWindowBlur() {
-      const video = visibleVideoRef.current;
-      if (video && video.videoWidth > 0) {
-        const canvas = document.createElement('canvas');
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        canvas.getContext('2d')?.drawImage(video, 0, 0, canvas.width, canvas.height);
-        setFrozenFrameUrl(canvas.toDataURL('image/jpeg', 0.7));
-      }
+      // Only the sharer's own preview auto-pauses on focus loss — once a viewer has clicked to
+      // watch someone else's share, it keeps playing even with Concord in the background. The
+      // gate before that first click already shows its own placeholder regardless of focus, so
+      // there's nothing left for this handler to do for a viewer's tile.
+      if (!isOwnPreview) return;
+      setFrozenFrameUrl(captureFrozenFrame());
       setIsLive(false);
     }
     // Own-preview auto-resumes the moment Concord is focused again — no click needed, since it's
@@ -144,14 +156,18 @@ export default function ScreenShareTile({
   function handleClose(event: ReactMouseEvent) {
     event.stopPropagation();
     // Full reset back to the pre-first-click state — stops both the image (isLive) and the
-    // always-on audio element (hasStartedViewing gates its mount) rather than just leaving
-    // everything running quietly behind the collapsed grid tile. Doesn't apply to the own-preview
-    // tile — there's no "pre-first-click" state for it to reset to, it just keeps auto-following
-    // Concord's own focus like normal once the fullscreen view is closed.
+    // always-on audio element (hasStartedViewing gates its mount, so this also cuts the audio)
+    // rather than just leaving everything running quietly behind the collapsed grid tile.
+    // Captures a frozen frame first (same helper the own-preview auto-pause uses) so the gate
+    // shows a blurred static picture of where the transmission left off instead of going
+    // straight back to a plain "Clique para visualizar" — it only becomes live (and audible)
+    // again once clicked. Doesn't apply to the own-preview tile — there's no "pre-first-click"
+    // state for it to reset to, it just keeps auto-following Concord's own focus like normal
+    // once the fullscreen view is closed.
     if (!isOwnPreview) {
+      setFrozenFrameUrl(captureFrozenFrame());
       setIsLive(false);
       setHasStartedViewing(false);
-      setFrozenFrameUrl(null);
       setIsVolumeSliderOpen(false);
     }
     onCloseFocus();
@@ -220,7 +236,11 @@ export default function ScreenShareTile({
           <div className="screen-share-tile__message">
             <Eye size={22} />
             <span>
-              {frozenFrameUrl
+              {/* The "pausou" wording only makes sense for the own-preview auto-pause — a
+                  viewer's frozenFrameUrl only ever comes from an explicit close now, so it gets
+                  the same "click to view" prompt as the never-clicked-yet state, just with the
+                  last frame blurred behind it instead of nothing. */}
+              {isOwnPreview && frozenFrameUrl
                 ? 'O compartilhamento pausou para economizar recursos da sua máquina'
                 : 'Clique para visualizar'}
             </span>
