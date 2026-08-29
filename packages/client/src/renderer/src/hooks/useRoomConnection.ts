@@ -239,6 +239,26 @@ export function useRoomConnection(
     });
   }
 
+  /** [Bug corrigido, 2026-08-29] Peer confirmou que meu cache local já está atualizado (mesmo
+   * hash) — sem bytes pra receber, mas o estado ao vivo da sala (peer.avatarUrl, começa null a
+   * cada nova conexão) ainda precisa ser preenchido com o que já está em disco. Sem isso, um
+   * avatar já em cache de uma sessão anterior nunca aparecia até a pessoa trocar de novo (só uma
+   * transferência real disparava onImageReceived) — mesmo padrão de leitura de disco que
+   * requestPeerImages já usa pra decidir o knownHash do pedido em primeiro lugar. */
+  function onImageUnchanged(kind: ImageCacheKind, ownerId: string): void {
+    void loadCachedImage(kind, ownerId).then((cached) => {
+      if (!cached) return;
+      if (kind === 'avatar') {
+        setState((prev) => ({
+          ...prev,
+          peers: prev.peers.map((peer) => (peer.userId === ownerId ? { ...peer, avatarUrl: cached.url } : peer))
+        }));
+      } else {
+        onServerIconReceivedRef.current(ownerId, cached.url);
+      }
+    });
+  }
+
   /** Fires once per newly-known peer — asks them for their own avatar, and (if they're the
    * joined room's server owner) for the server's icon too. requestImage no-ops harmlessly if
    * the peer never answers (e.g. they have no avatar, or aren't really the owner). */
@@ -361,6 +381,7 @@ export function useRoomConnection(
       },
       onImageRequest,
       onImageReceived,
+      onImageUnchanged,
       onSoundListRequest,
       onSoundListReceived,
       onSoundRequest,

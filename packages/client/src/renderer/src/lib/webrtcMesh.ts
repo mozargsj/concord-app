@@ -105,6 +105,13 @@ interface ImageRequestFrame {
 }
 interface ImageUnchangedFrame {
   t: 'unchanged';
+  // [Bug corrigido, 2026-08-29] Sem isso o requester não tinha como saber QUAL imagem esse
+  // "unchanged" respondia (avatar? de quem? — o pedido original já tinha essa informação, a
+  // resposta nunca ecoava de volta). Sem saber, não dava pra hidratar o próprio cache local no
+  // estado da sala — só uma transferência real de dado ('meta'+chunks) atualizava peer.avatarUrl,
+  // então um avatar já em cache de uma sessão anterior nunca aparecia até a pessoa trocar de novo.
+  kind: ImageCacheKind;
+  ownerId: string;
 }
 interface ImageMissingFrame {
   t: 'missing';
@@ -265,6 +272,12 @@ interface MeshManagerOptions {
   onImageRequest: (kind: ImageCacheKind, ownerId: string, knownHash: string | null) => Promise<ImageAnswer>;
   /** A requested image finished downloading from a peer — caller persists it and updates UI state. */
   onImageReceived: (kind: ImageCacheKind, ownerId: string, data: ArrayBuffer, mimeType: string) => void;
+  /** [2026-08-29] Peer confirmed my cached copy is already current (same hash) — no bytes sent,
+   * so there's nothing to persist, but the caller's live UI state (peer.avatarUrl, unset until
+   * something actually populates it this session) still needs to be hydrated from that existing
+   * local cache. Without this, an avatar already cached from a previous session never shows up
+   * until the owner changes it again — only a real transfer ever called onImageReceived. */
+  onImageUnchanged: (kind: ImageCacheKind, ownerId: string) => void;
   /** Answers another peer's "what sounds do you have" — my own sounds list, read from local disk
    * cache (MeshManager has no notion of sound storage, same reasoning as onImageRequest). */
   onSoundListRequest: () => Promise<SoundListEntry[]>;
@@ -1239,7 +1252,7 @@ export class MeshManager {
   private async answerImageRequest(channel: RTCDataChannel, frame: ImageRequestFrame): Promise<void> {
     const answer = await this.opts.onImageRequest(frame.kind, frame.ownerId, frame.knownHash);
     if (answer.status === 'unchanged') {
-      this.sendImageControl(channel, { t: 'unchanged' });
+      this.sendImageControl(channel, { t: 'unchanged', kind: frame.kind, ownerId: frame.ownerId });
     } else if (answer.status === 'missing') {
       this.sendImageControl(channel, { t: 'missing' });
     } else {
@@ -1280,8 +1293,13 @@ export class MeshManager {
         chunks: [],
         received: 0
       };
+      return;
     }
-    // 'unchanged'/'missing' need no state — the requester just doesn't hear back with an image.
+    if (frame.t === 'unchanged') {
+      this.opts.onImageUnchanged(frame.kind, frame.ownerId);
+      return;
+    }
+    // 'missing' needs no state — there's genuinely nothing to hydrate on the requester's end.
   }
 
   private handleImageChunk(entry: PeerConnectionEntry, chunk: ArrayBuffer): void {
