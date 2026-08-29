@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import Toggle from './Toggle';
 import {
   MIC_SENSITIVITY_DEFAULT,
   MIC_SENSITIVITY_MAX,
@@ -128,7 +129,7 @@ export default function SettingsModal({ onClose, onNoiseSuppressionChange }: Set
         </header>
 
         <div className="settings-modal__section">
-          <label className="settings-modal__toggle-row" htmlFor="rnnoise-toggle">
+          <label className="settings-modal__toggle-row">
             <span>
               <span className="settings-modal__label">Redução de ruído (RNNoise)</span>
               <p className="settings-modal__hint">
@@ -136,13 +137,7 @@ export default function SettingsModal({ onClose, onNoiseSuppressionChange }: Set
                 dedicado — mais eficaz que a supressão padrão do navegador.
               </p>
             </span>
-            <input
-              id="rnnoise-toggle"
-              type="checkbox"
-              checked={isRnnoiseEnabled}
-              onChange={handleToggleRnnoise}
-              className="settings-modal__checkbox"
-            />
+            <Toggle id="rnnoise-toggle" checked={isRnnoiseEnabled} onChange={handleToggleRnnoise} />
           </label>
         </div>
 
@@ -194,7 +189,7 @@ export default function SettingsModal({ onClose, onNoiseSuppressionChange }: Set
         </div>
 
         <div className="settings-modal__section">
-          <label className="settings-modal__toggle-row" htmlFor="hardware-encode-toggle">
+          <label className="settings-modal__toggle-row">
             <span>
               <span className="settings-modal__label">Aceleração de hardware (transmissão de tela)</span>
               <p className="settings-modal__hint">
@@ -204,13 +199,7 @@ export default function SettingsModal({ onClose, onNoiseSuppressionChange }: Set
                 Vale a partir da próxima vez que começar a compartilhar a tela.
               </p>
             </span>
-            <input
-              id="hardware-encode-toggle"
-              type="checkbox"
-              checked={isHardwareEncodeEnabled}
-              onChange={handleToggleHardwareEncode}
-              className="settings-modal__checkbox"
-            />
+            <Toggle id="hardware-encode-toggle" checked={isHardwareEncodeEnabled} onChange={handleToggleHardwareEncode} />
           </label>
         </div>
 

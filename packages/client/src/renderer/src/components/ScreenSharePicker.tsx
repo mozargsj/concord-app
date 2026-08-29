@@ -8,6 +8,7 @@ import {
   type ScreenQualityMode
 } from '../lib/screenSharePreferences';
 import NativeLoopbackHelpModal from './NativeLoopbackHelpModal';
+import Toggle from './Toggle';
 import '../styles/ScreenSharePicker.css';
 
 interface ScreenSharePickerProps {
@@ -139,12 +140,11 @@ export default function ScreenSharePicker({ onSelect, onClose }: ScreenSharePick
         <footer className="screen-picker__footer">
           <div className="screen-picker__audio-column">
             <label className="screen-picker__audio-toggle">
-              <input
-                type="checkbox"
+              <Toggle
                 checked={includeAudio}
-                onChange={(event) => {
-                  setIncludeAudio(event.target.checked);
-                  setIncludeAudioPreference(event.target.checked);
+                onChange={(checked) => {
+                  setIncludeAudio(checked);
+                  setIncludeAudioPreference(checked);
                 }}
               />
               Incluir áudio do sistema

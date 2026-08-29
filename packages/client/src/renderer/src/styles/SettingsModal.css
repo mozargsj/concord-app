@@ -158,14 +158,6 @@
   margin-bottom: 0;
 }
 
-.settings-modal__checkbox {
-  flex-shrink: 0;
-  width: 36px;
-  height: 20px;
-  accent-color: var(--color-accent);
-  margin-top: 2px;
-}
-
 .settings-modal__network-test-button {
   padding: 8px 16px;
   border: none;
