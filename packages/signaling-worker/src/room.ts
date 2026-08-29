@@ -146,6 +146,9 @@ export class RoomDurableObject extends DurableObject<Env> {
       case 'avatar-changed':
         await this.handleAvatarChanged(ws);
         break;
+      case 'server-icon-changed':
+        await this.handleServerIconChanged(ws, message.serverId);
+        break;
     }
   }
 
@@ -331,6 +334,13 @@ export class RoomDurableObject extends DurableObject<Env> {
     if (!peer) return;
     const roomId = await this.getRoomId();
     this.broadcast({ type: 'peer-avatar-changed', roomId, peerId: peer.peerId, userId: peer.userId }, peer.peerId);
+  }
+
+  private async handleServerIconChanged(ws: WebSocket, serverId: string): Promise<void> {
+    const peer = ws.deserializeAttachment() as PeerAttachment | null;
+    if (!peer) return;
+    const roomId = await this.getRoomId();
+    this.broadcast({ type: 'peer-server-icon-changed', roomId, peerId: peer.peerId, serverId }, peer.peerId);
   }
 
   private relay(

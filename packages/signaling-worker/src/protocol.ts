@@ -45,6 +45,8 @@ export function validateClientMessage(raw: unknown): ClientToServerMessage | nul
       return isStr(m.targetPeerId, 200) && typeof m.isMuted === 'boolean'
         ? (m as unknown as ClientToServerMessage)
         : null;
+    case 'server-icon-changed':
+      return isStr(m.serverId, 200) ? (m as unknown as ClientToServerMessage) : null;
     default:
       return null;
   }

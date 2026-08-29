@@ -1,11 +1,14 @@
 import { useEffect, useState } from 'react';
 import type { ServerSummary } from '@concord/shared';
+import { X } from 'lucide-react';
 import Button from './Button';
+import ConfirmModal from './ConfirmModal';
+import Tooltip from './Tooltip';
 import ImageCropModal from './ImageCropModal';
 import IllustratedNotice from './IllustratedNotice';
 import uploadFailedArt from '../assets/images/upload-failed.png';
 import { UPLOAD_FAILED_MESSAGES } from '../lib/errorMessages';
-import { ApiError, updateServer } from '../lib/api';
+import { ApiError, deleteServer, updateServer } from '../lib/api';
 import { pickImageFile, type PickedImageFile } from '../lib/imagePicker';
 import { saveCachedImage } from '../lib/imageCache';
 import '../styles/EditServerModal.css';
@@ -14,6 +17,7 @@ interface EditServerModalProps {
   server: ServerSummary;
   onClose: () => void;
   onServerUpdated: (server: ServerSummary) => void;
+  onServerDeleted: (serverId: string) => void;
 }
 
 /** Rename/re-icon an existing server — opened from ServerRail's right-click menu, owner only.
@@ -21,8 +25,11 @@ interface EditServerModalProps {
  * P2P only, same as the rest of the avatar/icon system (decisions.md) — no backend round-trip
  * for it, it's just re-cached under the same serverId key, overwriting what peers will fetch
  * next time they share a room with the owner. */
-export default function EditServerModal({ server, onClose, onServerUpdated }: EditServerModalProps) {
+export default function EditServerModal({ server, onClose, onServerUpdated, onServerDeleted }: EditServerModalProps) {
   const [name, setName] = useState(server.name);
+  const [isConfirmingDelete, setIsConfirmingDelete] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   // Separate from server.iconUrl on purpose: that blob URL is owned by imageCache.ts (other
   // parts of the UI — ServerRail, etc. — still render it), so it must never be revoked from in
   // here. Only a URL this component itself creates (via handleApplyCrop) gets cleaned up below.
@@ -89,14 +96,31 @@ export default function EditServerModal({ server, onClose, onServerUpdated }: Ed
     }
   }
 
+  async function handleConfirmDelete() {
+    setIsDeleting(true);
+    setDeleteError(null);
+    try {
+      await deleteServer(server.id);
+      onServerDeleted(server.id);
+      onClose();
+    } catch {
+      setDeleteError('Não foi possível excluir o servidor.');
+      setIsConfirmingDelete(false);
+    } finally {
+      setIsDeleting(false);
+    }
+  }
+
   return (
     <div className="edit-server-modal__backdrop" onClick={onClose}>
       <div className="edit-server-modal" onClick={(event) => event.stopPropagation()}>
         <header className="edit-server-modal__header">
           <h2>Editar servidor</h2>
-          <button className="edit-server-modal__close" onClick={onClose} title="Fechar">
-            ×
-          </button>
+          <Tooltip label="Fechar">
+            <button className="edit-server-modal__close" onClick={onClose}>
+              <X size={18} />
+            </button>
+          </Tooltip>
         </header>
 
         <button
@@ -131,6 +155,13 @@ export default function EditServerModal({ server, onClose, onServerUpdated }: Ed
         )}
         {error && !isSaveFailure && <p className="edit-server-modal__error">{error}</p>}
 
+        <div className="edit-server-modal__danger-zone">
+          <Button variant="danger" onClick={() => setIsConfirmingDelete(true)} disabled={isSaving}>
+            Excluir servidor
+          </Button>
+          {deleteError && <p className="edit-server-modal__error">{deleteError}</p>}
+        </div>
+
         <div className="edit-server-modal__actions">
           <Button variant="ghost" onClick={onClose}>
             Cancelar
@@ -147,6 +178,16 @@ export default function EditServerModal({ server, onClose, onServerUpdated }: Ed
           mimeType={pendingCropSource.mimeType}
           onCancel={() => setPendingCropSource(null)}
           onApply={handleApplyCrop}
+        />
+      )}
+
+      {isConfirmingDelete && (
+        <ConfirmModal
+          title="Excluir servidor"
+          message={`Excluir "${server.name}"? Todas as salas, cargos e convites desse servidor serão perdidos. Essa ação não pode ser desfeita.`}
+          confirmLabel={isDeleting ? 'Excluindo…' : 'Excluir'}
+          onCancel={() => setIsConfirmingDelete(false)}
+          onConfirm={handleConfirmDelete}
         />
       )}
     </div>

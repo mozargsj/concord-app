@@ -75,3 +75,22 @@ export async function updateName(env: DbEnv, serverId: string, name: string): Pr
     .bind(trimmed, trimmed.toLowerCase(), serverId)
     .run();
 }
+
+/**
+ * No FK CASCADE in this schema (schema.sql, D1/SQLite) — every table that references a server has
+ * to be cleared by hand, in one batch() so it's all-or-nothing like createOwned above. Doesn't
+ * touch rooms/user_sounds/reports/logs tables that reference OTHER servers, obviously — only rows
+ * scoped to this serverId. Room DOs for this server aren't torn down here (out of scope for a D1
+ * transaction) — they just become unreachable via REST membership checks going forward; any call
+ * still active in one keeps running until it ends naturally.
+ */
+export async function deleteServer(env: DbEnv, serverId: string, ownerUserId: string): Promise<void> {
+  await env.DB.batch([
+    env.DB.prepare('DELETE FROM rooms WHERE server_id = ?').bind(serverId),
+    env.DB.prepare('DELETE FROM roles WHERE server_id = ?').bind(serverId),
+    env.DB.prepare('DELETE FROM authorized_users WHERE server_id = ?').bind(serverId),
+    env.DB.prepare('DELETE FROM server_owner_locks WHERE user_id = ?').bind(ownerUserId),
+    env.DB.prepare('UPDATE users SET owned_server_id = NULL WHERE user_id = ?').bind(ownerUserId),
+    env.DB.prepare('DELETE FROM servers WHERE server_id = ?').bind(serverId)
+  ]);
+}

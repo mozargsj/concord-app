@@ -534,6 +534,13 @@ export function useRoomConnection(
             mesh.requestImage(message.peerId, 'avatar', message.userId, cached?.hash ?? null);
           });
           break;
+        case 'peer-server-icon-changed':
+          // Same idea as peer-avatar-changed above, just for the server's icon — re-ask whoever
+          // sent this (always the server's owner, see the sending effect) for the current icon.
+          void loadCachedImage('server-icon', message.serverId).then((cached) => {
+            mesh.requestImage(message.peerId, 'server-icon', message.serverId, cached?.hash ?? null);
+          });
+          break;
       }
     });
 
@@ -620,6 +627,17 @@ export function useRoomConnection(
   useEffect(() => {
     signalingRef.current?.send({ type: 'avatar-changed' });
   }, [myAvatarUrl]);
+
+  // Same rationale/pattern as avatar-changed above, for the server's icon instead of the user's —
+  // server icons are P2P-only too (decisions.md), so nothing tells an already-connected peer to
+  // re-request one that just changed. Only the server's owner can actually change it, so only they
+  // ever send this (everyone else's server prop update here is a no-op guard, not a permission
+  // check — the Worker never trusted this message for anything but presence anyway).
+  useEffect(() => {
+    if (!server || server.ownerUserId !== userId) return;
+    signalingRef.current?.send({ type: 'server-icon-changed', serverId: server.id });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only the icon itself should resend, not every server field change (e.g. a rename)
+  }, [server?.iconUrl]);
 
   function setLocalCameraTrack(track: MediaStreamTrack | null): void {
     void meshRef.current?.setLocalCameraTrack(track);

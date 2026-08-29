@@ -183,6 +183,9 @@ export async function handleRest(req: Request, env: Env): Promise<Response> {
     if (method === 'PATCH' && segments.length === 2 && segments[0] === 'servers') {
       return await handleUpdateServer(req, env, segments[1]);
     }
+    if (method === 'DELETE' && segments.length === 2 && segments[0] === 'servers') {
+      return await handleDeleteServer(req, env, segments[1]);
+    }
     if (method === 'POST' && segments.length === 3 && segments[0] === 'servers' && segments[2] === 'invites') {
       return await handleCreateInvite(req, env, segments[1]);
     }
@@ -457,6 +460,20 @@ async function handleUpdateServer(req: Request, env: Env, serverId: string): Pro
   const updated = await serversRepo.findById(env, serverId);
   const response: CreateServerResponse = { server: await toServerSummary(env, updated!) };
   return json(200, response);
+}
+
+/** Owner-only, mirrors handleUpdateServer's rank check. Cascades across every D1 table that
+ * references this server (serversRepo.deleteServer's doc comment) — irreversible, no soft-delete,
+ * matches the "Excluir a sala" confirm pattern already in the client (destructive action behind a
+ * ConfirmModal, decided at the UI layer, not here). */
+async function handleDeleteServer(req: Request, env: Env, serverId: string): Promise<Response> {
+  const server = await serversRepo.findById(env, serverId);
+  if (!server) return error(404, 'server-not-found');
+  const rankCheck = await requireRank(req, env, server, Role.Dono);
+  if ('errorResponse' in rankCheck) return rankCheck.errorResponse;
+
+  await serversRepo.deleteServer(env, serverId, server.owner_user_id);
+  return json(200, { ok: true });
 }
 
 async function handleCreateInvite(req: Request, env: Env, serverId: string): Promise<Response> {

@@ -108,6 +108,17 @@ export interface PeerMuteStatusMessage {
   isMuted: boolean;
 }
 
+/** Same "no other signal exists" rationale as avatar-changed — server icons are P2P-only
+ * (decisions.md), so a peer already sharing a room with the server's owner never finds out the
+ * icon changed on its own (unlike avatars, no WebRTC-level event fires for this at all). Only the
+ * owner ever sends this (useRoomConnection.ts checks ownerUserId before sending) — serverId is
+ * included because, unlike userId for avatar-changed, the DO never tracks which server a room
+ * belongs to (join-room's serverId is checked once, at join, then discarded). */
+export interface ServerIconChangedMessage {
+  type: 'server-icon-changed';
+  serverId: string;
+}
+
 export type ClientToServerMessage =
   | JoinRoomMessage
   | SdpOfferMessage
@@ -120,7 +131,8 @@ export type ClientToServerMessage =
   | MicStateMessage
   | ScreenShareChangedMessage
   | AvatarChangedMessage
-  | PeerMuteStatusMessage;
+  | PeerMuteStatusMessage
+  | ServerIconChangedMessage;
 
 /** Relayed to the target peer with the sender's id attached, since the client-to-server shape has no envelope. */
 export interface SdpOfferRelayMessage extends SdpOfferMessage {
@@ -218,6 +230,13 @@ export interface PeerMuteStatusRelayMessage extends PeerMuteStatusMessage {
   fromPeerId: string;
 }
 
+export interface PeerServerIconChangedMessage {
+  type: 'peer-server-icon-changed';
+  roomId: string;
+  peerId: string;
+  serverId: string;
+}
+
 export type ServerToClientMessage =
   | RoomJoinedMessage
   | JoinRejectedMessage
@@ -234,4 +253,5 @@ export type ServerToClientMessage =
   | PeerMicStateMessage
   | PeerScreenShareChangedMessage
   | PeerAvatarChangedMessage
-  | PeerMuteStatusRelayMessage;
+  | PeerMuteStatusRelayMessage
+  | PeerServerIconChangedMessage;

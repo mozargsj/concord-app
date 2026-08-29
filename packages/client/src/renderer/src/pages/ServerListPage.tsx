@@ -123,6 +123,16 @@ export default function ServerListPage({
     setMyServers((prev) => prev?.map((server) => (server.id === updated.id ? updated : server)) ?? prev);
   }
 
+  // Owner-only (EditServerModal only reaches this via ServerRail's right-click, already gated to
+  // the owner) — frees ownedServerId so they can create/own another server, and falls back to
+  // whatever server remains (or the empty state) same as the mount-time auto-select logic below.
+  function handleServerDeleted(deletedId: string): void {
+    const remaining = (myServers ?? []).filter((server) => server.id !== deletedId);
+    setMyServers(remaining);
+    onCurrentUserChange({ ...currentUser, ownedServerId: null });
+    setSelectedServerId((prev) => (prev !== deletedId ? prev : (remaining[0]?.id ?? null)));
+  }
+
   // Bumped every time a P2P sound download finishes (see useRoomConnection's onSoundDownloaded)
   // — RoomSidebar watches this to know when to re-read the temp-cache list, since the actual
   // download happens deep inside the mesh, not in anything RoomSidebar itself calls.
@@ -621,6 +631,7 @@ export default function ServerListPage({
           onOpenInvite={() => setServerActionsMode('join')}
           onOpenCreateServer={() => setServerActionsMode('create')}
           onServerUpdated={handleServerUpdated}
+          onServerDeleted={handleServerDeleted}
         />
 
         <div className="server-list-page__main server-list-page__main--empty">
@@ -671,6 +682,7 @@ export default function ServerListPage({
         onOpenInvite={() => setServerActionsMode('join')}
         onOpenCreateServer={() => setServerActionsMode('create')}
         onServerUpdated={handleServerUpdated}
+        onServerDeleted={handleServerDeleted}
       />
 
       <RoomSidebar
@@ -710,6 +722,7 @@ export default function ServerListPage({
         soundDownloadTick={soundDownloadTick}
         onOpenVolumeMenu={peerVolume.openVolumeMenu}
         activeVolumeMenuUserId={peerVolume.volumeMenu?.userId ?? null}
+        isPeerMutedByMe={(userId) => peerVolume.getEffectivePeerSettings(userId).muted}
       />
 
       <div className="server-list-page__main">
@@ -737,6 +750,7 @@ export default function ServerListPage({
           getPeerVolume={peerVolume.getEffectiveVolume}
           onOpenVolumeMenu={peerVolume.openVolumeMenu}
           activeVolumeMenuUserId={peerVolume.volumeMenu?.userId ?? null}
+          isPeerMutedByMe={(userId) => peerVolume.getEffectivePeerSettings(userId).muted}
         />
       </div>
 

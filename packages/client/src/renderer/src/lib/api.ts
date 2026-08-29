@@ -278,6 +278,14 @@ export async function renameRoom(serverId: string, roomId: string, name: string)
   return result.room;
 }
 
+export async function deleteServer(serverId: string): Promise<void> {
+  if (TEST_MODE) {
+    testState.server = null;
+    return;
+  }
+  await request(`/servers/${serverId}`, { method: 'DELETE' });
+}
+
 export async function deleteRoom(serverId: string, roomId: string): Promise<void> {
   if (TEST_MODE) {
     testState.rooms = testState.rooms.filter((r) => r.id !== roomId);

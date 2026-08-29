@@ -15,6 +15,7 @@ interface ServerRailProps {
   onOpenInvite: () => void;
   onOpenCreateServer: () => void;
   onServerUpdated: (server: ServerSummary) => void;
+  onServerDeleted: (serverId: string) => void;
 }
 
 interface ServerContextMenuState {
@@ -32,7 +33,8 @@ export default function ServerRail({
   onOpenProfile,
   onOpenInvite,
   onOpenCreateServer,
-  onServerUpdated
+  onServerUpdated,
+  onServerDeleted
 }: ServerRailProps) {
   const [contextMenu, setContextMenu] = useState<ServerContextMenuState | null>(null);
   const [editingServer, setEditingServer] = useState<ServerSummary | null>(null);
@@ -112,6 +114,7 @@ export default function ServerRail({
           server={editingServer}
           onClose={() => setEditingServer(null)}
           onServerUpdated={onServerUpdated}
+          onServerDeleted={onServerDeleted}
         />
       )}
     </nav>
