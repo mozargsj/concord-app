@@ -415,6 +415,13 @@
   color: var(--color-danger);
 }
 
+.room-sidebar__muted-me-status {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  color: var(--color-danger);
+}
+
 .room-sidebar__live-badge {
   padding: 1px 5px;
   font-size: 9px;

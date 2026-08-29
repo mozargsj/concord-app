@@ -248,6 +248,10 @@
   flex-shrink: 0;
 }
 
+.room-view__participant-status-icon--muted-me {
+  color: var(--color-danger);
+}
+
 .room-view__host-star {
   width: 16px;
   height: 16px;

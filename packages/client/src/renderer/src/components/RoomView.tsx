@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { RoomSummary } from '@concord/shared';
 import type { RoomPeer } from '../hooks/useRoomConnection';
-import { Eye, HeadphoneOff, MicOff, X } from 'lucide-react';
+import { Eye, EarOff, HeadphoneOff, MicOff, X } from 'lucide-react';
 import CallControls from './CallControls';
 import MediaStreamVideo from './MediaStreamVideo';
 import ScreenShareTile from './ScreenShareTile';
@@ -38,7 +38,7 @@ interface RoomViewProps {
   // Shared with RoomSidebar via usePeerVolumeControl (lifted to ServerListPage) so muting/
   // adjusting someone from either place stays in sync live, not just after a remount.
   getPeerVolume: (userId: string | null) => number | undefined;
-  onOpenVolumeMenu: (x: number, y: number, userId: string, name: string) => void;
+  onOpenVolumeMenu: (x: number, y: number, peerId: string, userId: string, name: string) => void;
   // userId of whoever's volume popup is currently open (shared with RoomSidebar) — drives the
   // "clicked" highlight so the action has visible feedback beyond the popup itself.
   activeVolumeMenuUserId: string | null;
@@ -56,6 +56,8 @@ type Tile =
       isSpeaking: boolean;
       isMicMuted: boolean;
       isDeafened: boolean;
+      // False for self — this badge means "this peer muted YOU", never applicable to your own tile.
+      mutedMe: boolean;
       // null for self — there's no incoming stream to adjust volume on for your own tile.
       userId: string | null;
     }
@@ -182,6 +184,7 @@ export default function RoomView({
       isSpeaking: isSpeaking && !isMicMuted,
       isMicMuted,
       isDeafened,
+      mutedMe: false,
       userId: null
     },
     ...peers.map(
@@ -196,6 +199,7 @@ export default function RoomView({
         isSpeaking: peer.isSpeaking,
         isMicMuted: peer.isMicMuted,
         isDeafened: peer.isDeafened,
+        mutedMe: peer.mutedMe,
         userId: peer.userId
       })
     )
@@ -287,10 +291,20 @@ export default function RoomView({
 
           const isHost = tile.kind === 'participant' && tile.isHost;
 
+          const mutedMe = tile.kind === 'participant' && tile.mutedMe;
+
           const status = (
             <div className="room-view__participant-status">
               {muted && <MicOff size={13} className="room-view__participant-status-icon" />}
               {tileIsDeafened && <HeadphoneOff size={13} className="room-view__participant-status-icon" />}
+              {mutedMe && (
+                <span title={`${tile.name} te mutou`}>
+                  <EarOff
+                    size={13}
+                    className="room-view__participant-status-icon room-view__participant-status-icon--muted-me"
+                  />
+                </span>
+              )}
               <span>{tile.name}</span>
               {isHost && <HostStarBadge className="room-view__host-star" />}
             </div>
@@ -323,7 +337,7 @@ export default function RoomView({
                 tile.kind === 'participant' && tile.userId
                   ? (event) => {
                       event.preventDefault();
-                      onOpenVolumeMenu(event.clientX, event.clientY, tile.userId!, tile.name);
+                      onOpenVolumeMenu(event.clientX, event.clientY, tile.key, tile.userId!, tile.name);
                     }
                   : undefined
               }

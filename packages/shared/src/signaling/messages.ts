@@ -96,6 +96,18 @@ export interface AvatarChangedMessage {
   type: 'avatar-changed';
 }
 
+/** "Mutar pra mim" (usePeerVolumeControl.ts) sempre foi 100% local — nunca saía do cliente, então
+ * quem mutava ninguém mais ficava sabendo (decisions.md, "Pontos ainda em aberto"). Diferente de
+ * mic-state (broadcast — todo mundo precisa saber se alguém está mutado/deafened), esse é dirigido
+ * (targetPeerId + relay com fromPeerId), mesmo padrão de sdp-offer/ice-candidate: só o alvo
+ * precisa saber que foi mutado por alguém específico, pra acender o próprio badge "fulano te
+ * mutou" só na tela de quem foi mutado. */
+export interface PeerMuteStatusMessage {
+  type: 'peer-mute-status';
+  targetPeerId: string;
+  isMuted: boolean;
+}
+
 export type ClientToServerMessage =
   | JoinRoomMessage
   | SdpOfferMessage
@@ -107,7 +119,8 @@ export type ClientToServerMessage =
   | DeviceSwitchedMessage
   | MicStateMessage
   | ScreenShareChangedMessage
-  | AvatarChangedMessage;
+  | AvatarChangedMessage
+  | PeerMuteStatusMessage;
 
 /** Relayed to the target peer with the sender's id attached, since the client-to-server shape has no envelope. */
 export interface SdpOfferRelayMessage extends SdpOfferMessage {
@@ -201,6 +214,10 @@ export interface PeerAvatarChangedMessage {
   userId: string;
 }
 
+export interface PeerMuteStatusRelayMessage extends PeerMuteStatusMessage {
+  fromPeerId: string;
+}
+
 export type ServerToClientMessage =
   | RoomJoinedMessage
   | JoinRejectedMessage
@@ -216,4 +233,5 @@ export type ServerToClientMessage =
   | PeerDeviceSwitchedMessage
   | PeerMicStateMessage
   | PeerScreenShareChangedMessage
-  | PeerAvatarChangedMessage;
+  | PeerAvatarChangedMessage
+  | PeerMuteStatusRelayMessage;

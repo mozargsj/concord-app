@@ -141,6 +141,7 @@ export default function ServerListPage({
     switchMicDevice,
     refreshMicPipeline,
     sendDeviceSwitched,
+    sendMuteStatus,
     playSoundboardClip,
     requestPeerSoundList,
     requestPeerSound
@@ -780,7 +781,10 @@ export default function ServerListPage({
           volume={peerVolume.getEffectivePeerSettings(peerVolume.volumeMenu.userId).volume}
           isMuted={peerVolume.getEffectivePeerSettings(peerVolume.volumeMenu.userId).muted}
           onVolumeChange={(value) => peerVolume.handlePeerVolumeChange(peerVolume.volumeMenu!.userId, value)}
-          onToggleMute={() => peerVolume.handleTogglePeerMute(peerVolume.volumeMenu!.userId)}
+          onToggleMute={() => {
+            const isMuted = peerVolume.handleTogglePeerMute(peerVolume.volumeMenu!.userId);
+            sendMuteStatus(peerVolume.volumeMenu!.peerId, isMuted);
+          }}
           onClose={peerVolume.closeVolumeMenu}
         />
       )}

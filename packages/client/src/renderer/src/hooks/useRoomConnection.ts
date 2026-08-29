@@ -107,6 +107,10 @@ export interface RoomPeer {
   isSpeaking: boolean;
   isMicMuted: boolean;
   isDeafened: boolean;
+  /** True when THIS peer has muted the local user locally ("mutar pra mim" on their end) —
+   * driven by peer-mute-status (see messages.ts), never by our own mute of them (that's
+   * peerVolumePreferences.ts, purely local, never sent). Powers the "fulano te mutou" badge. */
+  mutedMe: boolean;
   /** Only ever set after a successful P2P fetch from this peer (see requestImage in
    * webrtcMesh.ts) — null until then, even if the peer has an avatar set, since there's no
    * central store this could come from otherwise (decisions.md). */
@@ -406,6 +410,7 @@ export function useRoomConnection(
               isSpeaking: false,
               isMicMuted: false,
               isDeafened: false,
+              mutedMe: false,
               avatarUrl: null,
               connectionStatus: 'connecting'
             }))
@@ -430,6 +435,7 @@ export function useRoomConnection(
                 isSpeaking: false,
                 isMicMuted: false,
                 isDeafened: false,
+                mutedMe: false,
                 avatarUrl: null,
                 connectionStatus: 'connecting'
               }
@@ -509,6 +515,16 @@ export function useRoomConnection(
               )
             }));
           }
+          break;
+        case 'peer-mute-status':
+          // Always addressed to us specifically (server relays by targetPeerId, see room.ts) —
+          // fromPeerId is whoever just muted/unmuted the local user on their own end.
+          setState((prev) => ({
+            ...prev,
+            peers: prev.peers.map((peer) =>
+              peer.peerId === message.fromPeerId ? { ...peer, mutedMe: message.isMuted } : peer
+            )
+          }));
           break;
         case 'peer-avatar-changed':
           // Same request the initial peer-joined fetch makes (requestPeerImages) — the hash
@@ -652,6 +668,14 @@ export function useRoomConnection(
     playDeviceSwitch(kind);
   }
 
+  /** Tells one specific peer they've been muted/unmuted "for me" (usePeerVolumeControl.ts) — the
+   * only reason this leaves the client at all is so that peer can show a "fulano te mutou" badge
+   * on their own screen; it never affects anything on the sender's end (that's local-only state,
+   * peerVolumePreferences.ts). Directed, not broadcast — matches sdp-offer/ice-candidate. */
+  function sendMuteStatus(targetPeerId: string, isMuted: boolean): void {
+    signalingRef.current?.send({ type: 'peer-mute-status', targetPeerId, isMuted });
+  }
+
   async function switchMicDevice(deviceId: string | null): Promise<void> {
     const mesh = meshRef.current;
     if (!mesh) return;
@@ -692,6 +716,7 @@ export function useRoomConnection(
     switchMicDevice,
     refreshMicPipeline,
     sendDeviceSwitched,
+    sendMuteStatus,
     playSoundboardClip,
     requestPeerSoundList,
     requestPeerSound

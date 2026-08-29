@@ -121,6 +121,7 @@ export class RoomDurableObject extends DurableObject<Env> {
       case 'sdp-offer':
       case 'sdp-answer':
       case 'ice-candidate':
+      case 'peer-mute-status':
         this.relay(ws, message);
         break;
       case 'host-heartbeat':
@@ -334,7 +335,7 @@ export class RoomDurableObject extends DurableObject<Env> {
 
   private relay(
     ws: WebSocket,
-    message: Extract<ClientToServerMessage, { type: 'sdp-offer' | 'sdp-answer' | 'ice-candidate' }>
+    message: Extract<ClientToServerMessage, { type: 'sdp-offer' | 'sdp-answer' | 'ice-candidate' | 'peer-mute-status' }>
   ): void {
     const sender = ws.deserializeAttachment() as PeerAttachment | null;
     if (!sender) return;

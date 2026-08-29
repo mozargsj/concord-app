@@ -10,6 +10,7 @@ import {
 export interface VolumeMenuState {
   x: number;
   y: number;
+  peerId: string;
   userId: string;
   name: string;
 }
@@ -43,14 +44,17 @@ export function usePeerVolumeControl() {
     setPeerVolume(userId, volume);
   }
 
-  function handleTogglePeerMute(userId: string) {
+  /** Returns the new muted value — the caller (ServerListPage.tsx) needs it to tell the peer
+   * about the change via signaling (sendMuteStatus), which this hook has no access to itself. */
+  function handleTogglePeerMute(userId: string): boolean {
     const next = !getEffectivePeerSettings(userId).muted;
     setPeerVolumeOverrides((prev) => ({ ...prev, [userId]: { ...getEffectivePeerSettings(userId), muted: next } }));
     setPeerMuted(userId, next);
+    return next;
   }
 
-  function openVolumeMenu(x: number, y: number, userId: string, name: string) {
-    setVolumeMenu({ x, y, userId, name });
+  function openVolumeMenu(x: number, y: number, peerId: string, userId: string, name: string) {
+    setVolumeMenu({ x, y, peerId, userId, name });
   }
 
   function closeVolumeMenu() {

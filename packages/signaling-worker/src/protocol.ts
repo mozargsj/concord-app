@@ -41,6 +41,10 @@ export function validateClientMessage(raw: unknown): ClientToServerMessage | nul
       return typeof m.isSharing === 'boolean' ? (m as unknown as ClientToServerMessage) : null;
     case 'avatar-changed':
       return m as unknown as ClientToServerMessage;
+    case 'peer-mute-status':
+      return isStr(m.targetPeerId, 200) && typeof m.isMuted === 'boolean'
+        ? (m as unknown as ClientToServerMessage)
+        : null;
     default:
       return null;
   }

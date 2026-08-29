@@ -21,7 +21,8 @@ import {
   LayoutGrid,
   Megaphone,
   MicOff,
-  HeadphoneOff
+  HeadphoneOff,
+  EarOff
 } from 'lucide-react';
 import { getAvatarColor } from '../lib/avatarColor';
 import type { RoomPeer } from '../hooks/useRoomConnection';
@@ -88,7 +89,7 @@ interface RoomSidebarProps {
   soundDownloadTick: number;
   /** Shared with RoomView via usePeerVolumeControl (lifted to ServerListPage) so muting/adjusting
    * someone from either place stays in sync live, not just after a remount. */
-  onOpenVolumeMenu: (x: number, y: number, userId: string, name: string) => void;
+  onOpenVolumeMenu: (x: number, y: number, peerId: string, userId: string, name: string) => void;
   /** userId of whoever's volume popup is currently open — drives the "clicked" highlight so the
    * right-click action has visible feedback beyond the popup itself. */
   activeVolumeMenuUserId: string | null;
@@ -436,6 +437,8 @@ export default function RoomSidebar({
             isBroadcasting: boolean;
             isMicMuted: boolean;
             isDeafened: boolean;
+            // False for self — this badge means "this peer muted YOU", never applicable to your own row.
+            mutedMe: boolean;
             // null for self — there's no incoming stream to adjust volume on for your own row.
             userId: string | null;
             // null for self — no P2P connection to yourself, so no dot to show (see the render
@@ -453,6 +456,7 @@ export default function RoomSidebar({
                   isBroadcasting: selfCameraOn || selfSharingScreen,
                   isMicMuted,
                   isDeafened,
+                  mutedMe: false,
                   userId: null,
                   connectionStatus: null
                 },
@@ -471,6 +475,7 @@ export default function RoomSidebar({
                     !!peer.screenStream,
                   isMicMuted: peer.isMicMuted,
                   isDeafened: peer.isDeafened,
+                  mutedMe: peer.mutedMe,
                   userId: peer.userId,
                   connectionStatus: peer.connectionStatus
                 }))
@@ -544,7 +549,13 @@ export default function RoomSidebar({
                         isVolumeTarget
                           ? (event) => {
                               event.preventDefault();
-                              onOpenVolumeMenu(event.clientX, event.clientY, participant.userId!, participant.name);
+                              onOpenVolumeMenu(
+                                event.clientX,
+                                event.clientY,
+                                participant.key,
+                                participant.userId!,
+                                participant.name
+                              );
                             }
                           : undefined
                       }
@@ -591,6 +602,11 @@ export default function RoomSidebar({
                         >
                           <MicOff size={12} />
                           {participant.isDeafened && <HeadphoneOff size={12} />}
+                        </span>
+                      )}
+                      {participant.mutedMe && (
+                        <span className="room-sidebar__muted-me-status" title={`${participant.name} te mutou`}>
+                          <EarOff size={12} />
                         </span>
                       )}
                       {participant.isBroadcasting && <LiveBadge className="room-sidebar__live-badge" />}
