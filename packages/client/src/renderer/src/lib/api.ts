@@ -136,6 +136,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export async function login(
   email: string,
   displayName: string,
+  idToken: string,
   avatarImageUrl?: string
 ): Promise<{ user: UserProfile; sessionToken: string }> {
   if (TEST_MODE) {
@@ -148,7 +149,7 @@ export async function login(
     };
     return { user: testState.user, sessionToken: 'test-mode-token' };
   }
-  const body: LoginRequest = { email, displayName, avatarImageUrl };
+  const body: LoginRequest = { email, displayName, avatarImageUrl, idToken };
   return request<LoginResponse>('/users', { method: 'POST', body: JSON.stringify(body) });
 }
 

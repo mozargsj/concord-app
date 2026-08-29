@@ -54,6 +54,21 @@ export class RoomDurableObject extends DurableObject<Env> {
     if (request.headers.get('Upgrade') !== 'websocket') {
       return new Response('Expected WebSocket upgrade', { status: 426 });
     }
+
+    // [Achado de segurança, 2026-08-29] This is the ONLY place roomId is ever set for this DO
+    // instance — the URL's roomId is exactly what index.ts used to pick this Durable Object
+    // (env.ROOMS.idFromName(roomId)), so it's the one value that's actually authoritative about
+    // which room this object *is*. Before this, handleJoinRoom trusted the room-room/serverId
+    // fields inside the join-room *message* instead (fully client-controlled, independent of the
+    // URL) and even overwrote this DO's stored roomId with that value — so a session token valid
+    // for the caller's own room B could join-room claiming roomId=B while physically connected to
+    // room A's Durable Object (picked via ?roomId=A in the URL), passing the membership check
+    // (against B, which they really belong to) while actually receiving A's peer roster/SDP/ICE.
+    // handleJoinRoom below now rejects any join-room whose message.roomId disagrees with this.
+    const roomId = new URL(request.url).searchParams.get('roomId');
+    if (!roomId) return new Response('Missing roomId query parameter.', { status: 400 });
+    await this.setRoomId(roomId);
+
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
     this.ctx.acceptWebSocket(server);
@@ -146,6 +161,16 @@ export class RoomDurableObject extends DurableObject<Env> {
   ): Promise<void> {
     if (ws.deserializeAttachment() !== null) return; // one join per socket, same as roomManager.ts
 
+    // Must match the URL-derived roomId set in fetch() — see that method's doc comment. A
+    // mismatch means whatever roomId this join-room claims isn't actually the room this
+    // connection is physically attached to, regardless of whether the caller is a legitimate
+    // member of the room they *named*.
+    const actualRoomId = await this.getRoomId();
+    if (message.roomId !== actualRoomId) {
+      this.send(ws, { type: 'join-rejected', roomId: message.roomId, reason: 'forbidden' });
+      return;
+    }
+
     const verifiedUserId = await verifySessionToken(message.sessionToken, this.env.SESSION_SECRET);
     let userId: string;
     if (verifiedUserId) {
@@ -172,8 +197,6 @@ export class RoomDurableObject extends DurableObject<Env> {
       this.send(ws, { type: 'join-rejected', roomId: message.roomId, reason: 'room-full' });
       return;
     }
-
-    await this.setRoomId(message.roomId);
 
     // displayName/userId stay untrusted client input to rebroadcast to strangers (userId is
     // either verified above, or, only in the dev-only bypass, the client's own claim) — trim/cap

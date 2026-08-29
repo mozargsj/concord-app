@@ -20,6 +20,12 @@ export interface GoogleIdentity {
   email: string;
   displayName: string;
   avatarImageUrl?: string;
+  /** Raw id_token JWT — verified locally right below (signature/issuer/audience/email_verified),
+   * but also handed to the server so it can verify independently instead of trusting whatever
+   * `email` the renderer sends (decisions.md, achado de segurança 2026-08-29 — a client can call
+   * the REST API directly, bypassing this whole file, so server-side trust in a bare client-sent
+   * email was a full authentication bypass). */
+  idToken: string;
 }
 
 function base64url(input: Buffer): string {
@@ -113,6 +119,7 @@ export async function loginWithGoogle(): Promise<GoogleIdentity> {
   return {
     email: String(payload.email),
     displayName: typeof payload.name === 'string' && payload.name.trim() ? payload.name : String(payload.email),
-    avatarImageUrl: typeof payload.picture === 'string' ? payload.picture : undefined
+    avatarImageUrl: typeof payload.picture === 'string' ? payload.picture : undefined,
+    idToken: tokenBody.id_token
   };
 }

@@ -22,8 +22,8 @@ export default function LoginPage({ onContinue }: LoginPageProps) {
     setError(null);
     setIsSubmitting(true);
     try {
-      const { email, displayName, avatarImageUrl } = await window.concord.auth.loginWithGoogle();
-      const { user, sessionToken } = await login(email, displayName, avatarImageUrl);
+      const { email, displayName, avatarImageUrl, idToken } = await window.concord.auth.loginWithGoogle();
+      const { user, sessionToken } = await login(email, displayName, idToken, avatarImageUrl);
       onContinue(user, sessionToken);
     } catch (err) {
       // The loopback server (main/googleAuth.ts) only ever hears back if the browser actually
@@ -48,7 +48,9 @@ export default function LoginPage({ onContinue }: LoginPageProps) {
     setError(null);
     setIsSubmitting(true);
     try {
-      const { user, sessionToken } = await login(email, nickname);
+      // TEST_MODE short-circuits before idToken is ever used for anything real (api.ts) — this
+      // path never talks to a real backend, so there's nothing genuine to send.
+      const { user, sessionToken } = await login(email, nickname, 'test-mode-id-token');
       setStoredTestIdentity({ email, nickname });
       onContinue(user, sessionToken);
     } finally {

@@ -9,12 +9,18 @@
   // serves REST (rest.ts, D1/R2-backed) alongside signaling (room.ts), not just signaling.
 
   // One RoomDurableObject instance per roomId (env.ROOMS.idFromName(roomId)) — the room's entire
-  // live state (peers, host, epoch) is that instance. See src/room.ts for why.
+  // live state (peers, host, epoch) is that instance. See src/room.ts for why. UPDATES is a
+  // single singleton instance (idFromName('global')) — server->client "update available" push,
+  // unrelated to any room, see src/updatesBroadcaster.ts.
   "durable_objects": {
-    "bindings": [{ "name": "ROOMS", "class_name": "RoomDurableObject" }]
+    "bindings": [
+      { "name": "ROOMS", "class_name": "RoomDurableObject" },
+      { "name": "UPDATES", "class_name": "UpdatesBroadcaster" }
+    ]
   },
   "migrations": [
-    { "tag": "v1", "new_sqlite_classes": ["RoomDurableObject"] }
+    { "tag": "v1", "new_sqlite_classes": ["RoomDurableObject"] },
+    { "tag": "v2", "new_sqlite_classes": ["UpdatesBroadcaster"] }
   ],
 
   "d1_databases": [
@@ -45,10 +51,17 @@
   //                          (src/r2.ts), separate from the native MEDIA binding above.
   //   TURN_KEY_ID           Cloudflare Realtime TURN key — optional, blank = client falls back
   //   TURN_API_TOKEN          to STUN-only (same as packages/server's TURN_KEY_ID/TURN_API_TOKEN).
+  //   ADMIN_SECRET          Shared secret for POST /admin/notify-update (CI/manual trigger of the
+  //                          update-available broadcast, src/updatesBroadcaster.ts) — new secret,
+  //                          not tied to any existing credential.
   "vars": {
     // Mirrors packages/server/.env — same "never true in production" rule.
     "ALLOW_UNAUTHENTICATED_ROOMS": "false",
     "CF_ACCOUNT_ID": "9c4844fa6f64bcee94c3d8fbdd81919c",
-    "R2_BUCKET_NAME": "concord-media"
+    "R2_BUCKET_NAME": "concord-media",
+    // [2026-08-29] Público por natureza (OAuth client_id, não client_secret — vai no `aud` do
+    // id_token) — mesmo valor de packages/client/.env, usado para validar login no servidor
+    // (src/googleAuth.ts). Não é segredo, por isso var e não `wrangler secret put`.
+    "GOOGLE_OAUTH_CLIENT_ID": "330694094519-pkclq22u953hd39ddru698459l05qsst.apps.googleusercontent.com"
   }
 }

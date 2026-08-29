@@ -2,10 +2,20 @@ import type { RoomSummary, ServerSummary } from '../domain/room.js';
 import type { UserProfile } from '../domain/user.js';
 
 export interface LoginRequest {
+  /** [Achado de segurança, 2026-08-29] Never trusted as proof of identity on its own — the
+   * Cloudflare Worker backend (packages/signaling-worker) requires and verifies `idToken` below
+   * server-side, deriving the real email from that instead. Kept here (and still read by the
+   * legacy packages/server backend, which never got this fix) for backward compatibility. */
   email: string;
   displayName: string;
-  /** Google's `picture` claim — imported to S3 only when this login creates a brand-new account. */
+  /** Google's `picture` claim — no longer imported anywhere server-side (decisions.md — avatar is
+   * 100% local/P2P now), kept only for backward compatibility with the legacy backend. */
   avatarImageUrl?: string;
+  /** Google's OAuth `id_token` (raw JWT, from main/googleAuth.ts) — packages/signaling-worker
+   * verifies this server-side (signature/issuer/audience/email_verified via Google's JWKS)
+   * instead of trusting `email` above directly. Optional only so the legacy packages/server
+   * backend (which predates this and never checks it) still typechecks. */
+  idToken?: string;
 }
 
 export interface LoginResponse {

@@ -38,6 +38,7 @@ import * as userSoundsRepo from './db/userSounds';
 import * as reportsRepo from './db/reports';
 import * as r2 from './r2';
 import { signSessionToken, verifySessionToken, signInviteToken, verifyInviteToken } from './auth';
+import { verifyGoogleIdToken } from './googleAuth';
 import { logError } from './errorLog';
 
 const CORS_HEADERS = {
@@ -132,20 +133,6 @@ function toRoomSummary(record: roomsRepo.RoomRecord): RoomSummary {
   return { id: record.room_id, serverId: record.server_id, name: record.name, memberCount: 0, maxMembers: 10 };
 }
 
-/** Best-effort: downloads the Google profile picture and stores it under the new user's own avatar key. */
-async function importAvatarFromUrl(env: Env, userId: string, imageUrl: string): Promise<string | null> {
-  try {
-    const response = await fetch(imageUrl);
-    if (!response.ok) return null;
-    const contentType = response.headers.get('content-type') ?? 'image/jpeg';
-    const key = `avatars/${userId}-${Date.now()}`;
-    await env.MEDIA.put(key, response.body, { httpMetadata: { contentType } });
-    return key;
-  } catch {
-    return null;
-  }
-}
-
 /** REST router — mirrors packages/server/src/http/router.ts route-for-route, reimplemented
  * against the Workers Request/Response API and the D1/R2-backed repos in src/db/ and src/r2.ts
  * instead of DynamoDB/S3. Returns null for routes it doesn't recognize, so index.ts's fetch()
@@ -215,6 +202,9 @@ export async function handleRest(req: Request, env: Env): Promise<Response> {
     if (method === 'POST' && segments.length === 1 && segments[0] === 'reports') {
       return await handleCreateReport(req, env);
     }
+    if (method === 'POST' && segments.length === 2 && segments[0] === 'admin' && segments[1] === 'notify-update') {
+      return await handleNotifyUpdate(req, env);
+    }
     if (method === 'GET' && segments.length === 3 && segments[0] === 'users' && segments[1] === 'me' && segments[2] === 'sounds') {
       return await handleListMySounds(req, env);
     }
@@ -260,13 +250,19 @@ async function handleServeUpdateFile(env: Env, segments: string[]): Promise<Resp
 
 async function handleLogin(req: Request, env: Env): Promise<Response> {
   const body = await readJsonBody<LoginRequest>(req);
-  const email = body?.email?.trim();
   const displayName = body?.displayName?.trim();
-  if (!email) return error(400, 'email-required');
   if (!displayName) return error(400, 'display-name-required');
 
+  // [Achado de segurança, 2026-08-29] `email` no corpo nunca é confiável — quem chama a REST API
+  // diretamente (sem passar pelo Electron/googleAuth.ts) podia mandar qualquer email e ganhar uma
+  // sessão para ele. O id_token do Google (assinado, verificado abaixo contra o JWKS real) é a
+  // única fonte confiável do email a partir de agora; `body.email` é ignorado por completo.
+  const idToken = body?.idToken;
+  if (!idToken) return error(401, 'id-token-required');
+  const email = await verifyGoogleIdToken(idToken, env.GOOGLE_OAUTH_CLIENT_ID);
+  if (!email) return error(401, 'invalid-id-token');
+
   let record = await usersRepo.findByEmail(env, email);
-  const isNewUser = !record;
   if (!record) {
     try {
       record = await usersRepo.create(env, { email, displayName });
@@ -277,13 +273,14 @@ async function handleLogin(req: Request, env: Env): Promise<Response> {
     }
   }
 
-  if (isNewUser && body?.avatarImageUrl) {
-    const key = await importAvatarFromUrl(env, record.user_id, body.avatarImageUrl);
-    if (key) {
-      await usersRepo.updateProfile(env, record.user_id, { avatarKey: key });
-      record = (await usersRepo.findById(env, record.user_id)) ?? record;
-    }
-  }
+  // [Bug corrigido, 2026-08-29] Nunca importar o avatar do Google pro storage do servidor, nem
+  // na criação da conta — avatar é 100% local/P2P hoje (ProfilePage.tsx salva no cache local via
+  // saveCachedImage, nunca chama /uploads/presign), então um avatar_key setado aqui uma vez
+  // ficava permanentemente sombreando o avatar de verdade: toUserProfile sempre devolveria essa
+  // URL antiga do Google, e hydrateOwnAvatar (App.tsx) só olha o cache local quando o servidor
+  // devolve null — então fechar/abrir o app sempre voltava a mostrar a foto do Google, nunca a
+  // trocada. `body?.avatarImageUrl` (ainda mandado pelo client, googleAuth.ts) agora é ignorado
+  // de propósito — o campo continua existindo no tipo compartilhado só por compatibilidade.
 
   const sessionToken = await signSessionToken(record.user_id, env.SESSION_SECRET);
   const response: LoginResponse = { user: await toUserProfile(env, record), sessionToken };
@@ -625,4 +622,27 @@ async function handleGetTurnCredentials(req: Request, env: Env): Promise<Respons
     await logError(env, err, { source: 'http', route: 'GET /webrtc/turn-credentials' });
     return json(200, { iceServers: [] });
   }
+}
+
+/**
+ * Not a normal user action — called by CI (or manually) right after a new version's installer/
+ * latest.yml/blockmap are already live in R2, to push "update available" to every currently
+ * connected client via UpdatesBroadcaster. Auth is a shared secret header, not a session token —
+ * there's no user behind this call. The client never auto-installs from this notification on its
+ * own (decisions.md — the user has to click to authorize); this endpoint only fans the message out.
+ */
+async function handleNotifyUpdate(req: Request, env: Env): Promise<Response> {
+  const secret = req.headers.get('X-Admin-Secret');
+  if (!secret || secret !== env.ADMIN_SECRET) return error(401, 'unauthorized');
+
+  const body = await readJsonBody<{ version: string }>(req);
+  if (!body?.version) return error(400, 'invalid-request');
+
+  const id = env.UPDATES.idFromName('global');
+  const broadcastResponse = await env.UPDATES.get(id).fetch('https://internal/broadcast', {
+    method: 'POST',
+    body: JSON.stringify({ version: body.version })
+  });
+  const result = (await broadcastResponse.json()) as { delivered: number };
+  return json(200, result);
 }
