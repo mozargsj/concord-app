@@ -1,0 +1,54 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "concord-signaling",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-28",
+  "compatibility_flags": ["nodejs_compat"],
+
+  // [2026-08-29] Full backend migration off AWS (decisions.md §0.2/§0.3) — this Worker now
+  // serves REST (rest.ts, D1/R2-backed) alongside signaling (room.ts), not just signaling.
+
+  // One RoomDurableObject instance per roomId (env.ROOMS.idFromName(roomId)) — the room's entire
+  // live state (peers, host, epoch) is that instance. See src/room.ts for why.
+  "durable_objects": {
+    "bindings": [{ "name": "ROOMS", "class_name": "RoomDurableObject" }]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["RoomDurableObject"] }
+  ],
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "concord",
+      "database_id": "8627e987-8c86-4a24-91b0-73e22fe58f8a"
+    }
+  ],
+
+  // [Resolvido 2026-08-29] R2 habilitado na conta pelo Mozar, bucket "concord-media" criado —
+  // binding reativado.
+  "r2_buckets": [
+    { "binding": "MEDIA", "bucket_name": "concord-media" }
+  ],
+
+  // Daily sweep for report/log TTL — D1 has no native expiry like DynamoDB (see src/index.ts's
+  // scheduled() handler). Workers Free plan allows 5 Cron Triggers per account.
+  "triggers": {
+    "crons": ["0 6 * * *"]
+  },
+
+  // Secrets (never in this file — set via `wrangler secret put <NAME>`):
+  //   SESSION_SECRET       — same HMAC key as packages/server's SESSION_SECRET, so a token issued
+  //                          by either backend verifies against the other.
+  //   R2_ACCESS_KEY_ID       R2 API token (R2 dashboard > Manage API tokens), NOT the general
+  //   R2_SECRET_ACCESS_KEY   Cloudflare account API token — used only for presigned URLs
+  //                          (src/r2.ts), separate from the native MEDIA binding above.
+  //   TURN_KEY_ID           Cloudflare Realtime TURN key — optional, blank = client falls back
+  //   TURN_API_TOKEN          to STUN-only (same as packages/server's TURN_KEY_ID/TURN_API_TOKEN).
+  "vars": {
+    // Mirrors packages/server/.env — same "never true in production" rule.
+    "ALLOW_UNAUTHENTICATED_ROOMS": "false",
+    "CF_ACCOUNT_ID": "9c4844fa6f64bcee94c3d8fbdd81919c",
+    "R2_BUCKET_NAME": "concord-media"
+  }
+}

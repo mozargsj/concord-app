@@ -34,7 +34,15 @@ export class SignalingClient {
   ): void {
     this.setStatus('connecting');
     this.pendingSends = [];
-    const ws = new WebSocket(url);
+    // roomId travels on the connection URL itself, not just inside the join-room message below —
+    // needed so a Cloudflare Durable Object signaling backend (packages/signaling-worker) can
+    // route the WebSocket upgrade to the right per-room object before any message is received.
+    // The Node signaling server (packages/server) ignores query params entirely, so this is a
+    // no-op against that backend.
+    const connectUrl = new URL(url);
+    connectUrl.searchParams.set('roomId', roomId);
+    connectUrl.searchParams.set('serverId', serverId);
+    const ws = new WebSocket(connectUrl.toString());
     this.ws = ws;
 
     ws.onopen = () => {

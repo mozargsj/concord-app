@@ -9,6 +9,7 @@
   "scripts": {
     "dev:client": "npm run dev --workspace=@concord/client",
     "dev:server": "npm run dev --workspace=@concord/server",
+    "dev:signaling-worker": "npm run dev --workspace=@concord/signaling-worker",
     "build": "npm run build --workspaces --if-present",
     "lint": "eslint ."
   },
