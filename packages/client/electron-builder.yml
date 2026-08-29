@@ -1,7 +1,7 @@
-# Test builds (npm run package:test-dev / package:test-offline) override productName/appId to
-# "ConcordTest"/com.concord.app.test via electron-builder's --config.<path>=<value> CLI flag —
-# keeps a test install from colliding with a real one on the same machine (separate install
-# dir, Start Menu shortcut, and uninstall registry entry, since NSIS derives those from appId).
+# Test builds (npm run package:test-dev) override productName/appId to "ConcordTest"/
+# com.concord.app.test via electron-builder's --config.<path>=<value> CLI flag — keeps a test
+# install from colliding with a real one on the same machine (separate install dir, Start Menu
+# shortcut, and uninstall registry entry, since NSIS derives those from appId).
 appId: com.concord.app
 productName: Concord
 electronVersion: 31.7.7

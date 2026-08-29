@@ -14,7 +14,6 @@ import ParticipantVolumeMenu from '../components/ParticipantVolumeMenu';
 import ProfilePage from './ProfilePage';
 import {
   ApiError,
-  TEST_OFFLINE,
   checkServerHealth,
   createInvite,
   createRoom,
@@ -38,7 +37,6 @@ import {
   playDeafenUnmuted,
   playMicMuted,
   playMicUnmuted,
-  playRoomJoin,
   playRoomLeave,
   playTransmissionEnter,
   playTransmissionExit,
@@ -527,13 +525,8 @@ export default function ServerListPage({
     setSelectedRoomId(null);
   }
 
-  // [MODO TESTE OFFLINE — TEMPORÁRIO] `useRoomConnection` agora toca o som de entrar de verdade
-  // via `room-joined` (evento real de sinalização, funciona sozinho numa sala vazia e em produção
-  // — não é mais exclusivo de teste). Só o modo 100% offline não tem nenhum WebSocket real, então
-  // nunca recebe esse evento — mantém o disparo direto no clique só pra esse caso específico.
   function handleSelectRoom(roomId: string) {
     setSelectedRoomId(roomId);
-    if (TEST_OFFLINE) playRoomJoin();
   }
 
   function handleServerCreated(server: ServerSummary) {

@@ -21,7 +21,6 @@ packages/server/updates/
 .env.*
 !.env.example
 !.env.test-dev
-!.env.test-offline
 !.env.test-real
 # packages/signaling-worker: wrangler's local secrets file and its dev-mode local state
 # (simulated Durable Object storage/SQLite, cached auth) — same reasoning as .env above.

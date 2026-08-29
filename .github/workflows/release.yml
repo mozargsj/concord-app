@@ -36,7 +36,6 @@ jobs:
           @"
           VITE_SIGNALING_URL=wss://signaling.undersoft.tec.br
           VITE_TEST_MODE=false
-          VITE_TEST_OFFLINE=false
           GOOGLE_OAUTH_CLIENT_ID=$env:GOOGLE_OAUTH_CLIENT_ID
           GOOGLE_OAUTH_CLIENT_SECRET=$env:GOOGLE_OAUTH_CLIENT_SECRET
           "@ | Set-Content -Path .env -Encoding utf8

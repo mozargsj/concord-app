@@ -4,7 +4,7 @@ import { SignalingClient, type SignalingStatus } from '../lib/signalingClient';
 import { MeshManager, setTurnIceServers, type SoundListEntry } from '../lib/webrtcMesh';
 import { getPreferredDeviceId } from '../lib/devicePreferences';
 import { playDeviceSwitch, playRoomJoin, playRoomLeave } from '../lib/soundEffects';
-import { TEST_OFFLINE, fetchTurnCredentials, getSessionToken, reportClientError } from '../lib/api';
+import { fetchTurnCredentials, getSessionToken, reportClientError } from '../lib/api';
 import { fetchImageBytes, loadCachedImage, saveCachedImage, type ImageCacheKind } from '../lib/imageCache';
 import { listOwnSounds, loadOwnSoundBytes } from '../lib/soundCache';
 import { saveTempSound } from '../lib/soundTempCache';
@@ -313,61 +313,6 @@ export function useRoomConnection(
 
     let cancelled = false;
 
-    // [MODO TESTE OFFLINE — TEMPORÁRIO] Sem WebSocket real nenhum — simula "conectado e sozinho
-    // na sala" na hora, sem depender de nenhum servidor (nem local nem produção). Câmera/mic/
-    // detecção de fala continuam reais (getUserMedia + AnalyserNode são 100% locais); só não tem
-    // ninguém pra mandar/receber mídia de verdade, já que não existe conexão de sinalização pra
-    // descobrir outro peer.
-    if (TEST_OFFLINE) {
-      const mesh = new MeshManager({
-        send: () => {},
-        onRemoteStreamsChange: () => {},
-        onSpeakingChange: () => {},
-        onLocalSpeakingChange: (isSpeaking) => {
-          setState((prev) => ({ ...prev, selfIsSpeaking: isSpeaking }));
-        },
-        onImageRequest,
-        onImageReceived,
-        onSoundListRequest,
-        onSoundListReceived,
-        onSoundRequest,
-        onSoundReceived,
-        onConnectionError: (peerId, kind, detail) =>
-          void reportClientError('WebRTCConnectionError', detail, undefined, { peerId, kind })
-      });
-      meshRef.current = mesh;
-      mesh.setHardwareEncodePreference(getHardwareEncodePreference());
-
-      const selfPeerId = 'offline-self';
-      setState((prev) => ({
-        ...prev,
-        connectionStatus: 'connected',
-        selfPeerId,
-        hostPeerId: selfPeerId,
-        peers: [],
-        latencyMs: 0
-      }));
-
-      const preferredMic = getPreferredDeviceId('audioinput');
-      void acquireMicPipeline(preferredMic).then((pipeline) => {
-        if (!pipeline) return;
-        if (cancelled) {
-          pipeline.cleanup();
-          return;
-        }
-        micCleanupRef.current = pipeline.cleanup;
-        mesh.setLocalMicTrack(pipeline.track);
-      });
-
-      return () => {
-        cancelled = true;
-        mesh.closeAll();
-        micCleanupRef.current?.();
-        micCleanupRef.current = null;
-        meshRef.current = null;
-      };
-    }
-
     // A room always belongs to a server (join-room now needs serverId to let the signaling server
     // check real membership, roomManager.ts) — no server context means there's structurally
     // nothing valid to connect to yet, not a state worth attempting a WS connection over.
@@ -416,8 +361,8 @@ export function useRoomConnection(
       onSoundListReceived,
       onSoundRequest,
       onSoundReceived,
-      // [Bug corrigido] Nunca era passado aqui (só existia no ramo TEST_OFFLINE acima) — toda
-      // falha real de ICE/conexão em produção era descartada em silêncio (onConnectionError é
+      // [Bug corrigido] Nunca era passado aqui — toda falha real de ICE/conexão em produção era
+      // descartada em silêncio (onConnectionError é
       // opcional em MeshManagerOptions, então o `?.()` interno virava no-op sem avisar ninguém).
       // Isso invalidava qualquer conclusão tirada da ausência de `WebRTCConnectionError` nos logs
       // reais — a ausência não provava que o ICE nunca falhou, só que a falha nunca tinha como ser
