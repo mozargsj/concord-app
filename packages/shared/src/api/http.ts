@@ -92,6 +92,13 @@ export interface RoomListResponse {
   rooms: RoomSummary[];
 }
 
+/** [2026-08-29, pedido do Mozar] `roomIds` é a lista inteira, na nova ordem — tem que ser
+ * exatamente o conjunto de salas já existentes do servidor, o Worker rejeita qualquer id que não
+ * bata (mistura de servidor errado, sala esquecida, etc.). Dono-only. */
+export interface ReorderRoomsRequest {
+  roomIds: string[];
+}
+
 export interface RoomResponse {
   room: RoomSummary;
 }

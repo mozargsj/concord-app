@@ -23,6 +23,7 @@ import {
   listMyServers,
   listRooms,
   renameRoom,
+  reorderRooms,
   reportClientError
 } from '../lib/api';
 import { useRoomConnection } from '../hooks/useRoomConnection';
@@ -587,6 +588,11 @@ export default function ServerListPage({
     await refreshRooms();
   }
 
+  async function handleReorderRooms(roomIds: string[]) {
+    if (!selectedServerId) return;
+    setRooms(await reorderRooms(selectedServerId, roomIds));
+  }
+
   async function handleOpenInvite() {
     if (!selectedServerId) return;
     setInviteState({ code: null, isLoading: true, error: null, isForbidden: false });
@@ -704,6 +710,7 @@ export default function ServerListPage({
         onCreateRoom={handleCreateRoom}
         onRenameRoom={handleRenameRoom}
         onDeleteRoom={handleDeleteRoom}
+        onReorderRooms={handleReorderRooms}
         onOpenInvite={handleOpenInvite}
         isMicMuted={isMicMuted}
         isDeafened={isDeafened}

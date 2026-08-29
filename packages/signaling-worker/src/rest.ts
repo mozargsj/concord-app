@@ -13,6 +13,7 @@ import type {
   LoginRequest,
   LoginResponse,
   MemberProfileResponse,
+  ReorderRoomsRequest,
   RoomListResponse,
   RoomResponse,
   RoomSummary,
@@ -199,6 +200,15 @@ export async function handleRest(req: Request, env: Env): Promise<Response> {
     }
     if (method === 'POST' && segments.length === 3 && segments[0] === 'servers' && segments[2] === 'rooms') {
       return await handleCreateRoom(req, env, segments[1]);
+    }
+    if (
+      method === 'PATCH' &&
+      segments.length === 4 &&
+      segments[0] === 'servers' &&
+      segments[2] === 'rooms' &&
+      segments[3] === 'order'
+    ) {
+      return await handleReorderRooms(req, env, segments[1]);
     }
     if (method === 'PATCH' && segments.length === 4 && segments[0] === 'servers' && segments[2] === 'rooms') {
       return await handleUpdateRoom(req, env, segments[1], segments[3]);
@@ -546,6 +556,33 @@ async function handleUpdateRoom(req: Request, env: Env, serverId: string, roomId
   await roomsRepo.updateName(env, serverId, roomId, name);
   const updated = await roomsRepo.findById(env, serverId, roomId);
   const response: RoomResponse = { room: toRoomSummary(updated!) };
+  return json(200, response);
+}
+
+/** [2026-08-29, pedido do Mozar] Dono-only, mesmo rank check de criar/excluir sala. `roomIds`
+ * precisa ser exatamente o conjunto de salas já existentes do servidor (nem a mais, nem a menos)
+ * — impede um dono mandar um id de sala de outro servidor (posição não faria sentido lá) ou uma
+ * lista incompleta que sumiria com posições de salas esquecidas. */
+async function handleReorderRooms(req: Request, env: Env, serverId: string): Promise<Response> {
+  const server = await serversRepo.findById(env, serverId);
+  if (!server) return error(404, 'server-not-found');
+  const rankCheck = await requireRank(req, env, server, Role.Dono);
+  if ('errorResponse' in rankCheck) return rankCheck.errorResponse;
+
+  const body = await readJsonBody<ReorderRoomsRequest>(req);
+  const roomIds = body?.roomIds;
+  if (!Array.isArray(roomIds) || roomIds.length === 0 || !roomIds.every((id) => typeof id === 'string')) {
+    return error(400, 'invalid-request');
+  }
+
+  const existing = await roomsRepo.listByServer(env, serverId);
+  const existingIds = new Set(existing.map((room) => room.room_id));
+  const sameSet = roomIds.length === existingIds.size && roomIds.every((id) => existingIds.has(id));
+  if (!sameSet) return error(400, 'room-set-mismatch');
+
+  await roomsRepo.setOrder(env, serverId, roomIds);
+  const records = await roomsRepo.listByServer(env, serverId);
+  const response: RoomListResponse = { rooms: records.map(toRoomSummary) };
   return json(200, response);
 }
 

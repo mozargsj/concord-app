@@ -10,6 +10,7 @@ import type {
   LoginRequest,
   LoginResponse,
   MemberProfileResponse,
+  ReorderRoomsRequest,
   RoomListResponse,
   RoomResponse,
   RoomSummary,
@@ -249,6 +250,21 @@ export async function createInvite(serverId: string): Promise<string> {
 export async function listRooms(serverId: string): Promise<RoomSummary[]> {
   if (TEST_MODE) return testState.rooms;
   const result = await request<RoomListResponse>(`/servers/${serverId}/rooms`);
+  return result.rooms;
+}
+
+export async function reorderRooms(serverId: string, roomIds: string[]): Promise<RoomSummary[]> {
+  if (TEST_MODE) {
+    testState.rooms = roomIds
+      .map((id) => testState.rooms.find((room) => room.id === id))
+      .filter((room): room is RoomSummary => room !== undefined);
+    return testState.rooms;
+  }
+  const body: ReorderRoomsRequest = { roomIds };
+  const result = await request<RoomListResponse>(`/servers/${serverId}/rooms/order`, {
+    method: 'PATCH',
+    body: JSON.stringify(body)
+  });
   return result.rooms;
 }
 

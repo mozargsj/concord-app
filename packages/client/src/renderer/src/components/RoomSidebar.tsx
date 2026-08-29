@@ -26,7 +26,11 @@ import {
   EarOff,
   VolumeX,
   Pencil,
-  Trash2
+  Trash2,
+  ArrowUpDown,
+  Check,
+  X,
+  GripVertical
 } from 'lucide-react';
 import { getAvatarColor } from '../lib/avatarColor';
 import type { RoomPeer } from '../hooks/useRoomConnection';
@@ -57,6 +61,7 @@ interface RoomSidebarProps {
   onCreateRoom: (name: string) => void;
   onRenameRoom: (roomId: string, name: string) => void;
   onDeleteRoom: (roomId: string) => void;
+  onReorderRooms: (roomIds: string[]) => void;
   onOpenInvite: () => void;
   isMicMuted: boolean;
   isDeafened: boolean;
@@ -110,6 +115,7 @@ export default function RoomSidebar({
   onCreateRoom,
   onRenameRoom,
   onDeleteRoom,
+  onReorderRooms,
   onOpenInvite,
   isMicMuted,
   isDeafened,
@@ -146,6 +152,13 @@ export default function RoomSidebar({
   const [editingRoomId, setEditingRoomId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState('');
   const [roomPendingDelete, setRoomPendingDelete] = useState<RoomSummary | null>(null);
+  // [2026-08-29, pedido do Mozar — reordenar salas] Cópia local editável durante o modo de
+  // arrastar, null quando não está reordenando (nesse caso `rooms`, a prop/verdade do servidor, é
+  // usada direto). Evita mandar um PATCH a cada arrasto — só confirma no fim.
+  const [orderedRooms, setOrderedRooms] = useState<RoomSummary[] | null>(null);
+  const [draggedRoomId, setDraggedRoomId] = useState<string | null>(null);
+  const isReordering = orderedRooms !== null;
+  const displayRooms = orderedRooms ?? rooms;
   const [soundboardPopover, setSoundboardPopover] = useState<SoundboardPopoverState | null>(null);
   const [isSoundboardManagerOpen, setIsSoundboardManagerOpen] = useState(false);
   const [ownSounds, setOwnSounds] = useState<OwnSound[]>([]);
@@ -387,6 +400,32 @@ export default function RoomSidebar({
     setRoomPendingDelete(null);
   }
 
+  function handleStartReorder() {
+    setOrderedRooms(rooms);
+  }
+
+  function handleConfirmReorder() {
+    if (orderedRooms) onReorderRooms(orderedRooms.map((room) => room.id));
+    setOrderedRooms(null);
+    setDraggedRoomId(null);
+  }
+
+  function handleCancelReorder() {
+    setOrderedRooms(null);
+    setDraggedRoomId(null);
+  }
+
+  function handleDropReorder(targetRoomId: string) {
+    if (!orderedRooms || !draggedRoomId || draggedRoomId === targetRoomId) return;
+    const fromIndex = orderedRooms.findIndex((room) => room.id === draggedRoomId);
+    const toIndex = orderedRooms.findIndex((room) => room.id === targetRoomId);
+    if (fromIndex === -1 || toIndex === -1) return;
+    const next = [...orderedRooms];
+    const [moved] = next.splice(fromIndex, 1);
+    next.splice(toIndex, 0, moved);
+    setOrderedRooms(next);
+  }
+
   return (
     <aside className="room-sidebar">
       <header className="room-sidebar__header">
@@ -408,13 +447,37 @@ export default function RoomSidebar({
             <span>Canais de Voz</span>
           </div>
           {canCreateOrDeleteRooms && (
-            <button
-              className="room-sidebar__icon-button"
-              title="Criar sala"
-              onClick={() => setIsCreatingRoom((prev) => !prev)}
-            >
-              <Plus size={24} />
-            </button>
+            <div className="room-sidebar__category-actions">
+              {isReordering ? (
+                <>
+                  <Tooltip label="Confirmar ordem">
+                    <button className="room-sidebar__icon-button" onClick={handleConfirmReorder}>
+                      <Check size={20} />
+                    </button>
+                  </Tooltip>
+                  <Tooltip label="Cancelar">
+                    <button className="room-sidebar__icon-button" onClick={handleCancelReorder}>
+                      <X size={20} />
+                    </button>
+                  </Tooltip>
+                </>
+              ) : (
+                <Tooltip label="Ordenar salas">
+                  <button
+                    className="room-sidebar__icon-button"
+                    onClick={handleStartReorder}
+                    disabled={rooms.length < 2}
+                  >
+                    <ArrowUpDown size={20} />
+                  </button>
+                </Tooltip>
+              )}
+              <Tooltip label="Criar sala">
+                <button className="room-sidebar__icon-button" onClick={() => setIsCreatingRoom((prev) => !prev)}>
+                  <Plus size={24} />
+                </button>
+              </Tooltip>
+            </div>
           )}
         </div>
 
@@ -430,7 +493,7 @@ export default function RoomSidebar({
           />
         )}
 
-        {rooms.map((room) => {
+        {displayRooms.map((room) => {
           const isJoined = room.id === selectedRoomId;
           // Real roster for the joined room, driven by signaling. Rooms the user hasn't
           // joined have no presence protocol yet (server only tracks membership for the
@@ -508,10 +571,22 @@ export default function RoomSidebar({
                   onBlur={() => submitRename(room.id)}
                 />
               ) : (
-                <div className="room-sidebar__room-row">
+                <div
+                  className={'room-sidebar__room-row' + (draggedRoomId === room.id ? ' room-sidebar__room-row--dragging' : '')}
+                  draggable={isReordering}
+                  onDragStart={isReordering ? () => setDraggedRoomId(room.id) : undefined}
+                  onDragOver={isReordering ? (event) => event.preventDefault() : undefined}
+                  onDrop={isReordering ? () => handleDropReorder(room.id) : undefined}
+                  onDragEnd={isReordering ? () => setDraggedRoomId(null) : undefined}
+                >
+                  {isReordering && (
+                    <span className="room-sidebar__drag-handle">
+                      <GripVertical size={15} />
+                    </span>
+                  )}
                   <button
                     className={'room-sidebar__room' + (isJoined ? ' room-sidebar__room--active' : '')}
-                    onClick={() => onSelectRoom(room.id)}
+                    onClick={isReordering ? undefined : () => onSelectRoom(room.id)}
                   >
                     <Volume2 size={16} className="room-sidebar__room-icon" />
                     <span className="room-sidebar__room-name">{room.name}</span>
@@ -519,7 +594,7 @@ export default function RoomSidebar({
                       {room.memberCount}/{room.maxMembers}
                     </span>
                   </button>
-                  {(canRenameRooms || canCreateOrDeleteRooms) && (
+                  {!isReordering && (canRenameRooms || canCreateOrDeleteRooms) && (
                     <div className="room-sidebar__room-actions">
                       {canRenameRooms && (
                         <Tooltip label="Renomear sala">

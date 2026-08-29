@@ -40,6 +40,12 @@ CREATE TABLE rooms (
   room_id TEXT NOT NULL,
   name TEXT NOT NULL,
   created_at INTEGER NOT NULL,
+  -- [2026-08-29, ALTER TABLE aplicado à mão via D1 MCP — não recriada aqui do zero] Ordem de
+  -- exibição na sidebar, editável só pelo dono (PATCH /servers/:id/rooms/order). Novas salas
+  -- entram no fim (roomsRepo.create computa a próxima posição livre); linhas existentes antes
+  -- dessa coluna existir foram preenchidas por ordem de created_at (mesmo comportamento visual
+  -- de antes, backfill de uma vez só, não uma migração repetível).
+  position INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (server_id, room_id)
 );
 

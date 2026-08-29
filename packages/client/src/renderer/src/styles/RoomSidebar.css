@@ -168,6 +168,12 @@
   opacity: 0.8;
 }
 
+.room-sidebar__category-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
 .room-sidebar__icon-button {
   width: 32px;
   height: 32px;
@@ -181,14 +187,32 @@
   flex-shrink: 0;
 }
 
-.room-sidebar__icon-button:hover {
+.room-sidebar__icon-button:hover:not(:disabled) {
   color: var(--color-text-primary);
+}
+
+.room-sidebar__icon-button:disabled {
+  opacity: 0.4;
 }
 
 .room-sidebar__room-row {
   position: relative;
   display: flex;
   align-items: center;
+}
+
+.room-sidebar__room-row--dragging {
+  opacity: 0.4;
+}
+
+.room-sidebar__drag-handle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 18px;
+  color: var(--color-text-secondary);
+  cursor: grab;
 }
 
 .room-sidebar__room-row:hover .room-sidebar__room-actions {
