@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import { Pause, Pencil, Play, Plus, Trash2 } from 'lucide-react';
+import { Pause, Pencil, Play, Plus, Trash2, X } from 'lucide-react';
 import Button from './Button';
 import ConfirmModal from './ConfirmModal';
 import AddSoundModal from './AddSoundModal';
+import Tooltip from './Tooltip';
 import { deleteOwnSound, listOwnSounds, type OwnSound } from '../lib/soundCache';
 import '../styles/SoundboardManagerModal.css';
 
@@ -82,9 +83,11 @@ export default function SoundboardManagerModal({ onClose, onSoundsChanged }: Sou
       <div className="soundboard-manager" onClick={(event) => event.stopPropagation()}>
         <header className="soundboard-manager__header">
           <h2>Meus áudios</h2>
-          <button className="soundboard-manager__close" onClick={onClose} title="Fechar">
-            ×
-          </button>
+          <Tooltip label="Fechar">
+            <button className="soundboard-manager__close" onClick={onClose}>
+              <X size={18} />
+            </button>
+          </Tooltip>
         </header>
 
         <Button onClick={() => setAddModalState('add')} className="soundboard-manager__add-button">

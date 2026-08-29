@@ -32,13 +32,14 @@
 }
 
 .add-sound-modal__close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   width: 28px;
   height: 28px;
   border: none;
   background: transparent;
   color: var(--color-text-secondary);
-  font-size: 20px;
-  line-height: 1;
   border-radius: var(--radius-sm);
 }
 
@@ -118,12 +119,15 @@
 }
 
 .add-sound-modal__link {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
   border: none;
   background: transparent;
   color: var(--color-accent);
-  font-size: 13px;
-  font-weight: 600;
-  padding: 4px;
+  border-radius: var(--radius-sm);
 }
 
 .add-sound-modal__link:hover {

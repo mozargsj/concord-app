@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
-import { Image as ImageIcon } from 'lucide-react';
+import { Image as ImageIcon, RotateCcw, X } from 'lucide-react';
 import Button from './Button';
+import Tooltip from './Tooltip';
 import '../styles/ImageCropModal.css';
 
 const STAGE_WIDTH = 400;
@@ -240,9 +241,11 @@ export default function ImageCropModal({ data, mimeType, onCancel, onApply }: Im
       <div className="image-crop-modal" onClick={(event) => event.stopPropagation()}>
         <header className="image-crop-modal__header">
           <h2>Editar imagem</h2>
-          <button className="image-crop-modal__close" onClick={onCancel} title="Fechar">
-            ×
-          </button>
+          <Tooltip label="Fechar">
+            <button className="image-crop-modal__close" onClick={onCancel}>
+              <X size={18} />
+            </button>
+          </Tooltip>
         </header>
 
         <div className="image-crop-modal__stage" onMouseDown={handleDragStart}>
@@ -275,9 +278,11 @@ export default function ImageCropModal({ data, mimeType, onCancel, onApply }: Im
         </div>
 
         <div className="image-crop-modal__footer">
-          <button className="image-crop-modal__reset" onClick={handleReset}>
-            Redefinir
-          </button>
+          <Tooltip label="Redefinir">
+            <button className="image-crop-modal__reset" onClick={handleReset}>
+              <RotateCcw size={16} />
+            </button>
+          </Tooltip>
           <div className="image-crop-modal__footer-actions">
             <Button variant="ghost" onClick={onCancel}>
               Cancelar

@@ -1,0 +1,89 @@
+.tooltip-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.tooltip-balloon {
+  position: absolute;
+  z-index: 200;
+  max-width: 220px;
+  width: max-content;
+  padding: 6px 10px;
+  background: var(--color-bg-elevated);
+  color: var(--color-text-primary);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.3;
+  border-radius: var(--radius-md);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+  animation: tooltip-pop 0.12s ease-out;
+}
+
+/* Chat-bubble tail — same trick as a WhatsApp message bubble: a small square, rotated 45deg,
+   half-hidden behind the balloon's own background so only one triangular corner shows. */
+.tooltip-balloon::after {
+  content: '';
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  background: var(--color-bg-elevated);
+  transform: rotate(45deg);
+}
+
+.tooltip-balloon--top {
+  bottom: calc(100% + 9px);
+  left: 50%;
+  transform: translateX(-50%);
+}
+.tooltip-balloon--top::after {
+  top: 100%;
+  left: 50%;
+  margin-left: -4px;
+  margin-top: -4px;
+}
+
+.tooltip-balloon--bottom {
+  top: calc(100% + 9px);
+  left: 50%;
+  transform: translateX(-50%);
+}
+.tooltip-balloon--bottom::after {
+  bottom: 100%;
+  left: 50%;
+  margin-left: -4px;
+  margin-bottom: -4px;
+}
+
+.tooltip-balloon--left {
+  right: calc(100% + 9px);
+  top: 50%;
+  transform: translateY(-50%);
+}
+.tooltip-balloon--left::after {
+  left: 100%;
+  top: 50%;
+  margin-top: -4px;
+  margin-left: -4px;
+}
+
+.tooltip-balloon--right {
+  left: calc(100% + 9px);
+  top: 50%;
+  transform: translateY(-50%);
+}
+.tooltip-balloon--right::after {
+  right: 100%;
+  top: 50%;
+  margin-top: -4px;
+  margin-right: -4px;
+}
+
+@keyframes tooltip-pop {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}

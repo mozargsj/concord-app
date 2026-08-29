@@ -1,10 +1,11 @@
 import { useState } from 'react';
-import { Loader2 } from 'lucide-react';
+import { Loader2, X } from 'lucide-react';
 import type { UserProfile } from '@concord/shared';
 import Button from '../components/Button';
 import ConfirmModal from '../components/ConfirmModal';
 import ImageCropModal from '../components/ImageCropModal';
 import ReportModal from '../components/ReportModal';
+import Tooltip from '../components/Tooltip';
 import { updateProfile } from '../lib/api';
 import { pickImageFile, type PickedImageFile } from '../lib/imagePicker';
 import { saveCachedImage } from '../lib/imageCache';
@@ -77,9 +78,11 @@ export default function ProfilePage({ user, serverId, onClose, onUserChange, onL
       <div className="profile-page" onClick={(event) => event.stopPropagation()}>
         <header className="profile-page__header">
           <h2>Seu perfil</h2>
-          <button className="profile-page__close" onClick={onClose} title="Fechar">
-            ×
-          </button>
+          <Tooltip label="Fechar">
+            <button className="profile-page__close" onClick={onClose}>
+              <X size={18} />
+            </button>
+          </Tooltip>
         </header>
 
         <button

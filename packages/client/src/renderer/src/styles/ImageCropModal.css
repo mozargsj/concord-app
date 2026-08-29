@@ -30,11 +30,12 @@
 }
 
 .image-crop-modal__close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   border: none;
   background: transparent;
   color: var(--color-text-secondary);
-  font-size: 20px;
-  line-height: 1;
   width: 28px;
   height: 28px;
   border-radius: var(--radius-sm);
@@ -101,12 +102,15 @@
 }
 
 .image-crop-modal__reset {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
   border: none;
   background: transparent;
   color: var(--color-accent);
-  font-size: 13px;
-  font-weight: 600;
-  padding: 4px;
+  border-radius: var(--radius-sm);
 }
 
 .image-crop-modal__reset:hover {

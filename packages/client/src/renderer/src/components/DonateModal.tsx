@@ -1,3 +1,5 @@
+import { X } from 'lucide-react';
+import Tooltip from './Tooltip';
 import donateQrCode from '../assets/images/donate-qrcode.png';
 import '../styles/DonateModal.css';
 
@@ -11,9 +13,11 @@ export default function DonateModal({ onClose }: DonateModalProps) {
       <div className="donate-modal" onClick={(event) => event.stopPropagation()}>
         <header className="donate-modal__header">
           <h2>Ajude esta iniciativa</h2>
-          <button className="donate-modal__close" onClick={onClose} title="Fechar">
-            ×
-          </button>
+          <Tooltip label="Fechar">
+            <button className="donate-modal__close" onClick={onClose}>
+              <X size={18} />
+            </button>
+          </Tooltip>
         </header>
 
         <img src={donateQrCode} alt="QR Code Pix para doação" className="donate-modal__qrcode" />

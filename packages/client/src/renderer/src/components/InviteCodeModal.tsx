@@ -1,6 +1,8 @@
 import { useState } from 'react';
+import { X } from 'lucide-react';
 import Button from './Button';
 import IllustratedNotice from './IllustratedNotice';
+import Tooltip from './Tooltip';
 import accessDeniedArt from '../assets/images/access-denied.png';
 import { ACCESS_DENIED_MESSAGES } from '../lib/errorMessages';
 import { formatInviteLink } from '../lib/inviteLink';
@@ -33,9 +35,11 @@ export default function InviteCodeModal({ code, isLoading, error, isForbidden, o
       <div className="invite-code-modal" onClick={(event) => event.stopPropagation()}>
         <header className="invite-code-modal__header">
           <h2>Convidar pessoas</h2>
-          <button className="invite-code-modal__close" onClick={onClose} title="Fechar">
-            ×
-          </button>
+          <Tooltip label="Fechar">
+            <button className="invite-code-modal__close" onClick={onClose}>
+              <X size={18} />
+            </button>
+          </Tooltip>
         </header>
 
         {isLoading && <p className="invite-code-modal__hint">Gerando convite…</p>}

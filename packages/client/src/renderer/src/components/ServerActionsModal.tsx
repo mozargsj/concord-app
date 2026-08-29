@@ -1,8 +1,10 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import type { ServerSummary } from '@concord/shared';
+import { X } from 'lucide-react';
 import Button from './Button';
 import ImageCropModal from './ImageCropModal';
 import IllustratedNotice from './IllustratedNotice';
+import Tooltip from './Tooltip';
 import uploadFailedArt from '../assets/images/upload-failed.png';
 import { UPLOAD_FAILED_MESSAGES } from '../lib/errorMessages';
 import { ApiError, createServer, joinServerWithCode } from '../lib/api';
@@ -117,9 +119,11 @@ export default function ServerActionsModal({ mode, onClose, onServerCreated, onS
       <div className="server-actions-modal" onClick={(event) => event.stopPropagation()}>
         <header className="server-actions-modal__header">
           <h2>{mode === 'create' ? 'Criar meu servidor' : 'Entrar com convite'}</h2>
-          <button className="server-actions-modal__close" onClick={onClose} title="Fechar">
-            ×
-          </button>
+          <Tooltip label="Fechar">
+            <button className="server-actions-modal__close" onClick={onClose}>
+              <X size={18} />
+            </button>
+          </Tooltip>
         </header>
 
         {mode === 'create' ? (

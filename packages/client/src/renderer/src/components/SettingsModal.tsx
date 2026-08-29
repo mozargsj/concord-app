@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
+import { X } from 'lucide-react';
 import Toggle from './Toggle';
+import Tooltip from './Tooltip';
 import {
   MIC_SENSITIVITY_DEFAULT,
   MIC_SENSITIVITY_MAX,
@@ -123,9 +125,11 @@ export default function SettingsModal({ onClose, onNoiseSuppressionChange }: Set
       <div className="settings-modal" onClick={(event) => event.stopPropagation()}>
         <header className="settings-modal__header">
           <h2>Configurações de voz</h2>
-          <button className="settings-modal__close" onClick={onClose} title="Fechar">
-            ×
-          </button>
+          <Tooltip label="Fechar">
+            <button className="settings-modal__close" onClick={onClose}>
+              <X size={18} />
+            </button>
+          </Tooltip>
         </header>
 
         <div className="settings-modal__section">

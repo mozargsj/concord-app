@@ -131,7 +131,6 @@
   height: 28px;
   border: none;
   background: transparent;
-  border-radius: var(--radius-sm);
   color: var(--color-text-secondary);
   display: flex;
   align-items: center;
@@ -140,10 +139,12 @@
 
 .user-panel__icon-button {
   width: 28px;
+  border-radius: 50%;
 }
 
 .user-panel__device-button {
   width: 28px;
+  border-radius: 50%;
 }
 
 .user-panel__device-chevron-button {

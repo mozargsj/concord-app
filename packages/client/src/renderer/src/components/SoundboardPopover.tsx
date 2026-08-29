@@ -1,4 +1,5 @@
-import { Download, Loader2, Pause, Play, Plus } from 'lucide-react';
+import { Download, Loader2, Pause, Play, Plus, Settings } from 'lucide-react';
+import Tooltip from './Tooltip';
 import { getAvatarColor } from '../lib/avatarColor';
 import type { OwnSound } from '../lib/soundCache';
 import type { SoundListEntry } from '../lib/webrtcMesh';
@@ -95,15 +96,17 @@ export default function SoundboardPopover(props: SoundboardPopoverProps) {
               onChange={(event) => props.onGeneralVolumeChange(Number(event.target.value))}
               className="soundboard-popover__slider"
             />
-            <button
-              className="soundboard-popover__manage-button"
-              onClick={() => {
-                onClose();
-                props.onOpenManager();
-              }}
-            >
-              Config. dos meus áudios
-            </button>
+            <Tooltip label="Config. dos meus áudios">
+              <button
+                className="soundboard-popover__manage-button"
+                onClick={() => {
+                  onClose();
+                  props.onOpenManager();
+                }}
+              >
+                <Settings size={16} />
+              </button>
+            </Tooltip>
           </>
         )}
       </div>

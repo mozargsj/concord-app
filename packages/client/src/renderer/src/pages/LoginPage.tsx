@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import type { UserProfile } from '@concord/shared';
+import { UserX } from 'lucide-react';
 import Button from '../components/Button';
 import LoginFailedModal from '../components/LoginFailedModal';
+import Tooltip from '../components/Tooltip';
 import logo from '../assets/images/logo.png';
 import { TEST_MODE, login } from '../lib/api';
 import { clearStoredTestIdentity, getStoredTestIdentity, setStoredTestIdentity } from '../lib/testIdentity';
@@ -111,9 +113,11 @@ export default function LoginPage({ onContinue }: LoginPageProps) {
               {isSubmitting ? 'Entrando…' : 'Entrar (teste)'}
             </Button>
             {(testEmail || testNickname) && (
-              <button type="button" className="login-page__forget-test" onClick={handleForgetTestIdentity}>
-                Trocar conta de teste
-              </button>
+              <Tooltip label="Trocar conta de teste">
+                <button type="button" className="login-page__forget-test" onClick={handleForgetTestIdentity}>
+                  <UserX size={16} />
+                </button>
+              </Tooltip>
             )}
           </form>
         ) : (

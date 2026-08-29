@@ -8,6 +8,7 @@ import ConfirmModal from './ConfirmModal';
 import SoundboardPopover from './SoundboardPopover';
 import SoundboardManagerModal from './SoundboardManagerModal';
 import ConfirmAddSoundModal from './ConfirmAddSoundModal';
+import Tooltip from './Tooltip';
 import {
   AudioLines,
   AudioLinesOff,
@@ -22,7 +23,10 @@ import {
   Megaphone,
   MicOff,
   HeadphoneOff,
-  EarOff
+  EarOff,
+  VolumeX,
+  Pencil,
+  Trash2
 } from 'lucide-react';
 import { getAvatarColor } from '../lib/avatarColor';
 import type { RoomPeer } from '../hooks/useRoomConnection';
@@ -90,6 +94,7 @@ interface RoomSidebarProps {
   /** Shared with RoomView via usePeerVolumeControl (lifted to ServerListPage) so muting/adjusting
    * someone from either place stays in sync live, not just after a remount. */
   onOpenVolumeMenu: (x: number, y: number, peerId: string, userId: string, name: string) => void;
+  isPeerMutedByMe: (userId: string) => boolean;
   /** userId of whoever's volume popup is currently open — drives the "clicked" highlight so the
    * right-click action has visible feedback beyond the popup itself. */
   activeVolumeMenuUserId: string | null;
@@ -131,7 +136,8 @@ export default function RoomSidebar({
   onRequestPeerSound,
   soundDownloadTick,
   onOpenVolumeMenu,
-  activeVolumeMenuUserId
+  activeVolumeMenuUserId,
+  isPeerMutedByMe
 }: RoomSidebarProps) {
   const [isCreatingRoom, setIsCreatingRoom] = useState(false);
   const [newRoomName, setNewRoomName] = useState('');
@@ -439,6 +445,8 @@ export default function RoomSidebar({
             isDeafened: boolean;
             // False for self — this badge means "this peer muted YOU", never applicable to your own row.
             mutedMe: boolean;
+            // False for self — "you muted this peer" (peerVolumePreferences.ts, local-only).
+            mutedByMe: boolean;
             // null for self — there's no incoming stream to adjust volume on for your own row.
             userId: string | null;
             // null for self — no P2P connection to yourself, so no dot to show (see the render
@@ -457,6 +465,7 @@ export default function RoomSidebar({
                   isMicMuted,
                   isDeafened,
                   mutedMe: false,
+                  mutedByMe: false,
                   userId: null,
                   connectionStatus: null
                 },
@@ -476,6 +485,7 @@ export default function RoomSidebar({
                   isMicMuted: peer.isMicMuted,
                   isDeafened: peer.isDeafened,
                   mutedMe: peer.mutedMe,
+                  mutedByMe: isPeerMutedByMe(peer.userId),
                   userId: peer.userId,
                   connectionStatus: peer.connectionStatus
                 }))
@@ -510,22 +520,18 @@ export default function RoomSidebar({
                   {(canRenameRooms || canCreateOrDeleteRooms) && (
                     <div className="room-sidebar__room-actions">
                       {canRenameRooms && (
-                        <button
-                          className="room-sidebar__room-action"
-                          title="Renomear sala"
-                          onClick={() => startRenaming(room)}
-                        >
-                          Renomear
-                        </button>
+                        <Tooltip label="Renomear sala">
+                          <button className="room-sidebar__room-action" onClick={() => startRenaming(room)}>
+                            <Pencil size={15} />
+                          </button>
+                        </Tooltip>
                       )}
                       {canCreateOrDeleteRooms && (
-                        <button
-                          className="room-sidebar__room-action"
-                          title="Excluir sala"
-                          onClick={() => setRoomPendingDelete(room)}
-                        >
-                          Excluir
-                        </button>
+                        <Tooltip label="Excluir sala">
+                          <button className="room-sidebar__room-action" onClick={() => setRoomPendingDelete(room)}>
+                            <Trash2 size={15} />
+                          </button>
+                        </Tooltip>
                       )}
                     </div>
                   )}
@@ -600,13 +606,18 @@ export default function RoomSidebar({
                           className="room-sidebar__mic-status"
                           title={participant.isDeafened ? 'Não está ouvindo nem falando' : 'Microfone desativado'}
                         >
-                          <MicOff size={12} />
-                          {participant.isDeafened && <HeadphoneOff size={12} />}
+                          <MicOff size={18} />
+                          {participant.isDeafened && <HeadphoneOff size={18} />}
                         </span>
                       )}
                       {participant.mutedMe && (
                         <span className="room-sidebar__muted-me-status" title={`${participant.name} te mutou`}>
-                          <EarOff size={12} />
+                          <EarOff size={18} />
+                        </span>
+                      )}
+                      {participant.mutedByMe && (
+                        <span className="room-sidebar__muted-by-me-status" title={`Você mutou ${participant.name}`}>
+                          <VolumeX size={18} />
                         </span>
                       )}
                       {participant.isBroadcasting && <LiveBadge className="room-sidebar__live-badge" />}

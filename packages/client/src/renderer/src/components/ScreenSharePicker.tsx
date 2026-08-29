@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { X } from 'lucide-react';
 import type { ScreenSource } from '../types/window';
 import {
   getIncludeAudioPreference,
@@ -9,6 +10,7 @@ import {
 } from '../lib/screenSharePreferences';
 import NativeLoopbackHelpModal from './NativeLoopbackHelpModal';
 import Toggle from './Toggle';
+import Tooltip from './Tooltip';
 import '../styles/ScreenSharePicker.css';
 
 interface ScreenSharePickerProps {
@@ -87,9 +89,11 @@ export default function ScreenSharePicker({ onSelect, onClose }: ScreenSharePick
       <div className="screen-picker" onClick={(event) => event.stopPropagation()}>
         <header className="screen-picker__header">
           <h2>Escolha o que transmitir</h2>
-          <button className="screen-picker__close" onClick={onClose} title="Fechar">
-            ×
-          </button>
+          <Tooltip label="Fechar">
+            <button className="screen-picker__close" onClick={onClose}>
+              <X size={18} />
+            </button>
+          </Tooltip>
         </header>
 
         {sources === null && <p className="screen-picker__hint">Carregando telas e janelas…</p>}

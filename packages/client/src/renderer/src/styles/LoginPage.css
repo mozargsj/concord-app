@@ -55,11 +55,15 @@
 }
 
 .login-page__forget-test {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
   border: none;
   background: transparent;
   color: var(--color-text-secondary);
-  font-size: 12px;
-  text-decoration: underline;
+  border-radius: var(--radius-sm);
   align-self: center;
 }
 

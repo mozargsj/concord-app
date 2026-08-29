@@ -188,13 +188,16 @@
 }
 
 .soundboard-popover__manage-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  align-self: flex-start;
+  width: 32px;
+  height: 32px;
   border: none;
   background: var(--color-bg-rail);
   color: var(--color-text-primary);
-  padding: 8px;
   border-radius: var(--radius-sm);
-  font-size: 13px;
-  text-align: left;
 }
 
 .soundboard-popover__manage-button:hover {

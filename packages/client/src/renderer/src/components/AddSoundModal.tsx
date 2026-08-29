@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import { Pause, Play } from 'lucide-react';
+import { Pause, Play, RefreshCw, X } from 'lucide-react';
 import Button from './Button';
 import EmojiPicker from './EmojiPicker';
+import Tooltip from './Tooltip';
 import WaveformTrimmer from './WaveformTrimmer';
 import { decodeAudioFile, encodeWav, getSharedAudioContext, renderTrimmedClip, WAV_MIME_TYPE } from '../lib/audioClip';
 import { generateSoundId, saveOwnSound, updateOwnSoundMeta, type OwnSound } from '../lib/soundCache';
@@ -178,9 +179,11 @@ export default function AddSoundModal({ editingSound, onClose, onSaved }: AddSou
       <div className="add-sound-modal" onClick={(event) => event.stopPropagation()}>
         <header className="add-sound-modal__header">
           <h2>{editingSound ? 'Editar som' : 'Enviar um som'}</h2>
-          <button className="add-sound-modal__close" onClick={onClose} title="Fechar">
-            ×
-          </button>
+          <Tooltip label="Fechar">
+            <button className="add-sound-modal__close" onClick={onClose}>
+              <X size={18} />
+            </button>
+          </Tooltip>
         </header>
 
         <div className="add-sound-modal__section">
@@ -208,9 +211,11 @@ export default function AddSoundModal({ editingSound, onClose, onSaved }: AddSou
                   >
                     {isPreviewPlaying ? <Pause size={14} /> : <Play size={14} />}
                   </button>
-                  <button className="add-sound-modal__link" onClick={handlePickFile}>
-                    Trocar arquivo
-                  </button>
+                  <Tooltip label="Trocar arquivo">
+                    <button className="add-sound-modal__link" onClick={handlePickFile}>
+                      <RefreshCw size={14} />
+                    </button>
+                  </Tooltip>
                 </div>
               </>
             ) : (
@@ -222,9 +227,11 @@ export default function AddSoundModal({ editingSound, onClose, onSaved }: AddSou
             editingSound && (
               <div className="add-sound-modal__existing-preview">
                 <audio src={editingSound.url} controls className="add-sound-modal__audio" />
-                <button className="add-sound-modal__link" onClick={() => setIsReplacingAudio(true)}>
-                  Trocar áudio
-                </button>
+                <Tooltip label="Trocar áudio">
+                  <button className="add-sound-modal__link" onClick={() => setIsReplacingAudio(true)}>
+                    <RefreshCw size={14} />
+                  </button>
+                </Tooltip>
               </div>
             )
           )}

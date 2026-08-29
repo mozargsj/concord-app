@@ -1,7 +1,9 @@
 import { useState } from 'react';
 import type { ReportType } from '@concord/shared';
+import { X } from 'lucide-react';
 import Button from './Button';
 import IllustratedNotice from './IllustratedNotice';
+import Tooltip from './Tooltip';
 import supportArt from '../assets/images/support.png';
 import uploadFailedArt from '../assets/images/upload-failed.png';
 import { createReport } from '../lib/api';
@@ -44,9 +46,11 @@ export default function ReportModal({ serverId, onClose }: ReportModalProps) {
       <div className="report-modal" onClick={(event) => event.stopPropagation()}>
         <header className="report-modal__header">
           <h2>Reportar um problema</h2>
-          <button className="report-modal__close" onClick={onClose} title="Fechar">
-            ×
-          </button>
+          <Tooltip label="Fechar">
+            <button className="report-modal__close" onClick={onClose}>
+              <X size={18} />
+            </button>
+          </Tooltip>
         </header>
 
         {isSent ? (

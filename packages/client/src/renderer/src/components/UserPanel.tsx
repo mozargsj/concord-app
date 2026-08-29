@@ -60,14 +60,14 @@ export default function UserPanel({
             title={isMicMuted ? 'Ativar microfone' : 'Mutar microfone'}
             onClick={onToggleMic}
           >
-            {isMicMuted ? <MicOff size={18} /> : <Mic size={18} />}
+            {isMicMuted ? <MicOff size={27} /> : <Mic size={27} />}
           </button>
           <button
             className="user-panel__device-chevron-button"
             title="Escolher microfone"
             onClick={() => setOpenMenu((prev) => (prev === 'mic' ? null : 'mic'))}
           >
-            <ChevronDown size={20} className="user-panel__device-chevron" />
+            <ChevronDown size={30} className="user-panel__device-chevron" />
           </button>
           {openMenu === 'mic' && (
             <DeviceMenu kind="audioinput" onSelect={onSelectMic} onClose={() => setOpenMenu(null)} />
@@ -83,14 +83,14 @@ export default function UserPanel({
             title={isDeafened ? 'Reativar áudio' : 'Silenciar tudo'}
             onClick={onToggleDeafen}
           >
-            {isDeafened ? <HeadphoneOff size={18} /> : <Headphones size={18} />}
+            {isDeafened ? <HeadphoneOff size={27} /> : <Headphones size={27} />}
           </button>
           <button
             className="user-panel__device-chevron-button"
             title="Escolher saída de áudio"
             onClick={() => setOpenMenu((prev) => (prev === 'speaker' ? null : 'speaker'))}
           >
-            <ChevronDown size={20} className="user-panel__device-chevron" />
+            <ChevronDown size={30} className="user-panel__device-chevron" />
           </button>
           {openMenu === 'speaker' && (
             // Left-aligned like the mic menu (not right) — this sits in the narrow sidebar,
@@ -106,7 +106,7 @@ export default function UserPanel({
           title="Configurações"
           onClick={() => setIsSettingsOpen(true)}
         >
-          <Settings size={18} />
+          <Settings size={27} />
         </button>
       </div>
 

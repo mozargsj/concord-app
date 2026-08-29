@@ -210,13 +210,16 @@
 }
 
 .room-sidebar__room-action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
   border: none;
   background: transparent;
   color: var(--color-text-secondary);
-  font-size: 11px;
-  padding: 3px 6px;
+  padding: 0;
   border-radius: var(--radius-sm);
-  white-space: nowrap;
 }
 
 .room-sidebar__room-action:hover {
@@ -422,6 +425,13 @@
   color: var(--color-danger);
 }
 
+.room-sidebar__muted-by-me-status {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  color: var(--color-danger);
+}
+
 .room-sidebar__live-badge {
   padding: 1px 5px;
   font-size: 9px;
@@ -434,8 +444,8 @@
 }
 
 .room-sidebar__host-star {
-  width: 16px;
-  height: 16px;
+  width: 24px;
+  height: 24px;
   flex-shrink: 0;
   color: var(--color-warning);
 }

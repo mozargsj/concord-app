@@ -1,6 +1,8 @@
 import { useState } from 'react';
+import { X } from 'lucide-react';
 import Button from './Button';
 import EmojiPicker from './EmojiPicker';
+import Tooltip from './Tooltip';
 import { promoteTempSound, type TempSound } from '../lib/soundTempCache';
 import '../styles/ConfirmAddSoundModal.css';
 
@@ -46,9 +48,11 @@ export default function ConfirmAddSoundModal({ temp, onClose, onAdded }: Confirm
       <div className="confirm-add-sound-modal" onClick={(event) => event.stopPropagation()}>
         <header className="confirm-add-sound-modal__header">
           <h2>Adicionar aos meus áudios</h2>
-          <button className="confirm-add-sound-modal__close" onClick={onClose} title="Fechar">
-            ×
-          </button>
+          <Tooltip label="Fechar">
+            <button className="confirm-add-sound-modal__close" onClick={onClose}>
+              <X size={18} />
+            </button>
+          </Tooltip>
         </header>
 
         <p className="confirm-add-sound-modal__source">
