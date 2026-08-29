@@ -1,7 +1,6 @@
 import { useState } from 'react';
-import { Loader2, X } from 'lucide-react';
+import { Check, Flag, Loader2, LogOut, Pencil, X } from 'lucide-react';
 import type { UserProfile } from '@concord/shared';
-import Button from '../components/Button';
 import ConfirmModal from '../components/ConfirmModal';
 import ImageCropModal from '../components/ImageCropModal';
 import ReportModal from '../components/ReportModal';
@@ -22,6 +21,7 @@ interface ProfilePageProps {
 }
 
 export default function ProfilePage({ user, serverId, onClose, onUserChange, onLogout }: ProfilePageProps) {
+  const [isEditingName, setIsEditingName] = useState(false);
   const [displayName, setDisplayName] = useState(user.displayName);
   const [isSavingName, setIsSavingName] = useState(false);
   const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
@@ -30,14 +30,34 @@ export default function ProfilePage({ user, serverId, onClose, onUserChange, onL
   const [isLogoutConfirmOpen, setIsLogoutConfirmOpen] = useState(false);
   const [isReportOpen, setIsReportOpen] = useState(false);
 
+  function handleStartEditName() {
+    setDisplayName(user.displayName);
+    setError(null);
+    setIsEditingName(true);
+  }
+
+  function handleCancelEditName() {
+    setDisplayName(user.displayName);
+    setIsEditingName(false);
+  }
+
   async function handleSaveName() {
     const trimmed = displayName.trim();
-    if (!trimmed || trimmed === user.displayName) return;
+    if (!trimmed || trimmed === user.displayName) {
+      setIsEditingName(false);
+      return;
+    }
     setIsSavingName(true);
     setError(null);
     try {
       const updated = await updateProfile({ displayName: trimmed });
-      onUserChange(updated);
+      // [Bug corrigido, 2026-08-29 — achado do Mozar] avatarUrl nunca vem de verdade do backend
+      // (avatar é 100% P2P/cache local) — toUserProfile sempre devolve null pra esse campo agora.
+      // Substituir `user` inteiro por `updated` aqui jogava fora o avatarUrl já hidratado
+      // localmente toda vez que o nickname mudava — a foto sumia da sessão até reiniciar o app.
+      // Só o displayName vem do servidor; o resto (avatarUrl incluso) continua o que já se sabia.
+      onUserChange({ ...user, displayName: updated.displayName });
+      setIsEditingName(false);
     } catch {
       setError('Não foi possível salvar o nome.');
     } finally {
@@ -94,7 +114,7 @@ export default function ProfilePage({ user, serverId, onClose, onUserChange, onL
           {user.avatarUrl ? (
             <img src={user.avatarUrl} alt="" className="profile-page__avatar-image" />
           ) : (
-            <span>{displayName.charAt(0).toUpperCase()}</span>
+            <span>{user.displayName.charAt(0).toUpperCase()}</span>
           )}
           <span
             className={'profile-page__avatar-overlay' + (isUploadingAvatar ? ' profile-page__avatar-overlay--visible' : '')}
@@ -109,39 +129,60 @@ export default function ProfilePage({ user, serverId, onClose, onUserChange, onL
         </div>
 
         <div className="profile-page__field">
-          <label className="profile-page__label" htmlFor="profile-display-name">
-            Nome de usuário
-          </label>
-          <div className="profile-page__name-row">
-            <input
-              id="profile-display-name"
-              className="profile-page__input"
-              value={displayName}
-              onChange={(event) => setDisplayName(event.target.value)}
-            />
-            <Button
-              variant="ghost"
-              onClick={handleSaveName}
-              disabled={isSavingName || !displayName.trim() || displayName.trim() === user.displayName}
-            >
-              {isSavingName ? 'Salvando…' : 'Salvar'}
-            </Button>
-          </div>
+          <span className="profile-page__label">Nome de usuário</span>
+          {isEditingName ? (
+            <div className="profile-page__name-row">
+              <input
+                id="profile-display-name"
+                className="profile-page__input"
+                value={displayName}
+                onChange={(event) => setDisplayName(event.target.value)}
+                disabled={isSavingName}
+                autoFocus
+              />
+              <Tooltip label="Salvar">
+                <button
+                  className="profile-page__name-action"
+                  onClick={handleSaveName}
+                  disabled={isSavingName || !displayName.trim()}
+                >
+                  {isSavingName ? <Loader2 size={14} className="profile-page__name-action-spin" /> : <Check size={14} />}
+                </button>
+              </Tooltip>
+              <Tooltip label="Cancelar">
+                <button className="profile-page__name-action" onClick={handleCancelEditName} disabled={isSavingName}>
+                  <X size={14} />
+                </button>
+              </Tooltip>
+            </div>
+          ) : (
+            <div className="profile-page__name-row">
+              <p className="profile-page__value profile-page__value--grow">{user.displayName}</p>
+              <Tooltip label="Editar nome">
+                <button className="profile-page__name-action" onClick={handleStartEditName}>
+                  <Pencil size={14} />
+                </button>
+              </Tooltip>
+            </div>
+          )}
         </div>
 
         {error && <p className="profile-page__error">{error}</p>}
 
         <div className="profile-page__logout-section">
-          <Button variant="ghost" onClick={() => setIsReportOpen(true)}>
-            Reportar um problema
-          </Button>
-          <Button
-            variant="danger"
-            className="profile-page__logout"
-            onClick={() => setIsLogoutConfirmOpen(true)}
-          >
-            Sair da conta
-          </Button>
+          <Tooltip label="Reportar um problema">
+            <button className="profile-page__icon-action" onClick={() => setIsReportOpen(true)}>
+              <Flag size={16} />
+            </button>
+          </Tooltip>
+          <Tooltip label="Sair da conta">
+            <button
+              className="profile-page__icon-action profile-page__icon-action--danger"
+              onClick={() => setIsLogoutConfirmOpen(true)}
+            >
+              <LogOut size={16} />
+            </button>
+          </Tooltip>
         </div>
       </div>
 
