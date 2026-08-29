@@ -3,7 +3,7 @@ import dotenv from 'dotenv';
 import { mkdir, readdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { loginWithGoogle } from './googleAuth';
-import { checkForUpdatesOnStartup, isInstallingUpdate } from './autoUpdate';
+import { checkForUpdatesOnDemand, checkForUpdatesOnStartup, isInstallingUpdate } from './autoUpdate';
 import './processLoopbackAudio';
 
 const isDev = !app.isPackaged;
@@ -160,6 +160,11 @@ function createMainWindow(): void {
   window.webContents.on('did-finish-load', () => {
     checkForUpdatesOnStartup(window, isDev);
   });
+
+  // User-authorized update — TitleBar.tsx's update icon (shown after a server push, see
+  // lib/updateNotifications.ts) already confirmed with the user before calling this. Same
+  // check/download/install sequence as boot, just triggered on demand instead of automatically.
+  ipcMain.handle('app:start-update', () => checkForUpdatesOnDemand(window, isDev));
 
   if (isDev) {
     window.loadURL('http://localhost:5173');

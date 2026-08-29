@@ -1,14 +1,20 @@
 import { useEffect, useState } from 'react';
-import { Minus, Square, X } from 'lucide-react';
+import { Download, Minus, Square, X } from 'lucide-react';
 import logo from '../assets/images/logo.png';
 import DonateModal from './DonateModal';
 import '../styles/TitleBar.css';
 
 interface TitleBarProps {
   title: string;
+  /** Set once the server pushes an "update available" notification while the app is already open
+   * (App.tsx's subscribeToUpdateNotifications) — null means nothing pending. This icon is the
+   * persistent affordance (stays until the update is authorized or a new one arrives), separate
+   * from UpdateToast's one-time dismissable balloon — both call the same onRequestUpdate. */
+  pendingUpdateVersion: string | null;
+  onRequestUpdate: () => void;
 }
 
-export default function TitleBar({ title }: TitleBarProps) {
+export default function TitleBar({ title, pendingUpdateVersion, onRequestUpdate }: TitleBarProps) {
   const [isMaximized, setIsMaximized] = useState(false);
   const [isDonateOpen, setIsDonateOpen] = useState(false);
 
@@ -29,6 +35,17 @@ export default function TitleBar({ title }: TitleBarProps) {
       </div>
 
       <div className="title-bar__actions">
+        {pendingUpdateVersion && (
+          <button
+            className="title-bar__update-available"
+            title={`Nova versão disponível (${pendingUpdateVersion}) — clique pra atualizar`}
+            onClick={onRequestUpdate}
+          >
+            <Download size={14} />
+            <span className="title-bar__update-available-dot" />
+          </button>
+        )}
+
         <button className="title-bar__donate" onClick={() => setIsDonateOpen(true)}>
           DONATE
         </button>

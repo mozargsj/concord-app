@@ -16,6 +16,7 @@ export interface GoogleLoginResult {
   email: string;
   displayName: string;
   avatarImageUrl?: string;
+  idToken: string;
 }
 
 export type UpdateStatus = 'checking' | 'updating' | 'done';
@@ -125,6 +126,7 @@ declare global {
         onConfirmCloseRequest: (callback: () => void) => () => void;
         respondToCloseConfirmation: (confirmed: boolean) => void;
         onUpdateStatus: (callback: (info: UpdateStatusInfo) => void) => () => void;
+        startUpdate: () => Promise<void>;
       };
     };
   }

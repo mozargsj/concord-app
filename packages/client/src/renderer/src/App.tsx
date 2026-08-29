@@ -3,6 +3,7 @@ import type { UserProfile } from '@concord/shared';
 import type { UpdatePhase, UpdateStatusInfo } from './types/window';
 import TitleBar from './components/TitleBar';
 import ConfirmModal from './components/ConfirmModal';
+import UpdateToast from './components/UpdateToast';
 import LoadingSpinner from './components/LoadingSpinner';
 import updateSpinnerIcon from './assets/images/update-spinner.png';
 import ServerOfflineScreen from './components/ServerOfflineScreen';
@@ -19,6 +20,7 @@ import {
 import { clearStoredSessionToken, getStoredSessionToken, setStoredSessionToken } from './lib/session';
 import { clearStoredTestIdentity } from './lib/testIdentity';
 import { loadCachedImage } from './lib/imageCache';
+import { subscribeToUpdateNotifications } from './lib/updateNotifications';
 import './styles/App.css';
 
 type View = 'loading' | 'offline' | 'session-expired' | 'login' | 'app';
@@ -40,6 +42,14 @@ export default function App() {
   // session check is held off until then. 'phase'/'percent'/'version' drive the dynamic message
   // below instead of one static "sendo atualizado" screen with no information.
   const [updateStatus, setUpdateStatus] = useState<UpdateStatusInfo>({ status: 'checking' });
+  // Pushed by the server while the app is already open (lib/updateNotifications.ts) — distinct
+  // from updateStatus above (the boot-time automatic check). Never triggers an install on its
+  // own; TitleBar.tsx keeps a persistent icon for this, and UpdateToast shows a dismissable
+  // balloon the first time it arrives — either one opens the same confirm step below, the user
+  // has to explicitly authorize before anything actually downloads/installs.
+  const [pendingUpdateVersion, setPendingUpdateVersion] = useState<string | null>(null);
+  const [isUpdateToastDismissed, setIsUpdateToastDismissed] = useState(false);
+  const [isUpdateConfirmOpen, setIsUpdateConfirmOpen] = useState(false);
 
   useEffect(() => {
     return window.concord?.app.onConfirmCloseRequest(() => setIsCloseConfirmOpen(true));
@@ -47,6 +57,15 @@ export default function App() {
 
   useEffect(() => {
     return window.concord?.app.onUpdateStatus(setUpdateStatus);
+  }, []);
+
+  // Always-on (not gated on being logged in/in a room) — a live notification should reach anyone
+  // with the app open, same reasoning as the boot-time check running before login exists too.
+  useEffect(() => {
+    return subscribeToUpdateNotifications((version) => {
+      setPendingUpdateVersion(version);
+      setIsUpdateToastDismissed(false);
+    });
   }, []);
 
   // Single global catch for "the session is no longer valid" — fires from api.ts's request()
@@ -157,9 +176,29 @@ export default function App() {
     setView('login');
   }
 
+  // Both the TitleBar icon and the UpdateToast balloon call this — neither installs anything by
+  // itself, they only open the same confirmation (decisions.md: explicit authorization required
+  // while the app is already in use, unlike the automatic boot-time check above).
+  function handleRequestUpdate(): void {
+    setIsUpdateConfirmOpen(true);
+  }
+
+  function handleConfirmUpdate(): void {
+    setIsUpdateConfirmOpen(false);
+    setPendingUpdateVersion(null);
+    void window.concord?.app.startUpdate();
+  }
+
   return (
     <div className="app-shell">
-      <TitleBar title={activeServerName} />
+      <TitleBar title={activeServerName} pendingUpdateVersion={pendingUpdateVersion} onRequestUpdate={handleRequestUpdate} />
+      {pendingUpdateVersion && !isUpdateToastDismissed && (
+        <UpdateToast
+          version={pendingUpdateVersion}
+          onUpdate={handleRequestUpdate}
+          onDismiss={() => setIsUpdateToastDismissed(true)}
+        />
+      )}
       <div className="app-shell__content">
         {updateStatus.status !== 'done' ? (
           <LoadingSpinner
@@ -198,6 +237,16 @@ export default function App() {
             window.concord?.app.respondToCloseConfirmation(true);
             setIsCloseConfirmOpen(false);
           }}
+        />
+      )}
+
+      {isUpdateConfirmOpen && (
+        <ConfirmModal
+          title="Atualizar Concord"
+          message={`Nova versão disponível${pendingUpdateVersion ? ` (${pendingUpdateVersion})` : ''}. Atualizar agora reinicia o app e encerra qualquer chamada em andamento.`}
+          confirmLabel="Atualizar agora"
+          onCancel={() => setIsUpdateConfirmOpen(false)}
+          onConfirm={handleConfirmUpdate}
         />
       )}
     </div>

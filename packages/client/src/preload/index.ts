@@ -82,6 +82,7 @@ contextBridge.exposeInMainWorld('concord', {
       const listener = (_event: unknown, info: Parameters<typeof callback>[0]) => callback(info);
       ipcRenderer.on('app:update-status', listener);
       return () => ipcRenderer.removeListener('app:update-status', listener);
-    }
+    },
+    startUpdate: () => ipcRenderer.invoke('app:start-update')
   }
 });

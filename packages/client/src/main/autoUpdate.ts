@@ -25,13 +25,13 @@ export function isInstallingUpdate(): boolean {
 }
 
 /**
- * Checks for an update on every launch and installs it silently, no prompt — the renderer shows
- * a dynamic message/progress bar while it happens (see App.tsx's onUpdateStatus), driven by the
- * real phase/percent below instead of one static "sendo atualizado" screen with no information.
- * Only meaningful in a packaged build; electron-updater has no feed/version metadata in dev, so
- * dev just reports 'done' immediately and the normal boot flow continues.
+ * Shared by both entry points below — the actual check/download/install sequence is identical
+ * whether it's the automatic boot-time check or a check the user just explicitly authorized by
+ * clicking the update icon (TitleBar.tsx) after a server push (decisions.md — never auto-installs
+ * on its own while the app is already open, only at boot). Only meaningful in a packaged build;
+ * electron-updater has no feed/version metadata in dev, so dev just reports 'done' immediately.
  */
-export function checkForUpdatesOnStartup(window: BrowserWindow, isDev: boolean): void {
+function runUpdateCheck(window: BrowserWindow, isDev: boolean): void {
   const send = (info: UpdateStatusInfo) => {
     if (!window.isDestroyed()) window.webContents.send('app:update-status', info);
   };
@@ -86,4 +86,20 @@ export function checkForUpdatesOnStartup(window: BrowserWindow, isDev: boolean):
     console.error('[autoUpdate] checkForUpdates rejected', err);
     send({ status: 'done' });
   });
+}
+
+/** Automatic, unattended — runs once per launch (main/index.ts's did-finish-load). The renderer
+ * shows a blocking full-screen progress state while this runs (App.tsx), since it happens before
+ * the user has done anything else in the session yet. */
+export function checkForUpdatesOnStartup(window: BrowserWindow, isDev: boolean): void {
+  runUpdateCheck(window, isDev);
+}
+
+/** User-authorized — triggered only after the renderer's TitleBar shows the update-available icon
+ * (pushed via the server's UpdatesBroadcaster while the app was already open, see
+ * lib/updateNotifications.ts) and the user explicitly clicks it. Same underlying check/download/
+ * install sequence as the startup one; the renderer is responsible for the "are you sure, this
+ * restarts the app" confirmation before ever calling this (see app:start-update in index.ts). */
+export function checkForUpdatesOnDemand(window: BrowserWindow, isDev: boolean): void {
+  runUpdateCheck(window, isDev);
 }

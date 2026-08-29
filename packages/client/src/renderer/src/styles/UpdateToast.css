@@ -1,0 +1,72 @@
+.update-toast {
+  position: fixed;
+  top: 40px;
+  right: 12px;
+  z-index: 50;
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  width: 300px;
+  padding: 14px;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-elevated);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  animation: update-toast-in 0.2s ease-out;
+}
+
+@keyframes update-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.update-toast__icon {
+  flex-shrink: 0;
+  color: var(--color-online);
+  margin-top: 2px;
+}
+
+.update-toast__body {
+  flex: 1;
+  min-width: 0;
+}
+
+.update-toast__title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--color-text-primary);
+}
+
+.update-toast__hint {
+  margin: 2px 0 10px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.update-toast__actions {
+  display: flex;
+  gap: 8px;
+}
+
+.update-toast__actions .button {
+  padding: 6px 12px;
+  font-size: 12px;
+}
+
+.update-toast__close {
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  color: var(--color-text-secondary);
+  padding: 2px;
+}
+
+.update-toast__close:hover {
+  color: var(--color-text-primary);
+}

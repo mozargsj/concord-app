@@ -4,19 +4,26 @@ import * as reportsRepo from './db/reports';
 import * as logsRepo from './db/logs';
 
 export { RoomDurableObject } from './room';
+export { UpdatesBroadcaster } from './updatesBroadcaster';
 
 /**
  * [2026-08-29] Single origin for both REST and WebSocket signaling — same shape as
  * packages/server (one Node process handles both), which the client's URL config already
  * depends on (VITE_SIGNALING_URL doubles as the REST base via a scheme swap, see
- * packages/client/src/renderer/src/lib/api.ts). A WebSocket upgrade routes to the right
- * RoomDurableObject (env.ROOMS.idFromName(roomId), see room.ts); everything else goes through
- * the REST router in rest.ts, backed by D1/R2 instead of DynamoDB/S3.
+ * packages/client/src/renderer/src/lib/api.ts). A WebSocket upgrade to `/updates-ws` routes to
+ * the singleton UpdatesBroadcaster (server->client update-available push, see that file); any
+ * other WebSocket upgrade routes to the right RoomDurableObject (env.ROOMS.idFromName(roomId),
+ * see room.ts). Everything else goes through the REST router in rest.ts, backed by D1/R2.
  */
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     if (request.headers.get('Upgrade') === 'websocket') {
-      const roomId = new URL(request.url).searchParams.get('roomId');
+      const url = new URL(request.url);
+      if (url.pathname === '/updates-ws') {
+        const id = env.UPDATES.idFromName('global');
+        return env.UPDATES.get(id).fetch(request);
+      }
+      const roomId = url.searchParams.get('roomId');
       if (!roomId) return new Response('Missing roomId query parameter.', { status: 400 });
       const id = env.ROOMS.idFromName(roomId);
       const stub = env.ROOMS.get(id);

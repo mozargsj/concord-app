@@ -61,6 +61,47 @@
   -webkit-app-region: no-drag;
 }
 
+.title-bar__update-available {
+  position: relative;
+  width: 26px;
+  height: 22px;
+  border: none;
+  border-radius: 6px;
+  background: var(--color-bg-elevated);
+  color: var(--color-online);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.title-bar__update-available:hover {
+  background: var(--color-bg-elevated-hover);
+}
+
+.title-bar__update-available-dot {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-online);
+  box-shadow: 0 0 0 2px #0d0d10;
+  animation: title-bar-update-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes title-bar-update-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.5;
+    transform: scale(1.25);
+  }
+}
+
 .title-bar__donate {
   height: 22px;
   padding: 0 12px;
