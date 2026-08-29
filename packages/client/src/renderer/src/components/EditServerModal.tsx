@@ -1,7 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import type { ServerSummary } from '@concord/shared';
-import { X } from 'lucide-react';
-import Button from './Button';
+import { Check, Loader2, Pencil, Trash2, X } from 'lucide-react';
 import ConfirmModal from './ConfirmModal';
 import Tooltip from './Tooltip';
 import ImageCropModal from './ImageCropModal';
@@ -20,36 +19,60 @@ interface EditServerModalProps {
   onServerDeleted: (serverId: string) => void;
 }
 
-/** Rename/re-icon an existing server — opened from ServerRail's right-click menu, owner only.
- * Name is persisted through a real PATCH (DynamoDB in production); the icon stays local-cache +
- * P2P only, same as the rest of the avatar/icon system (decisions.md) — no backend round-trip
- * for it, it's just re-cached under the same serverId key, overwriting what peers will fetch
- * next time they share a room with the owner. */
+/**
+ * Rename/re-icon an existing server — opened from ServerRail's right-click menu, owner only.
+ * Name is persisted through a real PATCH; the icon stays local-cache + P2P only, same as the
+ * rest of the avatar/icon system (decisions.md) — no backend round-trip for it.
+ *
+ * [2026-08-29, pedido do Mozar — mesmo fluxo do ProfilePage.tsx] Cada campo se aplica na hora,
+ * sem um "Salvar" de rodapé pro modal inteiro: nome nasce como texto + ícone de editar; clicar
+ * transforma em input + dois ícones novos (confirmar/cancelar). Ícone do servidor já aplicava na
+ * hora antes (não precisou mudar). "Excluir servidor" também virou ícone+balão, mesma convenção.
+ */
 export default function EditServerModal({ server, onClose, onServerUpdated, onServerDeleted }: EditServerModalProps) {
+  const [isEditingName, setIsEditingName] = useState(false);
   const [name, setName] = useState(server.name);
+  const [isSavingName, setIsSavingName] = useState(false);
   const [isConfirmingDelete, setIsConfirmingDelete] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
-  // Separate from server.iconUrl on purpose: that blob URL is owned by imageCache.ts (other
-  // parts of the UI — ServerRail, etc. — still render it), so it must never be revoked from in
-  // here. Only a URL this component itself creates (via handleApplyCrop) gets cleaned up below.
-  const [pendingPreviewUrl, setPendingPreviewUrl] = useState<string | null>(null);
   const [pendingCropSource, setPendingCropSource] = useState<PickedImageFile | null>(null);
-  const [pendingIcon, setPendingIcon] = useState<{ data: ArrayBuffer; mimeType: string } | null>(null);
   const [isPickingImage, setIsPickingImage] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
+  const [isUploadingIcon, setIsUploadingIcon] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [isSaveFailure, setIsSaveFailure] = useState(false);
+  const [isUploadFailure, setIsUploadFailure] = useState(false);
 
-  useEffect(() => {
-    return () => {
-      if (pendingPreviewUrl) URL.revokeObjectURL(pendingPreviewUrl);
-    };
-  }, [pendingPreviewUrl]);
+  function handleStartEditName() {
+    setName(server.name);
+    setError(null);
+    setIsEditingName(true);
+  }
 
-  const previewUrl = pendingPreviewUrl ?? server.iconUrl;
-  const trimmedName = name.trim();
-  const hasChanges = pendingIcon !== null || (trimmedName !== '' && trimmedName !== server.name);
+  function handleCancelEditName() {
+    setName(server.name);
+    setIsEditingName(false);
+  }
+
+  async function handleSaveName() {
+    const trimmed = name.trim();
+    if (!trimmed || trimmed === server.name) {
+      setIsEditingName(false);
+      return;
+    }
+    setIsSavingName(true);
+    setError(null);
+    setIsUploadFailure(false);
+    try {
+      const updated = await updateServer(server.id, trimmed);
+      onServerUpdated(updated);
+      setIsEditingName(false);
+    } catch (err) {
+      const isNameTaken = err instanceof ApiError && err.code === 'name-taken';
+      setError(isNameTaken ? 'Esse nome já está em uso.' : 'Não foi possível salvar o nome.');
+    } finally {
+      setIsSavingName(false);
+    }
+  }
 
   async function handlePickImage() {
     setIsPickingImage(true);
@@ -64,35 +87,19 @@ export default function EditServerModal({ server, onClose, onServerUpdated, onSe
     }
   }
 
-  function handleApplyCrop(cropped: { data: ArrayBuffer; mimeType: string }) {
+  async function handleApplyCrop(cropped: { data: ArrayBuffer; mimeType: string }) {
     setPendingCropSource(null);
-    setPendingIcon(cropped);
-    // The cleanup effect above (keyed on pendingPreviewUrl) revokes the previous one, if any.
-    setPendingPreviewUrl(URL.createObjectURL(new Blob([cropped.data], { type: cropped.mimeType })));
-  }
-
-  async function handleSave() {
-    if (!hasChanges) return;
-    setIsSaving(true);
+    setIsUploadingIcon(true);
     setError(null);
-    setIsSaveFailure(false);
+    setIsUploadFailure(false);
     try {
-      let updated: ServerSummary = server;
-      if (trimmedName && trimmedName !== server.name) {
-        updated = await updateServer(server.id, trimmedName);
-      }
-      if (pendingIcon) {
-        const { url } = await saveCachedImage('server-icon', server.id, pendingIcon.data, pendingIcon.mimeType);
-        updated = { ...updated, iconUrl: url };
-      }
-      onServerUpdated(updated);
-      onClose();
-    } catch (err) {
-      const isNameTaken = err instanceof ApiError && err.code === 'name-taken';
-      setError(isNameTaken ? 'Esse nome já está em uso.' : 'Não foi possível salvar as alterações.');
-      setIsSaveFailure(!isNameTaken);
+      const { url } = await saveCachedImage('server-icon', server.id, cropped.data, cropped.mimeType);
+      onServerUpdated({ ...server, iconUrl: url });
+    } catch {
+      setError('Não foi possível atualizar o ícone.');
+      setIsUploadFailure(true);
     } finally {
-      setIsSaving(false);
+      setIsUploadingIcon(false);
     }
   }
 
@@ -127,48 +134,76 @@ export default function EditServerModal({ server, onClose, onServerUpdated, onSe
           type="button"
           className="edit-server-modal__icon-picker"
           onClick={handlePickImage}
-          disabled={isPickingImage}
+          disabled={isPickingImage || isUploadingIcon}
         >
-          {previewUrl ? (
-            <img src={previewUrl} alt="" className="edit-server-modal__icon-preview" />
+          {server.iconUrl ? (
+            <img src={server.iconUrl} alt="" className="edit-server-modal__icon-preview" />
           ) : (
             <span>{server.name.charAt(0).toUpperCase()}</span>
           )}
-          <span className="edit-server-modal__icon-overlay">{isPickingImage ? '…' : 'Alterar'}</span>
+          <span
+            className={
+              'edit-server-modal__icon-overlay' + (isUploadingIcon ? ' edit-server-modal__icon-overlay--visible' : '')
+            }
+          >
+            {isUploadingIcon ? <Loader2 size={20} className="edit-server-modal__icon-spin" /> : 'Alterar'}
+          </span>
         </button>
 
         <div className="edit-server-modal__field">
-          <label className="edit-server-modal__label" htmlFor="edit-server-name">
-            Nome do servidor
-          </label>
-          <input
-            id="edit-server-name"
-            className="edit-server-modal__input"
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-            autoFocus
-          />
+          <span className="edit-server-modal__label">Nome do servidor</span>
+          {isEditingName ? (
+            <div className="edit-server-modal__name-row">
+              <input
+                id="edit-server-name"
+                className="edit-server-modal__input"
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                disabled={isSavingName}
+                autoFocus
+              />
+              <Tooltip label="Salvar">
+                <button
+                  className="edit-server-modal__name-action"
+                  onClick={handleSaveName}
+                  disabled={isSavingName || !name.trim()}
+                >
+                  {isSavingName ? <Loader2 size={14} className="edit-server-modal__icon-spin" /> : <Check size={14} />}
+                </button>
+              </Tooltip>
+              <Tooltip label="Cancelar">
+                <button className="edit-server-modal__name-action" onClick={handleCancelEditName} disabled={isSavingName}>
+                  <X size={14} />
+                </button>
+              </Tooltip>
+            </div>
+          ) : (
+            <div className="edit-server-modal__name-row">
+              <p className="edit-server-modal__value">{server.name}</p>
+              <Tooltip label="Editar nome">
+                <button className="edit-server-modal__name-action" onClick={handleStartEditName}>
+                  <Pencil size={14} />
+                </button>
+              </Tooltip>
+            </div>
+          )}
         </div>
 
-        {error && isSaveFailure && (
+        {error && isUploadFailure && (
           <IllustratedNotice icon={uploadFailedArt} messages={UPLOAD_FAILED_MESSAGES} detail={error} />
         )}
-        {error && !isSaveFailure && <p className="edit-server-modal__error">{error}</p>}
+        {error && !isUploadFailure && <p className="edit-server-modal__error">{error}</p>}
 
         <div className="edit-server-modal__danger-zone">
-          <Button variant="danger" onClick={() => setIsConfirmingDelete(true)} disabled={isSaving}>
-            Excluir servidor
-          </Button>
+          <Tooltip label="Excluir servidor">
+            <button
+              className="edit-server-modal__icon-action edit-server-modal__icon-action--danger"
+              onClick={() => setIsConfirmingDelete(true)}
+            >
+              <Trash2 size={16} />
+            </button>
+          </Tooltip>
           {deleteError && <p className="edit-server-modal__error">{deleteError}</p>}
-        </div>
-
-        <div className="edit-server-modal__actions">
-          <Button variant="ghost" onClick={onClose}>
-            Cancelar
-          </Button>
-          <Button onClick={handleSave} disabled={!hasChanges || isSaving}>
-            {isSaving ? 'Salvando…' : 'Salvar'}
-          </Button>
         </div>
       </div>
 
