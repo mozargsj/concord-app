@@ -43,6 +43,28 @@
     "crons": ["0 6 * * *"]
   },
 
+  // [2026-08-30, pedido do Mozar] Logs de execução + traces no dashboard da Cloudflare
+  // (Workers > concord-signaling > Observability). `enabled: false` no nível raiz é o toggle
+  // "legado" (um interruptor só, logs+traces juntos) — deixado desligado de propósito porque
+  // `logs`/`traces` abaixo já controlam cada um separadamente, forma mais nova recomendada pela
+  // Cloudflare. `persist: true` nos dois é o que realmente manda o dado pro dashboard consultável;
+  // sem isso, mesmo com `enabled: true`, nada fica gravado pra consulta depois.
+  "observability": {
+    "enabled": false,
+    "head_sampling_rate": 1,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1,
+      "persist": true,
+      "invocation_logs": true
+    },
+    "traces": {
+      "enabled": true,
+      "persist": true,
+      "head_sampling_rate": 1
+    }
+  },
+
   // [2026-08-29, achado de segurança] Rate Limiting binding nativo do Workers (GA desde set/2025,
   // src/rateLimit.ts) — por IP (`CF-Connecting-IP`), período fixo de 60s (mínimo permitido além de
   // 10s). `namespace_id` só precisa ser único dentro deste Worker, não é um recurso criado à parte
