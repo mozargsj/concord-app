@@ -9,6 +9,7 @@ import type {
   JoinServerRequest,
   LoginRequest,
   LoginResponse,
+  MemberProfileResponse,
   RoomListResponse,
   RoomResponse,
   RoomSummary,
@@ -213,6 +214,14 @@ export async function getServer(id: string): Promise<ServerDetailsResponse> {
     return { server: testState.server, myRole: 1 }; // Role.Dono — test user always owns its own fake server
   }
   return request<ServerDetailsResponse>(`/servers/${id}`);
+}
+
+export async function getServerMember(serverId: string, userId: string): Promise<MemberProfileResponse> {
+  if (TEST_MODE) {
+    if (!testState.user) throw new ApiError('unauthorized', 401);
+    return { displayName: testState.user.displayName };
+  }
+  return request<MemberProfileResponse>(`/servers/${serverId}/members/${userId}`);
 }
 
 export async function listMyServers(): Promise<ServerSummary[]> {

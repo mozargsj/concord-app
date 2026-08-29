@@ -12,6 +12,7 @@ import type {
   JoinServerRequest,
   LoginRequest,
   LoginResponse,
+  MemberProfileResponse,
   RoomListResponse,
   RoomResponse,
   RoomSummary,
@@ -189,6 +190,9 @@ export async function handleRest(req: Request, env: Env): Promise<Response> {
     }
     if (method === 'POST' && segments.length === 3 && segments[0] === 'servers' && segments[2] === 'invites') {
       return await handleCreateInvite(req, env, segments[1]);
+    }
+    if (method === 'GET' && segments.length === 4 && segments[0] === 'servers' && segments[2] === 'members') {
+      return await handleGetServerMember(req, env, segments[1], segments[3]);
     }
     if (method === 'GET' && segments.length === 3 && segments[0] === 'servers' && segments[2] === 'rooms') {
       return await handleListRooms(req, env, segments[1]);
@@ -432,6 +436,25 @@ async function handleGetServer(req: Request, env: Env, serverId: string): Promis
   if (myRole === null) return error(403, 'forbidden');
 
   const response: ServerDetailsResponse = { server: toServerSummary(record), myRole };
+  return json(200, response);
+}
+
+/** [2026-08-29] Nickname real de outro membro — ver MemberProfileResponse (shared/http.ts).
+ * Autorização: caller precisa ser membro do servidor (qualquer cargo), e o alvo também — impede
+ * enumerar nome de conta de gente fora do servidor em comum, mesmo autenticado. */
+async function handleGetServerMember(req: Request, env: Env, serverId: string, targetUserId: string): Promise<Response> {
+  const server = await serversRepo.findById(env, serverId);
+  if (!server) return error(404, 'server-not-found');
+  const rankCheck = await requireRank(req, env, server, Role.Usuario);
+  if ('errorResponse' in rankCheck) return rankCheck.errorResponse;
+
+  const targetRank = await getEffectiveRank(env, serverId, targetUserId, server.owner_user_id);
+  if (targetRank === null) return error(404, 'user-not-found');
+
+  const targetRecord = await usersRepo.findById(env, targetUserId);
+  if (!targetRecord) return error(404, 'user-not-found');
+
+  const response: MemberProfileResponse = { displayName: targetRecord.display_name };
   return json(200, response);
 }
 

@@ -729,6 +729,7 @@ export default function ServerListPage({
         <TopBar roomName={selectedRoom?.name ?? null} />
         <RoomView
           room={selectedRoom}
+          serverId={selectedServer.id}
           isMicMuted={isMicMuted}
           onToggleMic={handleToggleMic}
           onSelectMic={switchMicDevice}

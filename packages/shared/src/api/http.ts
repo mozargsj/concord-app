@@ -58,6 +58,18 @@ export interface UpdateServerRequest {
   name: string;
 }
 
+/**
+ * [2026-08-29, achado de segurança] Nickname *real* de outro membro de um servidor em comum —
+ * fecha o achado da auditoria sobre `displayName` de `join-room` ser confiado do cliente:
+ * clicar num participante busca o nome de verdade aqui, direto do D1 pelo userId verificado,
+ * independente do que a sinalização (potencialmente falsificável por alguém falando o protocolo
+ * WebSocket bruto) tiver alegado. Só nickname/avatar — nunca email, que não é exposto a mais
+ * ninguém em lugar nenhum do app, nem o do próprio usuário.
+ */
+export interface MemberProfileResponse {
+  displayName: string;
+}
+
 /** The caller's own rank (1=dono..4=usuário, see packages/shared/src/domain/roles.ts) for this server — kept as a plain number on the wire so the client never has to import the const enum (esbuild/isolatedModules risk, see decisions.md). */
 export interface ServerDetailsResponse {
   server: ServerSummary;

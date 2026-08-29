@@ -8,6 +8,7 @@ import ConfirmModal from './ConfirmModal';
 import SoundboardPopover from './SoundboardPopover';
 import SoundboardManagerModal from './SoundboardManagerModal';
 import ConfirmAddSoundModal from './ConfirmAddSoundModal';
+import ParticipantProfileModal from './ParticipantProfileModal';
 import Tooltip from './Tooltip';
 import {
   AudioLines,
@@ -144,6 +145,9 @@ export default function RoomSidebar({
   const [editingRoomId, setEditingRoomId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState('');
   const [roomPendingDelete, setRoomPendingDelete] = useState<RoomSummary | null>(null);
+  const [viewingProfile, setViewingProfile] = useState<{ userId: string; name: string; avatarUrl: string | null } | null>(
+    null
+  );
   const [soundboardPopover, setSoundboardPopover] = useState<SoundboardPopoverState | null>(null);
   const [isSoundboardManagerOpen, setIsSoundboardManagerOpen] = useState(false);
   const [ownSounds, setOwnSounds] = useState<OwnSound[]>([]);
@@ -551,6 +555,16 @@ export default function RoomSidebar({
                         (isVolumeTarget ? ' room-sidebar__participant--volume-target' : '') +
                         (isVolumeMenuActive ? ' room-sidebar__participant--volume-active' : '')
                       }
+                      onClick={
+                        isVolumeTarget
+                          ? () =>
+                              setViewingProfile({
+                                userId: participant.userId!,
+                                name: participant.name,
+                                avatarUrl: participant.avatarUrl
+                              })
+                          : undefined
+                      }
                       onContextMenu={
                         isVolumeTarget
                           ? (event) => {
@@ -711,6 +725,16 @@ export default function RoomSidebar({
           confirmLabel="Excluir"
           onCancel={() => setRoomPendingDelete(null)}
           onConfirm={confirmDeleteRoom}
+        />
+      )}
+
+      {viewingProfile && (
+        <ParticipantProfileModal
+          serverId={server.id}
+          userId={viewingProfile.userId}
+          fallbackName={viewingProfile.name}
+          avatarUrl={viewingProfile.avatarUrl}
+          onClose={() => setViewingProfile(null)}
         />
       )}
 

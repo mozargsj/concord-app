@@ -3,6 +3,7 @@ import type { ClientToServerMessage, DeviceKind, ServerToClientMessage } from '@
 import type { Env } from './env';
 import { validateClientMessage } from './protocol';
 import { verifySessionToken } from './auth';
+import * as usersRepo from './db/users';
 import * as serversRepo from './db/servers';
 import * as roomsRepo from './db/rooms';
 import * as rolesRepo from './db/roles';
@@ -177,6 +178,14 @@ export class RoomDurableObject extends DurableObject<Env> {
 
     const verifiedUserId = await verifySessionToken(message.sessionToken, this.env.SESSION_SECRET);
     let userId: string;
+    // [Achado de segurança, 2026-08-29] Só populado no ramo autenticado (abaixo) — displayName
+    // aqui vem do próprio D1, pelo userId já verificado, nunca do que a mensagem join-room alega.
+    // Antes, um caller falando o protocolo WebSocket direto (sem passar pelo Electron real, que
+    // sempre manda currentUser.displayName — o nickname de verdade) podia entrar numa sala
+    // alegando qualquer nome, inclusive o de outro membro real dessa sala (impersonação visual,
+    // sem afetar userId/permissão, que continuam 100% verificados). Corrigido buscando o nickname
+    // real em vez de confiar no texto livre da mensagem.
+    let verifiedDisplayName: string | null = null;
     if (verifiedUserId) {
       const server = await serversRepo.findById(this.env, message.serverId);
       const roomRecord = server ? await roomsRepo.findById(this.env, message.serverId, message.roomId) : null;
@@ -189,6 +198,8 @@ export class RoomDurableObject extends DurableObject<Env> {
         return;
       }
       userId = verifiedUserId;
+      const userRecord = await usersRepo.findById(this.env, verifiedUserId);
+      verifiedDisplayName = userRecord?.display_name ?? null;
     } else if (this.env.ALLOW_UNAUTHENTICATED_ROOMS === 'true') {
       userId = message.userId;
     } else {
@@ -202,10 +213,10 @@ export class RoomDurableObject extends DurableObject<Env> {
       return;
     }
 
-    // displayName/userId stay untrusted client input to rebroadcast to strangers (userId is
-    // either verified above, or, only in the dev-only bypass, the client's own claim) — trim/cap
-    // as a last defensive measure, same as roomManager.ts.
-    const safeDisplayName = message.displayName.trim().slice(0, 60) || 'Peer';
+    // Fora do ramo autenticado (só o bypass ALLOW_UNAUTHENTICATED_ROOMS, nunca produção — ver
+    // acima), não existe um nickname de D1 pra confiar, então cai de volta pro que a mensagem
+    // mandou — mesmo trim/cap defensivo de sempre, roomManager.ts tinha o mesmo padrão.
+    const safeDisplayName = (verifiedDisplayName ?? message.displayName).trim().slice(0, 60) || 'Peer';
     const safeUserId = userId.trim().slice(0, 100) || crypto.randomUUID();
     const peer: PeerAttachment = {
       peerId: crypto.randomUUID(),

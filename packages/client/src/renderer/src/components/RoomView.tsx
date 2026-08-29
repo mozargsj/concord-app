@@ -7,6 +7,7 @@ import MediaStreamVideo from './MediaStreamVideo';
 import ScreenShareTile from './ScreenShareTile';
 import HostStarBadge from './HostStarBadge';
 import LiveBadge from './LiveBadge';
+import ParticipantProfileModal from './ParticipantProfileModal';
 import { getAvatarColor } from '../lib/avatarColor';
 import { getGridContainerStyle, getGridItemStyle } from '../lib/participantGrid';
 import { playCameraStart, playCameraStop, playTransmissionEnter, playTransmissionExit } from '../lib/soundEffects';
@@ -14,6 +15,7 @@ import '../styles/RoomView.css';
 
 interface RoomViewProps {
   room: RoomSummary | null;
+  serverId: string;
   isMicMuted: boolean;
   onToggleMic: () => void;
   onSelectMic: (deviceId: string) => void;
@@ -68,6 +70,7 @@ type Tile =
 
 export default function RoomView({
   room,
+  serverId,
   isMicMuted,
   onToggleMic,
   onSelectMic,
@@ -98,6 +101,9 @@ export default function RoomView({
   // (showCamera below), matching ScreenShareTile's isOwnPreview exemption. Stays viewed for the
   // rest of the session once clicked — no reset button for this one, unlike the screen tile's "×".
   const [viewedCameraPeerIds, setViewedCameraPeerIds] = useState<Set<string>>(new Set());
+  const [viewingProfile, setViewingProfile] = useState<{ userId: string; name: string; avatarUrl: string | null } | null>(
+    null
+  );
 
   const peerMediaRef = useRef<Map<string, { hasVideo: boolean; hasScreen: boolean }>>(new Map());
 
@@ -346,7 +352,16 @@ export default function RoomView({
                         setViewedCameraPeerIds((prev) => (prev.has(tile.key) ? prev : new Set(prev).add(tile.key)));
                       }
                     }
-                  : undefined
+                  : // No video to focus (just the avatar circle) — click views the real profile
+                    // instead, same trigger point as RoomSidebar's participant row.
+                    isVolumeTarget && !isFocusable
+                    ? () =>
+                        setViewingProfile({
+                          userId: tile.userId!,
+                          name: tile.name,
+                          avatarUrl: tile.kind === 'participant' ? tile.avatarUrl : null
+                        })
+                    : undefined
               }
               onContextMenu={
                 tile.kind === 'participant' && tile.userId
@@ -416,6 +431,16 @@ export default function RoomView({
         isFocused={focusedTileKey !== null}
         onExitFocus={() => setFocusedTileKey(null)}
       />
+
+      {viewingProfile && (
+        <ParticipantProfileModal
+          serverId={serverId}
+          userId={viewingProfile.userId}
+          fallbackName={viewingProfile.name}
+          avatarUrl={viewingProfile.avatarUrl}
+          onClose={() => setViewingProfile(null)}
+        />
+      )}
     </div>
   );
 }

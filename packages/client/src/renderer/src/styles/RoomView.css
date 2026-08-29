@@ -56,6 +56,10 @@
 
 /* Right-click-to-adjust-volume feedback — hover shows the tile is actionable, the accent
    outline confirms which one the open popup (ParticipantVolumeMenu) is actually targeting. */
+.room-view__participant-tile--volume-target {
+  cursor: pointer;
+}
+
 .room-view__participant-tile--volume-target:hover {
   background: var(--color-bg-elevated-hover);
 }

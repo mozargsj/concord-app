@@ -314,6 +314,10 @@
 
 /* Right-click-to-adjust-volume feedback — hover shows the row is actionable, the accent
    background confirms which one the open popup (ParticipantVolumeMenu) is actually targeting. */
+.room-sidebar__participant--volume-target {
+  cursor: pointer;
+}
+
 .room-sidebar__participant--volume-target:hover {
   background: var(--color-bg-elevated-hover);
 }
