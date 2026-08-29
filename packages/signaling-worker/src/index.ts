@@ -1,5 +1,6 @@
 import type { Env } from './env';
 import { handleRest } from './rest';
+import { checkRateLimit, getClientIp, rateLimitResponse } from './rateLimit';
 import * as reportsRepo from './db/reports';
 import * as logsRepo from './db/logs';
 
@@ -18,6 +19,10 @@ export { UpdatesBroadcaster } from './updatesBroadcaster';
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     if (request.headers.get('Upgrade') === 'websocket') {
+      // [Achado de segurança, 2026-08-29] Auditoria apontou upgrades de WebSocket sem nenhum
+      // limite — antes de rotear pro DO (que pesa mais: aceita o socket, roda hibernation),
+      // barra por IP aqui, na borda.
+      if (!(await checkRateLimit(env.WS_LIMITER, getClientIp(request)))) return rateLimitResponse();
       const url = new URL(request.url);
       if (url.pathname === '/updates-ws') {
         const id = env.UPDATES.idFromName('global');

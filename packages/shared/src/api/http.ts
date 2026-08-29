@@ -23,6 +23,25 @@ export interface LoginResponse {
   sessionToken: string;
 }
 
+/**
+ * [2026-08-29, achado de segurança — item ALTO da auditoria] Antes, o Electron main process
+ * (main/googleAuth.ts) trocava o `code` OAuth por tokens direto com o Google, usando
+ * `GOOGLE_OAUTH_CLIENT_SECRET` embutido no `.env` de todo instalador distribuído. Não era uma
+ * falha de autenticação de verdade (PKCE já protege a troca — client_secret de app nativo nunca é
+ * confidencial de fato, RFC 8252), mas remover o segredo do instalador é boa prática. Agora o
+ * client manda code+codeVerifier pro Worker, que guarda o `client_secret` como secret de verdade
+ * (nunca sai do servidor) e faz a troca ele mesmo.
+ */
+export interface GoogleExchangeRequest {
+  code: string;
+  codeVerifier: string;
+  redirectUri: string;
+}
+
+export interface GoogleExchangeResponse {
+  idToken: string;
+}
+
 export interface UpdateProfileRequest {
   displayName?: string;
   /** S3 object key returned by /uploads/presign, not a URL — the server resolves it to a signed GET URL on read. */

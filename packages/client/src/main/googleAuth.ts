@@ -5,7 +5,6 @@ import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { getOAuthCallbackHtml } from './oauthCallbackPage';
 
 const AUTH_ENDPOINT = 'https://accounts.google.com/o/oauth2/v2/auth';
-const TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token';
 const JWKS_URI = 'https://www.googleapis.com/oauth2/v3/certs';
 // Covers the "closed the browser tab instead of finishing login" case — the loopback server never
 // gets a request in that scenario (no HTTP round-trip happens at all), so a timeout is the only
@@ -58,11 +57,20 @@ function waitForCallback(server: Server, expectedState: string): Promise<string>
   });
 }
 
+/** Mesma derivação REST-base-a-partir-da-URL-de-sinalização que lib/api.ts usa no renderer
+ * (troca wss:/ws: por https:/http:) — process.env aqui porque isto roda no main process, não no
+ * renderer, então não passa pelo import.meta.env do Vite (dotenv carrega o `.env` inteiro pros
+ * dois lados igual, só o prefixo VITE_ é convenção de exposição no bundle do renderer). */
+function restBaseUrl(): string {
+  const signalingUrl = process.env.VITE_SIGNALING_URL;
+  if (!signalingUrl) throw new Error('VITE_SIGNALING_URL não configurado em packages/client/.env');
+  return signalingUrl.replace(/^wss:/, 'https:').replace(/^ws:/, 'http:');
+}
+
 export async function loginWithGoogle(): Promise<GoogleIdentity> {
   const clientId = process.env.GOOGLE_OAUTH_CLIENT_ID;
-  const clientSecret = process.env.GOOGLE_OAUTH_CLIENT_SECRET;
-  if (!clientId || !clientSecret) {
-    throw new Error('GOOGLE_OAUTH_CLIENT_ID/GOOGLE_OAUTH_CLIENT_SECRET não configurados em packages/client/.env');
+  if (!clientId) {
+    throw new Error('GOOGLE_OAUTH_CLIENT_ID não configurado em packages/client/.env');
   }
 
   const codeVerifier = base64url(randomBytes(32));
@@ -91,23 +99,20 @@ export async function loginWithGoogle(): Promise<GoogleIdentity> {
   await shell.openExternal(authUrl.toString());
   const code = await callbackPromise;
 
-  const tokenResponse = await fetch(TOKEN_ENDPOINT, {
+  // [2026-08-29, item ALTO da auditoria] Troca de code por tokens não fala mais direto com o
+  // Google — client_secret saiu do .env do instalador e virou secret do Worker (rest.ts's
+  // handleGoogleExchange). PKCE (code_verifier) continua sendo a prova real dessa troca; o Worker
+  // só repassa pro Google com o client_secret que só ele tem.
+  const exchangeResponse = await fetch(`${restBaseUrl()}/auth/google/exchange`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      code,
-      client_id: clientId,
-      client_secret: clientSecret,
-      redirect_uri: redirectUri,
-      grant_type: 'authorization_code',
-      code_verifier: codeVerifier
-    })
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code, codeVerifier, redirectUri })
   });
-  if (!tokenResponse.ok) throw new Error('google-oauth-token-exchange-failed');
-  const tokenBody = (await tokenResponse.json()) as { id_token?: string };
-  if (!tokenBody.id_token) throw new Error('google-oauth-missing-id-token');
+  if (!exchangeResponse.ok) throw new Error('google-oauth-token-exchange-failed');
+  const exchangeBody = (await exchangeResponse.json()) as { idToken?: string };
+  if (!exchangeBody.idToken) throw new Error('google-oauth-missing-id-token');
 
-  const { payload } = await jwtVerify(tokenBody.id_token, jwks, {
+  const { payload } = await jwtVerify(exchangeBody.idToken, jwks, {
     issuer: ['https://accounts.google.com', 'accounts.google.com'],
     audience: clientId
   });
@@ -120,6 +125,6 @@ export async function loginWithGoogle(): Promise<GoogleIdentity> {
     email: String(payload.email),
     displayName: typeof payload.name === 'string' && payload.name.trim() ? payload.name : String(payload.email),
     avatarImageUrl: typeof payload.picture === 'string' ? payload.picture : undefined,
-    idToken: tokenBody.id_token
+    idToken: exchangeBody.idToken
   };
 }

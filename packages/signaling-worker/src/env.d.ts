@@ -24,6 +24,9 @@ export interface Env {
    * this to authorize broadcasting "update available" to every connected client. Not tied to any
    * existing credential; generated fresh for this one purpose. */
   ADMIN_SECRET: string;
+  /** [2026-08-29] Moved here from packages/client/.env (see rest.ts's handleGoogleExchange) — the
+   * one place this secret should have ever lived. Never sent to any client, never in wrangler.jsonc. */
+  GOOGLE_OAUTH_CLIENT_SECRET: string;
 
   // Plain vars — see wrangler.jsonc "vars".
   ALLOW_UNAUTHENTICATED_ROOMS: string;
@@ -32,4 +35,12 @@ export interface Env {
   /** OAuth client ID (public — same value shipped in packages/client/.env), used as the expected
    * `aud` claim when verifying a Google id_token server-side. See src/googleAuth.ts. */
   GOOGLE_OAUTH_CLIENT_ID: string;
+
+  // Rate Limiting bindings (see wrangler.jsonc "ratelimits" and src/rateLimit.ts) — one per
+  // protected route/upgrade, distinct limits per sensitivity.
+  LOGIN_LIMITER: RateLimit;
+  TURN_LIMITER: RateLimit;
+  LOG_LIMITER: RateLimit;
+  WS_LIMITER: RateLimit;
+  OAUTH_EXCHANGE_LIMITER: RateLimit;
 }

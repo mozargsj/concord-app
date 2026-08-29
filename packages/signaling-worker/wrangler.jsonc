@@ -43,6 +43,18 @@
     "crons": ["0 6 * * *"]
   },
 
+  // [2026-08-29, achado de segurança] Rate Limiting binding nativo do Workers (GA desde set/2025,
+  // src/rateLimit.ts) — por IP (`CF-Connecting-IP`), período fixo de 60s (mínimo permitido além de
+  // 10s). `namespace_id` só precisa ser único dentro deste Worker, não é um recurso criado à parte
+  // (diferente de D1/R2/DO) — qualquer inteiro serve, escolhidos sequenciais aqui.
+  "ratelimits": [
+    { "name": "LOGIN_LIMITER", "namespace_id": "1001", "simple": { "limit": 10, "period": 60 } },
+    { "name": "TURN_LIMITER", "namespace_id": "1002", "simple": { "limit": 30, "period": 60 } },
+    { "name": "LOG_LIMITER", "namespace_id": "1003", "simple": { "limit": 20, "period": 60 } },
+    { "name": "WS_LIMITER", "namespace_id": "1004", "simple": { "limit": 20, "period": 60 } },
+    { "name": "OAUTH_EXCHANGE_LIMITER", "namespace_id": "1005", "simple": { "limit": 10, "period": 60 } }
+  ],
+
   // Secrets (never in this file — set via `wrangler secret put <NAME>`):
   //   SESSION_SECRET       — same HMAC key as packages/server's SESSION_SECRET, so a token issued
   //                          by either backend verifies against the other.
@@ -54,6 +66,10 @@
   //   ADMIN_SECRET          Shared secret for POST /admin/notify-update (CI/manual trigger of the
   //                          update-available broadcast, src/updatesBroadcaster.ts) — new secret,
   //                          not tied to any existing credential.
+  //   GOOGLE_OAUTH_CLIENT_SECRET — moved here from packages/client/.env (2026-08-29, auditoria de
+  //                          segurança) — token exchange with Google now happens server-side
+  //                          (rest.ts's handleGoogleExchange), so this never needs to leave the
+  //                          Worker again.
   "vars": {
     // Mirrors packages/server/.env — same "never true in production" rule.
     "ALLOW_UNAUTHENTICATED_ROOMS": "false",

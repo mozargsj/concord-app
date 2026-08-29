@@ -7,6 +7,8 @@ import type {
   CreateServerRequest,
   CreateServerResponse,
   CreateUserSoundRequest,
+  GoogleExchangeRequest,
+  GoogleExchangeResponse,
   JoinServerRequest,
   LoginRequest,
   LoginResponse,
@@ -39,6 +41,7 @@ import * as reportsRepo from './db/reports';
 import * as r2 from './r2';
 import { signSessionToken, verifySessionToken, signInviteToken, verifyInviteToken } from './auth';
 import { verifyGoogleIdToken } from './googleAuth';
+import { checkRateLimit, getClientIp, rateLimitResponse } from './rateLimit';
 import { logError } from './errorLog';
 
 const CORS_HEADERS = {
@@ -152,7 +155,12 @@ export async function handleRest(req: Request, env: Env): Promise<Response> {
       return handleServeUpdateFile(env, segments);
     }
     if (method === 'POST' && segments.length === 1 && segments[0] === 'users') {
+      if (!(await checkRateLimit(env.LOGIN_LIMITER, getClientIp(req)))) return rateLimitResponse();
       return await handleLogin(req, env);
+    }
+    if (method === 'POST' && segments.length === 3 && segments[0] === 'auth' && segments[1] === 'google' && segments[2] === 'exchange') {
+      if (!(await checkRateLimit(env.OAUTH_EXCHANGE_LIMITER, getClientIp(req)))) return rateLimitResponse();
+      return await handleGoogleExchange(req, env);
     }
     if (method === 'GET' && segments.length === 2 && segments[0] === 'users' && segments[1] === 'me') {
       return await handleGetMe(req, env);
@@ -194,9 +202,11 @@ export async function handleRest(req: Request, env: Env): Promise<Response> {
       return await handlePresignUpload(req, env);
     }
     if (method === 'GET' && segments.length === 2 && segments[0] === 'webrtc' && segments[1] === 'turn-credentials') {
+      if (!(await checkRateLimit(env.TURN_LIMITER, getClientIp(req)))) return rateLimitResponse();
       return await handleGetTurnCredentials(req, env);
     }
     if (method === 'POST' && segments.length === 2 && segments[0] === 'logs' && segments[1] === 'client-error') {
+      if (!(await checkRateLimit(env.LOG_LIMITER, getClientIp(req)))) return rateLimitResponse();
       return await handleClientErrorReport(req, env);
     }
     if (method === 'POST' && segments.length === 1 && segments[0] === 'reports') {
@@ -246,6 +256,41 @@ async function handleServeUpdateFile(env: Env, segments: string[]): Promise<Resp
     status: 200,
     headers: { 'Content-Type': contentType, 'Cache-Control': 'no-store', ...CORS_HEADERS }
   });
+}
+
+const GOOGLE_TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token';
+
+/**
+ * [2026-08-29, item ALTO da auditoria] Troca code+codeVerifier por tokens do Google — antes feita
+ * direto no Electron main process (main/googleAuth.ts) com `GOOGLE_OAUTH_CLIENT_SECRET` embutido
+ * no `.env` de todo instalador. Movido pra cá: o `client_secret` agora só existe como secret do
+ * Worker (`wrangler secret put`), nunca sai do servidor, nunca é distribuído. PKCE (`codeVerifier`)
+ * continua sendo o que realmente autentica essa troca — o client não precisa provar nada além
+ * disso, exatamente como já era antes, só que o passo HTTP final agora roda aqui.
+ */
+async function handleGoogleExchange(req: Request, env: Env): Promise<Response> {
+  const body = await readJsonBody<GoogleExchangeRequest>(req);
+  if (!body?.code || !body?.codeVerifier || !body?.redirectUri) return error(400, 'invalid-request');
+
+  const tokenResponse = await fetch(GOOGLE_TOKEN_ENDPOINT, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      code: body.code,
+      client_id: env.GOOGLE_OAUTH_CLIENT_ID,
+      client_secret: env.GOOGLE_OAUTH_CLIENT_SECRET,
+      redirect_uri: body.redirectUri,
+      grant_type: 'authorization_code',
+      code_verifier: body.codeVerifier
+    })
+  });
+  if (!tokenResponse.ok) return error(401, 'google-token-exchange-failed');
+
+  const tokenBody = (await tokenResponse.json()) as { id_token?: string };
+  if (!tokenBody.id_token) return error(401, 'google-token-exchange-failed');
+
+  const response: GoogleExchangeResponse = { idToken: tokenBody.id_token };
+  return json(200, response);
 }
 
 async function handleLogin(req: Request, env: Env): Promise<Response> {
