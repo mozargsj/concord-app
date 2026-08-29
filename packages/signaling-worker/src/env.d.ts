@@ -7,15 +7,14 @@ export interface Env {
    * updatesBroadcaster.ts. Not room-scoped, unrelated to ROOMS. */
   UPDATES: DurableObjectNamespace<UpdatesBroadcaster>;
   DB: D1Database;
-  /** Native R2 binding — used for direct in-Worker reads/writes (update artifacts, Google avatar
-   * import) that don't need a presigned URL handed to the client. See src/r2.ts for the separate
-   * aws4fetch-based presigned-URL path used for client uploads/downloads. */
+  /** Native R2 binding — used for direct in-Worker reads/writes (update artifacts). Presigned
+   * upload/download URLs for client-facing avatar/icon uploads (src/r2.ts, aws4fetch-based) were
+   * removed 2026-08-29 — /uploads/presign was dead code (avatar/server-icon are 100% P2P/cache
+   * local, decisions.md) that a security audit flagged as an unbounded R2 abuse/cost vector. */
   MEDIA: R2Bucket;
 
   // Secrets — set via `wrangler secret put <NAME>`, never in wrangler.jsonc.
   SESSION_SECRET: string;
-  R2_ACCESS_KEY_ID: string;
-  R2_SECRET_ACCESS_KEY: string;
   /** Cloudflare Realtime TURN key (Dashboard: Calls > TURN Keys) — optional, see rest.ts's
    * turn-credentials handler. Blank means the client falls back to STUN-only. */
   TURN_KEY_ID: string;
@@ -30,8 +29,6 @@ export interface Env {
 
   // Plain vars — see wrangler.jsonc "vars".
   ALLOW_UNAUTHENTICATED_ROOMS: string;
-  CF_ACCOUNT_ID: string;
-  R2_BUCKET_NAME: string;
   /** OAuth client ID (public — same value shipped in packages/client/.env), used as the expected
    * `aud` claim when verifying a Google id_token server-side. See src/googleAuth.ts. */
   GOOGLE_OAUTH_CLIENT_ID: string;

@@ -59,25 +59,12 @@ export async function create(env: DbEnv, params: { email: string; displayName: s
   return record;
 }
 
-export async function updateProfile(
-  env: DbEnv,
-  id: string,
-  patch: { displayName?: string; avatarKey?: string }
-): Promise<void> {
-  const sets: string[] = [];
-  const values: unknown[] = [];
-  if (patch.displayName !== undefined) {
-    sets.push('display_name = ?');
-    values.push(patch.displayName.trim().slice(0, 60));
-  }
-  if (patch.avatarKey !== undefined) {
-    sets.push('avatar_key = ?');
-    values.push(patch.avatarKey);
-  }
-  if (sets.length === 0) return;
-
-  values.push(id);
-  await env.DB.prepare(`UPDATE users SET ${sets.join(', ')} WHERE user_id = ?`)
-    .bind(...values)
+// [2026-08-29] avatarKey removido — /uploads/presign (única forma de existir um valor de verdade
+// pra isso) foi eliminado, achado de segurança da auditoria; avatar de usuário é 100% P2P/cache
+// local desde antes disso mesmo.
+export async function updateProfile(env: DbEnv, id: string, patch: { displayName?: string }): Promise<void> {
+  if (patch.displayName === undefined) return;
+  await env.DB.prepare('UPDATE users SET display_name = ? WHERE user_id = ?')
+    .bind(patch.displayName.trim().slice(0, 60), id)
     .run();
 }

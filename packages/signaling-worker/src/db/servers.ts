@@ -40,14 +40,17 @@ export async function findById(env: DbEnv, id: string): Promise<ServerRecord | n
  */
 export async function createOwned(
   env: DbEnv,
-  params: { name: string; iconKey: string | null; ownerUserId: string }
+  params: { name: string; ownerUserId: string }
 ): Promise<ServerRecord> {
   const trimmed = params.name.trim();
   const record: ServerRecord = {
     server_id: crypto.randomUUID(),
     name: trimmed,
     name_lower: trimmed.toLowerCase(),
-    icon_key: params.iconKey,
+    // [2026-08-29] Sempre null agora — /uploads/presign (única forma de existir um icon_key de
+    // verdade) foi removido, achado de segurança da auditoria (endpoint sem rate limit/tamanho
+    // máximo, e confirmado morto: ícone de servidor é 100% P2P/cache local desde antes disso).
+    icon_key: null,
     owner_user_id: params.ownerUserId,
     created_at: Date.now()
   };

@@ -58,9 +58,6 @@
   // Secrets (never in this file — set via `wrangler secret put <NAME>`):
   //   SESSION_SECRET       — same HMAC key as packages/server's SESSION_SECRET, so a token issued
   //                          by either backend verifies against the other.
-  //   R2_ACCESS_KEY_ID       R2 API token (R2 dashboard > Manage API tokens), NOT the general
-  //   R2_SECRET_ACCESS_KEY   Cloudflare account API token — used only for presigned URLs
-  //                          (src/r2.ts), separate from the native MEDIA binding above.
   //   TURN_KEY_ID           Cloudflare Realtime TURN key — optional, blank = client falls back
   //   TURN_API_TOKEN          to STUN-only (same as packages/server's TURN_KEY_ID/TURN_API_TOKEN).
   //   ADMIN_SECRET          Shared secret for POST /admin/notify-update (CI/manual trigger of the
@@ -70,11 +67,16 @@
   //                          segurança) — token exchange with Google now happens server-side
   //                          (rest.ts's handleGoogleExchange), so this never needs to leave the
   //                          Worker again.
+  //
+  // [2026-08-29] R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY (usados só por src/r2.ts, presigned
+  // upload/download pro client) e as vars CF_ACCOUNT_ID/R2_BUCKET_NAME (existiam só pra montar a
+  // URL do objeto em r2.ts) foram removidos daqui junto com o arquivo — /uploads/presign era
+  // achado de segurança (ALTO, sem rate limit/tamanho máximo) e código morto ao mesmo tempo
+  // (avatar/ícone de servidor são 100% P2P/cache local, nunca chamavam esse endpoint de verdade).
+  // Os dois secrets de R2 foram apagados de verdade (`wrangler secret delete`), não só daqui.
   "vars": {
     // Mirrors packages/server/.env — same "never true in production" rule.
     "ALLOW_UNAUTHENTICATED_ROOMS": "false",
-    "CF_ACCOUNT_ID": "9c4844fa6f64bcee94c3d8fbdd81919c",
-    "R2_BUCKET_NAME": "concord-media",
     // [2026-08-29] Público por natureza (OAuth client_id, não client_secret — vai no `aud` do
     // id_token) — mesmo valor de packages/client/.env, usado para validar login no servidor
     // (src/googleAuth.ts). Não é segredo, por isso var e não `wrangler secret put`.

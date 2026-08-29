@@ -9,8 +9,6 @@ import type {
   JoinServerRequest,
   LoginRequest,
   LoginResponse,
-  PresignUploadRequest,
-  PresignUploadResponse,
   RoomListResponse,
   RoomResponse,
   RoomSummary,
@@ -21,7 +19,6 @@ import type {
   UpdateRoomRequest,
   UpdateServerRequest,
   UpdateUserSoundRequest,
-  UploadKind,
   UserProfile,
   UserSoundListResponse,
   UserSoundResponse,
@@ -180,7 +177,7 @@ export async function updateProfile(patch: UpdateProfileRequest): Promise<UserPr
   return result.user;
 }
 
-export async function createServer(name: string, iconKey?: string): Promise<ServerSummary> {
+export async function createServer(name: string): Promise<ServerSummary> {
   if (TEST_MODE) {
     if (!testState.user) throw new ApiError('unauthorized', 401);
     if (testState.server) throw new ApiError('already-owns-server', 409);
@@ -188,7 +185,7 @@ export async function createServer(name: string, iconKey?: string): Promise<Serv
     testState.user = { ...testState.user, ownedServerId: testState.server.id };
     return testState.server;
   }
-  const body: CreateServerRequest = { name, iconKey };
+  const body: CreateServerRequest = { name };
   const result = await request<CreateServerResponse>('/servers', {
     method: 'POST',
     body: JSON.stringify(body)
@@ -292,19 +289,6 @@ export async function deleteRoom(serverId: string, roomId: string): Promise<void
     return;
   }
   await request(`/servers/${serverId}/rooms/${roomId}`, { method: 'DELETE' });
-}
-
-export async function presignUpload(
-  kind: UploadKind,
-  id: string,
-  contentType: string
-): Promise<PresignUploadResponse> {
-  if (TEST_MODE) return { uploadUrl: '', key: 'test-mode-key' };
-  const body: PresignUploadRequest = { kind, id, contentType };
-  return request<PresignUploadResponse>('/uploads/presign', {
-    method: 'POST',
-    body: JSON.stringify(body)
-  });
 }
 
 // Registry-only sync for the soundboard (decisions.md — seção 4): the audio bytes themselves

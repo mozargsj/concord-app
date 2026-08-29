@@ -12,8 +12,6 @@ import type {
   JoinServerRequest,
   LoginRequest,
   LoginResponse,
-  PresignUploadRequest,
-  PresignUploadResponse,
   RoomListResponse,
   RoomResponse,
   RoomSummary,
@@ -38,7 +36,6 @@ import * as rolesRepo from './db/roles';
 import * as authorizedUsersRepo from './db/authorizedUsers';
 import * as userSoundsRepo from './db/userSounds';
 import * as reportsRepo from './db/reports';
-import * as r2 from './r2';
 import { signSessionToken, verifySessionToken, signInviteToken, verifyInviteToken } from './auth';
 import { verifyGoogleIdToken } from './googleAuth';
 import { checkRateLimit, getClientIp, rateLimitResponse } from './rateLimit';
@@ -102,21 +99,25 @@ async function requireRank(
   return { userId };
 }
 
-async function toUserProfile(env: Env, record: usersRepo.UserRecord): Promise<UserProfile> {
+// [2026-08-29, achado de segurança — /uploads/presign removido] avatar_key/icon_key nunca são
+// mais graváveis com uma URL de verdade (nada gera mais presigned PUT), então resolvê-los sempre
+// devolveria uma GET presignada pra um objeto que nunca existiu no R2 — avatarUrl/iconUrl são
+// 100% P2P/cache local (decisions.md) desde antes disso, o backend nunca precisou servi-los.
+function toUserProfile(record: usersRepo.UserRecord): UserProfile {
   return {
     id: record.user_id,
     email: record.email,
     displayName: record.display_name,
-    avatarUrl: record.avatar_key ? await r2.createPresignedGetUrl(env, record.avatar_key) : null,
+    avatarUrl: null,
     ownedServerId: record.owned_server_id
   };
 }
 
-async function toServerSummary(env: Env, record: serversRepo.ServerRecord): Promise<ServerSummary> {
+function toServerSummary(record: serversRepo.ServerRecord): ServerSummary {
   return {
     id: record.server_id,
     name: record.name,
-    iconUrl: record.icon_key ? await r2.createPresignedGetUrl(env, record.icon_key) : null,
+    iconUrl: null,
     ownerUserId: record.owner_user_id
   };
 }
@@ -200,9 +201,6 @@ export async function handleRest(req: Request, env: Env): Promise<Response> {
     }
     if (method === 'DELETE' && segments.length === 4 && segments[0] === 'servers' && segments[2] === 'rooms') {
       return await handleDeleteRoom(req, env, segments[1], segments[3]);
-    }
-    if (method === 'POST' && segments.length === 2 && segments[0] === 'uploads' && segments[1] === 'presign') {
-      return await handlePresignUpload(req, env);
     }
     if (method === 'GET' && segments.length === 2 && segments[0] === 'webrtc' && segments[1] === 'turn-credentials') {
       if (!(await checkRateLimit(env.TURN_LIMITER, getClientIp(req)))) return rateLimitResponse();
@@ -331,7 +329,7 @@ async function handleLogin(req: Request, env: Env): Promise<Response> {
   // de propósito — o campo continua existindo no tipo compartilhado só por compatibilidade.
 
   const sessionToken = await signSessionToken(record.user_id, env.SESSION_SECRET);
-  const response: LoginResponse = { user: await toUserProfile(env, record), sessionToken };
+  const response: LoginResponse = { user: toUserProfile(record), sessionToken };
   return json(200, response);
 }
 
@@ -341,7 +339,7 @@ async function handleGetMe(req: Request, env: Env): Promise<Response> {
 
   const record = await usersRepo.findById(env, userId);
   if (!record) return error(404, 'user-not-found');
-  return json(200, { user: await toUserProfile(env, record) });
+  return json(200, { user: toUserProfile(record) });
 }
 
 async function handleUpdateMe(req: Request, env: Env): Promise<Response> {
@@ -352,12 +350,10 @@ async function handleUpdateMe(req: Request, env: Env): Promise<Response> {
   if (!existing) return error(404, 'user-not-found');
 
   const body = await readJsonBody<UpdateProfileRequest>(req);
-  const avatarKey = body?.avatarKey || undefined;
-  if (avatarKey && !avatarKey.startsWith(`avatars/${userId}-`)) return error(403, 'forbidden');
-  await usersRepo.updateProfile(env, userId, { displayName: body?.displayName?.trim() || undefined, avatarKey });
+  await usersRepo.updateProfile(env, userId, { displayName: body?.displayName?.trim() || undefined });
 
   const updated = await usersRepo.findById(env, userId);
-  return json(200, { user: await toUserProfile(env, updated!) });
+  return json(200, { user: toUserProfile(updated!) });
 }
 
 async function handleListMyServers(req: Request, env: Env): Promise<Response> {
@@ -366,9 +362,9 @@ async function handleListMyServers(req: Request, env: Env): Promise<Response> {
 
   const serverIds = await authorizedUsersRepo.listServerIdsForUser(env, userId);
   const records = await Promise.all(serverIds.map((id) => serversRepo.findById(env, id)));
-  const servers = await Promise.all(
-    records.filter((record): record is serversRepo.ServerRecord => record !== null).map((r) => toServerSummary(env, r))
-  );
+  const servers = records
+    .filter((record): record is serversRepo.ServerRecord => record !== null)
+    .map((r) => toServerSummary(r));
   const response: ServerListResponse = { servers };
   return json(200, response);
 }
@@ -380,8 +376,6 @@ async function handleCreateServer(req: Request, env: Env): Promise<Response> {
   const body = await readJsonBody<CreateServerRequest>(req);
   const name = body?.name?.trim();
   if (!name) return error(400, 'name-required');
-  const iconKey = body?.iconKey ?? null;
-  if (iconKey && !iconKey.startsWith(`servers/${userId}-`)) return error(403, 'forbidden');
 
   const owner = await usersRepo.findById(env, userId);
   if (!owner) return error(404, 'user-not-found');
@@ -391,7 +385,7 @@ async function handleCreateServer(req: Request, env: Env): Promise<Response> {
 
   let record: serversRepo.ServerRecord;
   try {
-    record = await serversRepo.createOwned(env, { name, iconKey, ownerUserId: userId });
+    record = await serversRepo.createOwned(env, { name, ownerUserId: userId });
   } catch (err) {
     if (err instanceof serversRepo.ServerCreateConflictError) return error(409, err.reason);
     throw err;
@@ -399,7 +393,7 @@ async function handleCreateServer(req: Request, env: Env): Promise<Response> {
   await authorizedUsersRepo.authorize(env, record.server_id, userId);
   await rolesRepo.setRank(env, record.server_id, userId, Role.Dono);
 
-  const response: CreateServerResponse = { server: await toServerSummary(env, record) };
+  const response: CreateServerResponse = { server: toServerSummary(record) };
   return json(201, response);
 }
 
@@ -423,7 +417,7 @@ async function handleJoinServer(req: Request, env: Env): Promise<Response> {
     await rolesRepo.setRank(env, serverId, userId, Role.Usuario);
   }
 
-  const response: CreateServerResponse = { server: await toServerSummary(env, server) };
+  const response: CreateServerResponse = { server: toServerSummary(server) };
   return json(200, response);
 }
 
@@ -437,7 +431,7 @@ async function handleGetServer(req: Request, env: Env, serverId: string): Promis
   const myRole = await getEffectiveRank(env, serverId, userId, record.owner_user_id);
   if (myRole === null) return error(403, 'forbidden');
 
-  const response: ServerDetailsResponse = { server: await toServerSummary(env, record), myRole };
+  const response: ServerDetailsResponse = { server: toServerSummary(record), myRole };
   return json(200, response);
 }
 
@@ -458,7 +452,7 @@ async function handleUpdateServer(req: Request, env: Env, serverId: string): Pro
 
   await serversRepo.updateName(env, serverId, name);
   const updated = await serversRepo.findById(env, serverId);
-  const response: CreateServerResponse = { server: await toServerSummary(env, updated!) };
+  const response: CreateServerResponse = { server: toServerSummary(updated!) };
   return json(200, response);
 }
 
@@ -638,21 +632,6 @@ async function handleCreateReport(req: Request, env: Env): Promise<Response> {
 
   await reportsRepo.create(env, { userId, type: body.type, message, serverId: body.serverId });
   return json(200, {});
-}
-
-async function handlePresignUpload(req: Request, env: Env): Promise<Response> {
-  const userId = await requireSession(req, env);
-  if (!userId) return error(401, 'unauthorized');
-
-  const body = await readJsonBody<PresignUploadRequest>(req);
-  if (!body?.kind || !body.id || !body.contentType) return error(400, 'invalid-request');
-  if (body.id !== userId) return error(403, 'forbidden');
-
-  const prefix = body.kind === 'user-avatar' ? 'avatars' : 'servers';
-  const key = `${prefix}/${body.id}-${Date.now()}`;
-  const uploadUrl = await r2.createPresignedUploadUrl(env, key, body.contentType);
-  const response: PresignUploadResponse = { uploadUrl, key };
-  return json(200, response);
 }
 
 const TURN_CREDENTIAL_TTL_SECONDS = 4 * 60 * 60;

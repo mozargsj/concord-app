@@ -44,14 +44,10 @@ export interface GoogleExchangeResponse {
 
 export interface UpdateProfileRequest {
   displayName?: string;
-  /** S3 object key returned by /uploads/presign, not a URL — the server resolves it to a signed GET URL on read. */
-  avatarKey?: string;
 }
 
 export interface CreateServerRequest {
   name: string;
-  /** S3 object key returned by /uploads/presign, not a URL. */
-  iconKey?: string;
 }
 
 export interface CreateServerResponse {
@@ -94,19 +90,6 @@ export interface CreateInviteResponse {
 
 export interface JoinServerRequest {
   code: string;
-}
-
-export type UploadKind = 'user-avatar' | 'server-icon';
-
-export interface PresignUploadRequest {
-  kind: UploadKind;
-  id: string;
-  contentType: string;
-}
-
-export interface PresignUploadResponse {
-  uploadUrl: string;
-  key: string;
 }
 
 /** Registry entry for one of the caller's own soundboard sounds — metadata only, the audio
