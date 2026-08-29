@@ -1,4 +1,4 @@
-import { VolumeX } from 'lucide-react';
+import { User, VolumeX } from 'lucide-react';
 import '../styles/ParticipantVolumeMenu.css';
 
 interface ParticipantVolumeMenuProps {
@@ -9,11 +9,12 @@ interface ParticipantVolumeMenuProps {
   isMuted: boolean;
   onVolumeChange: (value: number) => void;
   onToggleMute: () => void;
+  onViewProfile: () => void;
   onClose: () => void;
 }
 
 const ESTIMATED_WIDTH = 220;
-const ESTIMATED_HEIGHT = 130;
+const ESTIMATED_HEIGHT = 170;
 
 /** Right-click on a participant tile (RoomView) — local-only volume/mute for this one listener,
  * same premise as devicePreferences.ts: never touches the mesh/signaling, never affects what
@@ -27,6 +28,7 @@ export default function ParticipantVolumeMenu({
   isMuted,
   onVolumeChange,
   onToggleMute,
+  onViewProfile,
   onClose
 }: ParticipantVolumeMenuProps) {
   const left = Math.min(x, window.innerWidth - ESTIMATED_WIDTH - 8);
@@ -64,6 +66,10 @@ export default function ParticipantVolumeMenu({
         >
           <VolumeX size={14} />
           {isMuted ? 'Desmutar pra mim' : 'Mutar pra mim'}
+        </button>
+        <button type="button" className="participant-volume-menu__view-profile" onClick={onViewProfile}>
+          <User size={14} />
+          Ver perfil
         </button>
       </div>
     </>

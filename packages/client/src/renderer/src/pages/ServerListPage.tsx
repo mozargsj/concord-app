@@ -11,6 +11,7 @@ import ScreenSharePicker from '../components/ScreenSharePicker';
 import LoadingSpinner from '../components/LoadingSpinner';
 import NoInternetScreen from '../components/NoInternetScreen';
 import ParticipantVolumeMenu from '../components/ParticipantVolumeMenu';
+import ParticipantProfileModal from '../components/ParticipantProfileModal';
 import ProfilePage from './ProfilePage';
 import {
   ApiError,
@@ -101,6 +102,15 @@ export default function ServerListPage({
   // Lifted here (not local to RoomView) so RoomView and RoomSidebar — siblings — share one live
   // copy of per-peer volume/mute state instead of only agreeing via localStorage on next mount.
   const peerVolume = usePeerVolumeControl();
+
+  // Lifted here (not local to RoomSidebar/RoomView) so the "Ver perfil" entry in
+  // ParticipantVolumeMenu — rendered at this level — can open it too, without needing to know
+  // which of the two sibling components the right-click originated from.
+  const [viewingProfile, setViewingProfile] = useState<{
+    userId: string;
+    name: string;
+    avatarUrl: string | null;
+  } | null>(null);
 
   // Just enough of selectedServer for useRoomConnection to know who to ask for the room's
   // server icon (its owner) and what to answer with if that owner is me — memoized so the
@@ -723,13 +733,13 @@ export default function ServerListPage({
         onOpenVolumeMenu={peerVolume.openVolumeMenu}
         activeVolumeMenuUserId={peerVolume.volumeMenu?.userId ?? null}
         isPeerMutedByMe={(userId) => peerVolume.getEffectivePeerSettings(userId).muted}
+        onViewProfile={(userId, name, avatarUrl) => setViewingProfile({ userId, name, avatarUrl })}
       />
 
       <div className="server-list-page__main">
         <TopBar roomName={selectedRoom?.name ?? null} />
         <RoomView
           room={selectedRoom}
-          serverId={selectedServer.id}
           isMicMuted={isMicMuted}
           onToggleMic={handleToggleMic}
           onSelectMic={switchMicDevice}
@@ -752,6 +762,7 @@ export default function ServerListPage({
           onOpenVolumeMenu={peerVolume.openVolumeMenu}
           activeVolumeMenuUserId={peerVolume.volumeMenu?.userId ?? null}
           isPeerMutedByMe={(userId) => peerVolume.getEffectivePeerSettings(userId).muted}
+          onViewProfile={(userId, name, avatarUrl) => setViewingProfile({ userId, name, avatarUrl })}
         />
       </div>
 
@@ -800,7 +811,27 @@ export default function ServerListPage({
             const isMuted = peerVolume.handleTogglePeerMute(peerVolume.volumeMenu!.userId);
             sendMuteStatus(peerVolume.volumeMenu!.peerId, isMuted);
           }}
+          onViewProfile={() => {
+            const targetUserId = peerVolume.volumeMenu!.userId;
+            const peer = peers.find((p) => p.userId === targetUserId);
+            setViewingProfile({
+              userId: targetUserId,
+              name: peerVolume.volumeMenu!.name,
+              avatarUrl: peer?.avatarUrl ?? null
+            });
+            peerVolume.closeVolumeMenu();
+          }}
           onClose={peerVolume.closeVolumeMenu}
+        />
+      )}
+
+      {viewingProfile && (
+        <ParticipantProfileModal
+          serverId={selectedServer.id}
+          userId={viewingProfile.userId}
+          fallbackName={viewingProfile.name}
+          avatarUrl={viewingProfile.avatarUrl}
+          onClose={() => setViewingProfile(null)}
         />
       )}
     </div>

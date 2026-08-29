@@ -71,3 +71,21 @@
   background: rgba(242, 63, 66, 0.15);
   color: var(--color-danger);
 }
+
+.participant-volume-menu__view-profile {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  background: transparent;
+  color: var(--color-text-secondary);
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  text-align: left;
+}
+
+.participant-volume-menu__view-profile:hover {
+  background: var(--color-bg-elevated-hover);
+  color: var(--color-text-primary);
+}

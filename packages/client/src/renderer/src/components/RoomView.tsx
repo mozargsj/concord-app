@@ -7,7 +7,6 @@ import MediaStreamVideo from './MediaStreamVideo';
 import ScreenShareTile from './ScreenShareTile';
 import HostStarBadge from './HostStarBadge';
 import LiveBadge from './LiveBadge';
-import ParticipantProfileModal from './ParticipantProfileModal';
 import { getAvatarColor } from '../lib/avatarColor';
 import { getGridContainerStyle, getGridItemStyle } from '../lib/participantGrid';
 import { playCameraStart, playCameraStop, playTransmissionEnter, playTransmissionExit } from '../lib/soundEffects';
@@ -15,7 +14,6 @@ import '../styles/RoomView.css';
 
 interface RoomViewProps {
   room: RoomSummary | null;
-  serverId: string;
   isMicMuted: boolean;
   onToggleMic: () => void;
   onSelectMic: (deviceId: string) => void;
@@ -42,6 +40,7 @@ interface RoomViewProps {
   getPeerVolume: (userId: string | null) => number | undefined;
   onOpenVolumeMenu: (x: number, y: number, peerId: string, userId: string, name: string) => void;
   isPeerMutedByMe: (userId: string) => boolean;
+  onViewProfile: (userId: string, name: string, avatarUrl: string | null) => void;
   // userId of whoever's volume popup is currently open (shared with RoomSidebar) — drives the
   // "clicked" highlight so the action has visible feedback beyond the popup itself.
   activeVolumeMenuUserId: string | null;
@@ -70,7 +69,6 @@ type Tile =
 
 export default function RoomView({
   room,
-  serverId,
   isMicMuted,
   onToggleMic,
   onSelectMic,
@@ -92,7 +90,8 @@ export default function RoomView({
   getPeerVolume,
   onOpenVolumeMenu,
   activeVolumeMenuUserId,
-  isPeerMutedByMe
+  isPeerMutedByMe,
+  onViewProfile
 }: RoomViewProps) {
   const [focusedTileKey, setFocusedTileKey] = useState<string | null>(null);
   // A remote peer's camera stays blurred/gated (same "clique para visualizar" idea as a screen
@@ -101,9 +100,6 @@ export default function RoomView({
   // (showCamera below), matching ScreenShareTile's isOwnPreview exemption. Stays viewed for the
   // rest of the session once clicked — no reset button for this one, unlike the screen tile's "×".
   const [viewedCameraPeerIds, setViewedCameraPeerIds] = useState<Set<string>>(new Set());
-  const [viewingProfile, setViewingProfile] = useState<{ userId: string; name: string; avatarUrl: string | null } | null>(
-    null
-  );
 
   const peerMediaRef = useRef<Map<string, { hasVideo: boolean; hasScreen: boolean }>>(new Map());
 
@@ -355,12 +351,7 @@ export default function RoomView({
                   : // No video to focus (just the avatar circle) — click views the real profile
                     // instead, same trigger point as RoomSidebar's participant row.
                     isVolumeTarget && !isFocusable
-                    ? () =>
-                        setViewingProfile({
-                          userId: tile.userId!,
-                          name: tile.name,
-                          avatarUrl: tile.kind === 'participant' ? tile.avatarUrl : null
-                        })
+                    ? () => onViewProfile(tile.userId!, tile.name, tile.kind === 'participant' ? tile.avatarUrl : null)
                     : undefined
               }
               onContextMenu={
@@ -432,15 +423,6 @@ export default function RoomView({
         onExitFocus={() => setFocusedTileKey(null)}
       />
 
-      {viewingProfile && (
-        <ParticipantProfileModal
-          serverId={serverId}
-          userId={viewingProfile.userId}
-          fallbackName={viewingProfile.name}
-          avatarUrl={viewingProfile.avatarUrl}
-          onClose={() => setViewingProfile(null)}
-        />
-      )}
     </div>
   );
 }

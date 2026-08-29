@@ -8,7 +8,6 @@ import ConfirmModal from './ConfirmModal';
 import SoundboardPopover from './SoundboardPopover';
 import SoundboardManagerModal from './SoundboardManagerModal';
 import ConfirmAddSoundModal from './ConfirmAddSoundModal';
-import ParticipantProfileModal from './ParticipantProfileModal';
 import Tooltip from './Tooltip';
 import {
   AudioLines,
@@ -96,6 +95,7 @@ interface RoomSidebarProps {
    * someone from either place stays in sync live, not just after a remount. */
   onOpenVolumeMenu: (x: number, y: number, peerId: string, userId: string, name: string) => void;
   isPeerMutedByMe: (userId: string) => boolean;
+  onViewProfile: (userId: string, name: string, avatarUrl: string | null) => void;
   /** userId of whoever's volume popup is currently open — drives the "clicked" highlight so the
    * right-click action has visible feedback beyond the popup itself. */
   activeVolumeMenuUserId: string | null;
@@ -138,16 +138,14 @@ export default function RoomSidebar({
   soundDownloadTick,
   onOpenVolumeMenu,
   activeVolumeMenuUserId,
-  isPeerMutedByMe
+  isPeerMutedByMe,
+  onViewProfile
 }: RoomSidebarProps) {
   const [isCreatingRoom, setIsCreatingRoom] = useState(false);
   const [newRoomName, setNewRoomName] = useState('');
   const [editingRoomId, setEditingRoomId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState('');
   const [roomPendingDelete, setRoomPendingDelete] = useState<RoomSummary | null>(null);
-  const [viewingProfile, setViewingProfile] = useState<{ userId: string; name: string; avatarUrl: string | null } | null>(
-    null
-  );
   const [soundboardPopover, setSoundboardPopover] = useState<SoundboardPopoverState | null>(null);
   const [isSoundboardManagerOpen, setIsSoundboardManagerOpen] = useState(false);
   const [ownSounds, setOwnSounds] = useState<OwnSound[]>([]);
@@ -557,12 +555,7 @@ export default function RoomSidebar({
                       }
                       onClick={
                         isVolumeTarget
-                          ? () =>
-                              setViewingProfile({
-                                userId: participant.userId!,
-                                name: participant.name,
-                                avatarUrl: participant.avatarUrl
-                              })
+                          ? () => onViewProfile(participant.userId!, participant.name, participant.avatarUrl)
                           : undefined
                       }
                       onContextMenu={
@@ -728,15 +721,6 @@ export default function RoomSidebar({
         />
       )}
 
-      {viewingProfile && (
-        <ParticipantProfileModal
-          serverId={server.id}
-          userId={viewingProfile.userId}
-          fallbackName={viewingProfile.name}
-          avatarUrl={viewingProfile.avatarUrl}
-          onClose={() => setViewingProfile(null)}
-        />
-      )}
 
       {soundboardPopover?.mode === 'play' && (
         <SoundboardPopover
