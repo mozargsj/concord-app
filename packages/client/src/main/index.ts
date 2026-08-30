@@ -23,6 +23,12 @@ const sessionFilePath = () => path.join(app.getPath('userData'), 'session.enc');
 const imageCacheDir = () => path.join(app.getPath('userData'), 'imageCache');
 const soundCacheDir = () => path.join(app.getPath('userData'), 'soundCache');
 const soundTempCacheDir = () => path.join(app.getPath('userData'), 'soundTempCache');
+// Encrypted local copy of a room's live chat (decisions.md — bot de dados/chat de texto),
+// mirroring session.enc's safeStorage pattern (OS-level encryption at rest, in case someone
+// writes something sensitive into a room's chat). One file per room, deleted the moment this
+// user leaves that room — never a permanent log, just what's needed to backfill a late joiner
+// and survive this client's own reload while still in the room.
+const chatHistoryDir = () => path.join(app.getPath('userData'), 'chatHistory');
 
 interface SoundMetaFile {
   id: string;
@@ -409,6 +415,30 @@ ipcMain.handle('session:load', async () => {
 
 ipcMain.handle('session:clear', async () => {
   await unlink(sessionFilePath()).catch(() => {});
+});
+
+ipcMain.handle('chat-history:save', async (_event, roomId: string, messages: unknown) => {
+  if (!safeStorage.isEncryptionAvailable()) return;
+  const dir = chatHistoryDir();
+  await mkdir(dir, { recursive: true });
+  const safeRoomId = sanitizeCacheKey(roomId);
+  await writeFile(path.join(dir, `${safeRoomId}.enc`), safeStorage.encryptString(JSON.stringify(messages)));
+});
+
+ipcMain.handle('chat-history:load', async (_event, roomId: string) => {
+  if (!safeStorage.isEncryptionAvailable()) return [];
+  try {
+    const safeRoomId = sanitizeCacheKey(roomId);
+    const encrypted = await readFile(path.join(chatHistoryDir(), `${safeRoomId}.enc`));
+    return JSON.parse(safeStorage.decryptString(encrypted));
+  } catch {
+    return [];
+  }
+});
+
+ipcMain.handle('chat-history:clear', async (_event, roomId: string) => {
+  const safeRoomId = sanitizeCacheKey(roomId);
+  await unlink(path.join(chatHistoryDir(), `${safeRoomId}.enc`)).catch(() => {});
 });
 
 ipcMain.handle('screen:get-sources', async () => {

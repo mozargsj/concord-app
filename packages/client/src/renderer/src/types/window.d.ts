@@ -75,6 +75,29 @@ export interface CachedTempSound extends TempSoundMeta {
   data: ArrayBuffer;
 }
 
+export interface StoredDiceRoll {
+  raw: string;
+  count: number;
+  sides: number;
+  rolls: number[];
+  operation: string;
+  operand: number | null;
+  modifier: number | null;
+  total: number;
+}
+
+/** Shape saved to/loaded from the encrypted per-room chat file (decisions.md — bot de dados/chat
+ * de texto) — structurally the same as webrtcMesh.ts's ChatMessage, redeclared here since preload
+ * can't import renderer-only modules (same reasoning as CachedSound/SoundMeta above). */
+export interface StoredChatMessage {
+  id: string;
+  userId: string;
+  displayName: string;
+  text: string;
+  sentAt: number;
+  roll: StoredDiceRoll | null;
+}
+
 declare global {
   interface Window {
     concord: {
@@ -124,6 +147,11 @@ declare global {
         save: (token: string) => Promise<void>;
         load: () => Promise<string | null>;
         clear: () => Promise<void>;
+      };
+      chatHistory: {
+        save: (roomId: string, messages: StoredChatMessage[]) => Promise<void>;
+        load: (roomId: string) => Promise<StoredChatMessage[]>;
+        clear: (roomId: string) => Promise<void>;
       };
       app: {
         onBeforeQuit: (callback: () => void) => () => void;

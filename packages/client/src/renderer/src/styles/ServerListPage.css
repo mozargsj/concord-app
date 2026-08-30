@@ -11,6 +11,12 @@
   background: var(--color-bg-main);
 }
 
+.server-list-page__content {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
 .server-list-page--loading {
   background: var(--color-bg-main);
 }

@@ -5,6 +5,7 @@ import ServerRail from '../components/ServerRail';
 import RoomSidebar from '../components/RoomSidebar';
 import TopBar from '../components/TopBar';
 import RoomView from '../components/RoomView';
+import RoomChat from '../components/RoomChat';
 import ServerActionsModal from '../components/ServerActionsModal';
 import InviteCodeModal from '../components/InviteCodeModal';
 import ScreenSharePicker from '../components/ScreenSharePicker';
@@ -159,6 +160,12 @@ export default function ServerListPage({
   // download happens deep inside the mesh, not in anything RoomSidebar itself calls.
   const [soundDownloadTick, setSoundDownloadTick] = useState(0);
 
+  // Per-room text chat panel (RoomChat.tsx) — toggled by TopBar's existing "Conversa por texto"
+  // icon, which never did anything before this. Only rendered while a room is actually joined
+  // (see the JSX below); left true across a room switch is harmless since chatMessages itself
+  // already resets per room (useRoomConnection).
+  const [isChatOpen, setIsChatOpen] = useState(false);
+
   const {
     connectionStatus,
     selfPeerId,
@@ -176,7 +183,10 @@ export default function ServerListPage({
     sendMuteStatus,
     playSoundboardClip,
     requestPeerSoundList,
-    requestPeerSound
+    requestPeerSound,
+    chatMessages,
+    sendChatMessage,
+    rerollChatMessage
   } = useRoomConnection(
     selectedRoomId,
     currentUser.displayName,
@@ -806,35 +816,49 @@ export default function ServerListPage({
       />
 
       <div className="server-list-page__main">
-        <TopBar roomName={selectedRoom?.name ?? null} />
-        <RoomView
-          room={selectedRoom}
-          isMicMuted={isMicMuted}
-          onToggleMic={handleToggleMic}
-          onSelectMic={switchMicDevice}
-          isSpeaking={selfIsSpeaking}
-          showMutedSpeakingHint={isMicMuted && selfIsSpeaking}
-          onLeave={handleLeave}
-          isDeafened={isDeafened}
-          selfPeerId={selfPeerId}
-          hostPeerId={hostPeerId}
-          peers={peers}
-          currentUserDisplayName={currentUser.displayName}
-          currentUserAvatarUrl={currentUser.avatarUrl}
-          cameraStream={cameraStream}
-          screenStream={screenStream}
-          mediaError={mediaError}
-          onToggleCamera={handleToggleCamera}
-          onSelectCamera={handleSelectCamera}
-          onToggleScreenShare={handleToggleScreenShare}
-          isSharingMusic={isMusicSharing}
-          onToggleMusicShare={handleToggleMusicShare}
-          getPeerVolume={peerVolume.getEffectiveVolume}
-          onOpenVolumeMenu={peerVolume.openVolumeMenu}
-          activeVolumeMenuUserId={peerVolume.volumeMenu?.volumeKey ?? null}
-          isPeerMutedByMe={(volumeKey) => peerVolume.getEffectivePeerSettings(volumeKey).muted}
-          onViewProfile={(userId, name, avatarUrl) => setViewingProfile({ userId, name, avatarUrl })}
+        <TopBar
+          roomName={selectedRoom?.name ?? null}
+          isChatOpen={isChatOpen}
+          onToggleChat={() => setIsChatOpen((prev) => !prev)}
         />
+        <div className="server-list-page__content">
+          <RoomView
+            room={selectedRoom}
+            isMicMuted={isMicMuted}
+            onToggleMic={handleToggleMic}
+            onSelectMic={switchMicDevice}
+            isSpeaking={selfIsSpeaking}
+            showMutedSpeakingHint={isMicMuted && selfIsSpeaking}
+            onLeave={handleLeave}
+            isDeafened={isDeafened}
+            selfPeerId={selfPeerId}
+            hostPeerId={hostPeerId}
+            peers={peers}
+            currentUserDisplayName={currentUser.displayName}
+            currentUserAvatarUrl={currentUser.avatarUrl}
+            cameraStream={cameraStream}
+            screenStream={screenStream}
+            mediaError={mediaError}
+            onToggleCamera={handleToggleCamera}
+            onSelectCamera={handleSelectCamera}
+            onToggleScreenShare={handleToggleScreenShare}
+            isSharingMusic={isMusicSharing}
+            onToggleMusicShare={handleToggleMusicShare}
+            getPeerVolume={peerVolume.getEffectiveVolume}
+            onOpenVolumeMenu={peerVolume.openVolumeMenu}
+            activeVolumeMenuUserId={peerVolume.volumeMenu?.volumeKey ?? null}
+            isPeerMutedByMe={(volumeKey) => peerVolume.getEffectivePeerSettings(volumeKey).muted}
+            onViewProfile={(userId, name, avatarUrl) => setViewingProfile({ userId, name, avatarUrl })}
+          />
+          {selectedRoom && isChatOpen && (
+            <RoomChat
+              messages={chatMessages}
+              onSend={sendChatMessage}
+              onReroll={rerollChatMessage}
+              currentUserId={currentUser.id}
+            />
+          )}
+        </div>
       </div>
 
       {isProfileOpen && (

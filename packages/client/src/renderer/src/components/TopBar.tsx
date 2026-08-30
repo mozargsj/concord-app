@@ -3,9 +3,11 @@ import '../styles/TopBar.css';
 
 interface TopBarProps {
   roomName: string | null;
+  isChatOpen: boolean;
+  onToggleChat: () => void;
 }
 
-export default function TopBar({ roomName }: TopBarProps) {
+export default function TopBar({ roomName, isChatOpen, onToggleChat }: TopBarProps) {
   return (
     <header className="top-bar">
       <div className="top-bar__room">
@@ -14,7 +16,11 @@ export default function TopBar({ roomName }: TopBarProps) {
       </div>
 
       {roomName && (
-        <button className="top-bar__icon-button" title="Conversa por texto">
+        <button
+          className={'top-bar__icon-button' + (isChatOpen ? ' top-bar__icon-button--active' : '')}
+          title="Conversa por texto"
+          onClick={onToggleChat}
+        >
           <MessageSquare size={18} />
         </button>
       )}

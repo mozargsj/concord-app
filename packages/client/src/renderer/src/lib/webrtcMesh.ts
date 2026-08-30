@@ -1,5 +1,6 @@
 import type { ClientToServerMessage } from '@concord/shared';
 import type { ImageCacheKind } from './imageCache';
+import type { DiceRollResult } from './diceRoller';
 
 // STUN only, no TURN — explicit project decision (decisions.md §1), revisited only
 // with real ICE-failure data from the alpha phase.
@@ -195,6 +196,46 @@ interface IncomingSoundTransfer {
   received: number;
 }
 
+/** One chat message, per-room, transmitted over the 'chat' data channel — never persisted
+ * server-side (decisions.md — mesmo padrão "descoberta é só ao vivo" do soundboard). `roll` is
+ * only set when `text` was recognized as a dice command: the sender's own client already rolled
+ * it (diceRoller.ts, Math.random) before broadcasting, so every peer renders the exact same
+ * numbers instead of each independently re-rolling the same command. */
+export interface ChatMessage {
+  id: string;
+  userId: string;
+  displayName: string;
+  text: string;
+  sentAt: number;
+  roll: DiceRollResult | null;
+}
+
+interface ChatMessageFrame {
+  t: 'message';
+  message: ChatMessage;
+}
+// Backfill for a peer who just joined mid-session (or reconnected) — decisions.md: whoever's
+// already in the room answers with whatever chat they have locally (their own encrypted disk
+// copy, capped the same as the live in-memory list), so a late joiner isn't stuck seeing only
+// messages sent after they arrived.
+interface ChatHistoryRequestFrame {
+  t: 'history-req';
+}
+interface ChatHistoryFrame {
+  t: 'history';
+  messages: ChatMessage[];
+}
+// "Re-rolar" (RoomChat.tsx) — replaces an existing message's roll in place, everywhere, instead
+// of posting a new one (pedido do Mozar). Only `roll` changes; id/userId/displayName/text/sentAt
+// stay exactly as the original message had them, so the card keeps its position and its "quem
+// rolou" attribution even when someone other than the original roller clicks the button.
+interface ChatEditFrame {
+  t: 'edit';
+  id: string;
+  roll: ChatMessage['roll'];
+}
+type ChatFrame = ChatMessageFrame | ChatHistoryRequestFrame | ChatHistoryFrame | ChatEditFrame;
+
 interface PeerConnectionEntry {
   peerId: string;
   pc: RTCPeerConnection;
@@ -221,6 +262,17 @@ interface PeerConnectionEntry {
   // Same rationale as imageSendQueue — a sound-list answer and a sound-bytes answer (or two
   // bytes answers back to back) must not interleave their sends on the one shared channel.
   soundSendQueue: Promise<void>;
+  chatChannel: RTCDataChannel | null;
+  // Messages composed (and already rolled, if a dice command) before this peer's chat channel
+  // finished opening — flushed in order the moment it does, same pattern as pendingSoundRequests.
+  pendingChatMessages: ChatMessage[];
+  // Same buffering rationale, for requestChatHistory — set when asked to request history before
+  // the channel has opened yet, flushed (as a single 'history-req' send) the moment it does.
+  pendingChatHistoryRequest: boolean;
+  // Same buffering rationale, for editChatMessage ("Re-rolar") — vanishingly unlikely in practice
+  // (a reroll only ever targets a message that already made it across, so the channel's almost
+  // certainly open by then), kept anyway for consistency with every other send path here.
+  pendingChatEdits: ChatEditFrame[];
   // Serializes every SDP-touching operation on this connection — outgoing renegotiate(), and
   // incoming handleOffer()/handleAnswer() — onto one chain, same shape as imageSendQueue/
   // soundSendQueue above. Before this existed, nothing stopped e.g. a local track-change
@@ -290,6 +342,20 @@ interface MeshManagerOptions {
   /** A requested sound finished downloading from a peer — caller stashes it in the temporary
    * download cache (decisions.md: downloading ≠ adding to "meus áudios", that's a separate step). */
   onSoundReceived: (peerId: string, soundId: string, data: ArrayBuffer, mimeType: string) => void;
+  /** A chat message (possibly a dice roll, already resolved by the sender) arrived from a peer —
+   * caller appends it to whatever per-room message list it keeps (useRoomConnection.ts). Never
+   * fires for the local user's own messages — the caller appends those itself, optimistically,
+   * the moment sendChatMessage is called. */
+  onChatMessage: (peerId: string, message: ChatMessage) => void;
+  /** Answers another peer's "what's the chat history so far" — my own locally-known messages
+   * (MeshManager has no notion of chat storage, same reasoning as onSoundListRequest). */
+  onChatHistoryRequest: () => Promise<ChatMessage[]>;
+  /** A peer's chat history just arrived (in response to requestChatHistory) — caller merges it
+   * into whatever it already has (dedup by id) and persists the merged result locally. */
+  onChatHistoryReceived: (peerId: string, messages: ChatMessage[]) => void;
+  /** A peer re-rolled one of their own (or anyone's) dice messages ("Re-rolar") — caller replaces
+   * that message's `roll` in place by id, never appends a new message for it. */
+  onChatEdit: (peerId: string, id: string, roll: ChatMessage['roll']) => void;
   /** A peer connection actually failed (ICE or overall), got stuck disconnected, or an ICE
    * candidate errored out — the CGNAT/symmetric-NAT scenario decisions.md §1 already flags as the
    * reason TURN might be needed. Optional: MeshManager works the same with or without a listener,
@@ -452,6 +518,7 @@ export class MeshManager {
     // before renegotiate() below so it rides along in that very first offer.
     if (!entry.imagesChannel) this.setupImagesChannel(entry, entry.pc.createDataChannel('images'));
     if (!entry.soundsChannel) this.setupSoundsChannel(entry, entry.pc.createDataChannel('sounds'));
+    if (!entry.chatChannel) this.setupChatChannel(entry, entry.pc.createDataChannel('chat'));
     void this.renegotiate(entry);
   }
 
@@ -761,6 +828,49 @@ export class MeshManager {
     }
   }
 
+  /** Broadcasts one chat message — already fully formed, including any dice roll the sender's own
+   * client already resolved — to every peer currently in the room. Queued per-connection the same
+   * way image/sound requests are if a given peer's chat channel isn't open yet; unlike those,
+   * there's no manager-level pre-entry buffer, since this only ever targets peers already in
+   * `this.connections` (nothing to send to someone who hasn't joined the mesh yet). */
+  sendChatMessage(message: ChatMessage): void {
+    for (const entry of this.connections.values()) {
+      if (entry.chatChannel?.readyState === 'open') {
+        this.sendChatFrame(entry.chatChannel, { t: 'message', message });
+      } else {
+        entry.pendingChatMessages.push(message);
+      }
+    }
+  }
+
+  /** Asks one peer for their locally-known chat history — answered via onChatHistoryReceived.
+   * Called once per already-in-the-room peer right after joining (useRoomConnection.ts's
+   * 'room-joined' handler); a peer who joins *after* me never needs this from me — they'll ask
+   * everyone already here, symmetrically, once their own chat channel opens toward each of us. */
+  requestChatHistory(peerId: string): void {
+    const entry = this.connections.get(peerId);
+    if (!entry) return;
+    if (entry.chatChannel?.readyState === 'open') {
+      this.sendChatFrame(entry.chatChannel, { t: 'history-req' });
+    } else {
+      entry.pendingChatHistoryRequest = true;
+    }
+  }
+
+  /** "Re-rolar" — broadcasts a replacement `roll` for an existing chat message (by id) to every
+   * peer, who each replace it in place rather than appending a new message. The new roll must
+   * already be resolved (Math.random already ran) by whoever clicked the button, same
+   * determinism rule as sendChatMessage. */
+  editChatMessage(id: string, roll: ChatMessage['roll']): void {
+    for (const entry of this.connections.values()) {
+      if (entry.chatChannel?.readyState === 'open') {
+        this.sendChatFrame(entry.chatChannel, { t: 'edit', id, roll });
+      } else {
+        entry.pendingChatEdits.push({ t: 'edit', id, roll });
+      }
+    }
+  }
+
   setLocalMicTrack(track: MediaStreamTrack | null): void {
     if (this.micTrack) this.personalStream.removeTrack(this.micTrack);
     this.micTrack = track;
@@ -1025,6 +1135,10 @@ export class MeshManager {
       pendingSoundRequests: this.pendingSoundRequestsByPeer.get(peerId) ?? [],
       incomingSoundTransfer: null,
       soundSendQueue: Promise.resolve(),
+      chatChannel: null,
+      pendingChatMessages: [],
+      pendingChatHistoryRequest: false,
+      pendingChatEdits: [],
       negotiationQueue: Promise.resolve(),
       renegotiateNeeded: false,
       // See PeerConnectionEntry.isPolite — deterministic as long as both sides compare the same
@@ -1047,6 +1161,9 @@ export class MeshManager {
       }
       if (event.channel.label === 'sounds' && !entry.soundsChannel) {
         this.setupSoundsChannel(entry, event.channel);
+      }
+      if (event.channel.label === 'chat' && !entry.chatChannel) {
+        this.setupChatChannel(entry, event.channel);
       }
     };
 
@@ -1426,6 +1543,56 @@ export class MeshManager {
   }
 
   private sendSoundControl(channel: RTCDataChannel, frame: SoundControlFrame): void {
+    if (channel.readyState !== 'open') return;
+    channel.send(JSON.stringify(frame));
+  }
+
+  private setupChatChannel(entry: PeerConnectionEntry, channel: RTCDataChannel): void {
+    entry.chatChannel = channel;
+
+    channel.onopen = () => {
+      const queued = entry.pendingChatMessages;
+      entry.pendingChatMessages = [];
+      for (const message of queued) this.sendChatFrame(channel, { t: 'message', message });
+      if (entry.pendingChatHistoryRequest) {
+        entry.pendingChatHistoryRequest = false;
+        this.sendChatFrame(channel, { t: 'history-req' });
+      }
+      const queuedEdits = entry.pendingChatEdits;
+      entry.pendingChatEdits = [];
+      for (const edit of queuedEdits) this.sendChatFrame(channel, edit);
+    };
+
+    channel.onmessage = (event) => {
+      if (typeof event.data !== 'string') return;
+      // Same malformed-frame guard as setupImagesChannel/setupSoundsChannel — a bad JSON.parse()
+      // here would otherwise throw uncaught inside the channel's own event handler.
+      let frame: ChatFrame;
+      try {
+        frame = JSON.parse(event.data) as ChatFrame;
+      } catch {
+        return;
+      }
+      switch (frame.t) {
+        case 'message':
+          this.opts.onChatMessage(entry.peerId, frame.message);
+          break;
+        case 'history-req':
+          void this.opts.onChatHistoryRequest().then((messages) => {
+            this.sendChatFrame(channel, { t: 'history', messages });
+          });
+          break;
+        case 'history':
+          this.opts.onChatHistoryReceived(entry.peerId, frame.messages);
+          break;
+        case 'edit':
+          this.opts.onChatEdit(entry.peerId, frame.id, frame.roll);
+          break;
+      }
+    };
+  }
+
+  private sendChatFrame(channel: RTCDataChannel, frame: ChatFrame): void {
     if (channel.readyState !== 'open') return;
     channel.send(JSON.stringify(frame));
   }

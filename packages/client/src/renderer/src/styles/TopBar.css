@@ -38,3 +38,13 @@
   color: var(--color-text-primary);
 }
 
+.top-bar__icon-button--active {
+  background: var(--color-accent);
+  color: #ffffff;
+}
+
+.top-bar__icon-button--active:hover {
+  background: var(--color-accent-hover);
+  color: #ffffff;
+}
+

@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import type { DeviceKind, ServerToClientMessage } from '@concord/shared';
 import { SignalingClient, type SignalingStatus } from '../lib/signalingClient';
-import { MeshManager, setTurnIceServers, type SoundListEntry } from '../lib/webrtcMesh';
+import { MeshManager, setTurnIceServers, type ChatMessage, type SoundListEntry } from '../lib/webrtcMesh';
+import { parseAndRollDiceCommand } from '../lib/diceRoller';
+import type { StoredChatMessage } from '../types/window';
 import { getPreferredDeviceId } from '../lib/devicePreferences';
 import { playDeviceSwitch, playRoomJoin, playRoomLeave } from '../lib/soundEffects';
 import { fetchTurnCredentials, getSessionToken, reportClientError } from '../lib/api';
@@ -142,7 +144,14 @@ interface RoomConnectionState {
   /** Live-only (decisions.md — soundboard): a peer's catalog is only ever known while both are
    * online in the same room, keyed by peerId, cleared on peer-left/room-exit. */
   peerSoundLists: Record<string, SoundListEntry[]>;
+  /** Live-only, same philosophy as peerSoundLists — no server-side history, cleared on room
+   * change. Capped at MAX_STORED_CHAT_MESSAGES (decisions.md — safeguard, not a requested rule). */
+  chatMessages: ChatMessage[];
 }
+
+// Implementation safeguard, not a requested rule (decisions.md) — keeps a long-running room's
+// chat state from growing without bound in memory.
+const MAX_STORED_CHAT_MESSAGES = 200;
 
 const initialState: RoomConnectionState = {
   connectionStatus: 'idle',
@@ -151,7 +160,8 @@ const initialState: RoomConnectionState = {
   peers: [],
   latencyMs: null,
   selfIsSpeaking: false,
-  peerSoundLists: {}
+  peerSoundLists: {},
+  chatMessages: []
 };
 
 /**
@@ -190,6 +200,9 @@ export function useRoomConnection(
   // without waiting on a setState round-trip.
   const peersRef = useRef<RoomPeer[]>([]);
   const peerSoundListsRef = useRef<Record<string, SoundListEntry[]>>({});
+  // Same synchronous-read trick, for onChatHistoryRequest below — answering a peer's "what do you
+  // have" can't wait on a setState round-trip either.
+  const chatMessagesRef = useRef<ChatMessage[]>([]);
 
   useEffect(() => {
     myAvatarUrlRef.current = myAvatarUrl;
@@ -209,6 +222,19 @@ export function useRoomConnection(
   useEffect(() => {
     peerSoundListsRef.current = state.peerSoundLists;
   }, [state.peerSoundLists]);
+  useEffect(() => {
+    chatMessagesRef.current = state.chatMessages;
+  }, [state.chatMessages]);
+
+  // Encrypted local copy of this room's chat (decisions.md — pedido do Mozar: guardar com
+  // criptografia caso alguém escreva algo sensível). Fires on every chatMessages change while in
+  // a room — chat is low-frequency enough (RPG dice/text, not media) that saving on every message
+  // costs nothing worth debouncing for. Cleared entirely when this user leaves the room (the big
+  // effect's cleanup below), never a permanent log.
+  useEffect(() => {
+    if (!roomId) return;
+    void window.concord.chatHistory.save(roomId, state.chatMessages as unknown as StoredChatMessage[]);
+  }, [roomId, state.chatMessages]);
 
   /** Answers another peer's request for my avatar, or my server's icon if the request's
    * ownerId is a server I actually own — shared by both the offline-test and real mesh below. */
@@ -340,6 +366,46 @@ export function useRoomConnection(
     ).then(() => onSoundDownloadedRef.current?.(soundId));
   }
 
+  /** A peer's chat message (possibly a dice roll they already resolved) arrived — appended as-is,
+   * never re-rolled here. Capped so a long session's chat can't grow the state without bound. */
+  function onChatMessage(_peerId: string, message: ChatMessage): void {
+    setState((prev) => ({
+      ...prev,
+      chatMessages: [...prev.chatMessages, message].slice(-MAX_STORED_CHAT_MESSAGES)
+    }));
+  }
+
+  /** Combines two message lists (own + a peer's answer, or own + what was on disk), deduped by
+   * id and reordered by sentAt — a peer's history can overlap heavily with what's already known
+   * (everyone answers with everything they have, not just what the requester is missing). */
+  function mergeChatMessages(existing: ChatMessage[], incoming: ChatMessage[]): ChatMessage[] {
+    const byId = new Map(existing.map((message) => [message.id, message]));
+    for (const message of incoming) byId.set(message.id, message);
+    return [...byId.values()].sort((a, b) => a.sentAt - b.sentAt).slice(-MAX_STORED_CHAT_MESSAGES);
+  }
+
+  /** Answers another peer's "what's the chat history so far" with whatever I locally know. */
+  async function onChatHistoryRequest(): Promise<ChatMessage[]> {
+    return chatMessagesRef.current;
+  }
+
+  /** A peer's chat history arrived (in response to requestChatHistory, sent once right after
+   * joining) — merged into local state and persisted, never blindly replacing what's already
+   * there (my own just-loaded disk copy, or another peer's answer that arrived first). */
+  function onChatHistoryReceived(_peerId: string, messages: ChatMessage[]): void {
+    setState((prev) => ({ ...prev, chatMessages: mergeChatMessages(prev.chatMessages, messages) }));
+  }
+
+  /** A peer re-rolled a dice message ("Re-rolar") — replaces that message's roll in place by id,
+   * never appends a new one. No-op if the message isn't known locally (e.g. arrived before the
+   * original message did, or was already trimmed by MAX_STORED_CHAT_MESSAGES). */
+  function onChatEdit(_peerId: string, id: string, roll: ChatMessage['roll']): void {
+    setState((prev) => ({
+      ...prev,
+      chatMessages: prev.chatMessages.map((message) => (message.id === id ? { ...message, roll } : message))
+    }));
+  }
+
   useEffect(() => {
     if (!roomId) {
       setState(initialState);
@@ -397,6 +463,10 @@ export function useRoomConnection(
       onSoundListReceived,
       onSoundRequest,
       onSoundReceived,
+      onChatMessage,
+      onChatHistoryRequest,
+      onChatHistoryReceived,
+      onChatEdit,
       // [Bug corrigido] Nunca era passado aqui — toda falha real de ICE/conexão em produção era
       // descartada em silêncio (onConnectionError é
       // opcional em MeshManagerOptions, então o `?.()` interno virava no-op sem avisar ninguém).
@@ -408,6 +478,17 @@ export function useRoomConnection(
     });
     meshRef.current = mesh;
     mesh.setHardwareEncodePreference(getHardwareEncodePreference());
+
+    // Seeds chat with whatever this device already has saved locally for this room (e.g. a
+    // reload while still in it) — separate from the live peer-to-peer backfill below (room-joined
+    // handler), which is what actually catches this device up on anything it missed.
+    void window.concord.chatHistory.load(roomId).then((stored) => {
+      if (cancelled || stored.length === 0) return;
+      setState((prev) => ({
+        ...prev,
+        chatMessages: mergeChatMessages(prev.chatMessages, stored as unknown as ChatMessage[])
+      }));
+    });
 
     // Both guarded by `cancelled` — closing a WebSocket is async (ws.onclose fires on a
     // later tick), so a leftover event from the room just left can otherwise arrive after
@@ -451,6 +532,10 @@ export function useRoomConnection(
           for (const peer of message.peers) {
             mesh.addExistingPeer(peer.peerId);
             requestPeerImages(mesh, peer.peerId, peer.userId);
+            // Only ever needed from peers already here when I join — someone joining after me
+            // gets nothing new from requesting my history in the other direction (see
+            // MeshManager.requestChatHistory's own comment).
+            mesh.requestChatHistory(peer.peerId);
           }
           break;
         case 'peer-joined':
@@ -651,6 +736,12 @@ export function useRoomConnection(
       signaling.close();
       meshRef.current = null;
       signalingRef.current = null;
+      // Leaving the room — pedido do Mozar: só quem está na sala tem acesso ao histórico, sair
+      // apaga a cópia local criptografada (nunca um log permanente). A reconexão automática por
+      // instabilidade de rede também passa por aqui (roomId muda pra null e volta), então um
+      // rejoin rápido também perde o histórico local e busca tudo de novo dos peers — aceitável,
+      // mesma filosofia "descoberta é só ao vivo" já usada pro soundboard.
+      void window.concord.chatHistory.clear(roomId);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only roomId should trigger reconnect
   }, [roomId]);
@@ -734,6 +825,45 @@ export function useRoomConnection(
     meshRef.current?.requestSound(peerId, soundId, knownHash);
   }
 
+  /** Sends one chat message to the room — if `text` is recognized as a dice command
+   * (diceRoller.ts), it's rolled right here, once, before broadcasting; every peer (including
+   * this one) then renders the exact same already-resolved numbers, nobody re-rolls. Appended to
+   * local state immediately (optimistic — no round trip needed to see your own message). No-op
+   * outside a room, same as every other mesh action. */
+  function sendChatMessage(text: string): void {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    const message: ChatMessage = {
+      id: crypto.randomUUID(),
+      userId,
+      displayName,
+      text: trimmed,
+      sentAt: Date.now(),
+      roll: parseAndRollDiceCommand(trimmed)
+    };
+    setState((prev) => ({
+      ...prev,
+      chatMessages: [...prev.chatMessages, message].slice(-MAX_STORED_CHAT_MESSAGES)
+    }));
+    meshRef.current?.sendChatMessage(message);
+  }
+
+  /** "Re-rolar" — resolves a brand-new roll for the same command (Math.random, right here, once)
+   * and replaces the target message's roll in place for everyone, instead of posting a new
+   * message (pedido do Mozar). `text` is always that message's own already-valid command
+   * (RoomChat.tsx passes it straight from the message being re-rolled), so parseAndRollDiceCommand
+   * failing here would mean the original message was never actually a dice roll — shouldn't
+   * happen, but no-ops safely if it somehow does. */
+  function rerollChatMessage(messageId: string, text: string): void {
+    const roll = parseAndRollDiceCommand(text);
+    if (!roll) return;
+    setState((prev) => ({
+      ...prev,
+      chatMessages: prev.chatMessages.map((message) => (message.id === messageId ? { ...message, roll } : message))
+    }));
+    meshRef.current?.editChatMessage(messageId, roll);
+  }
+
   /** Broadcasts the switch to the room (everyone else's client plays the sound) and plays it locally right away. */
   function sendDeviceSwitched(kind: DeviceKind): void {
     signalingRef.current?.send({ type: 'device-switched', kind });
@@ -783,6 +913,7 @@ export function useRoomConnection(
     latencyMs: state.latencyMs,
     selfIsSpeaking: state.selfIsSpeaking,
     peerSoundLists: state.peerSoundLists,
+    chatMessages: state.chatMessages,
     setLocalCameraTrack,
     setLocalScreenTrack,
     setLocalMusicTrack,
@@ -792,6 +923,8 @@ export function useRoomConnection(
     sendMuteStatus,
     playSoundboardClip,
     requestPeerSoundList,
-    requestPeerSound
+    requestPeerSound,
+    sendChatMessage,
+    rerollChatMessage
   };
 }

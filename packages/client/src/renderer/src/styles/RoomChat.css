@@ -1,0 +1,298 @@
+.room-chat {
+  width: 320px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--color-bg-rail);
+  background: var(--color-bg-elevated);
+  min-height: 0;
+}
+
+.room-chat__list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.room-chat__empty {
+  margin: auto;
+  text-align: center;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  padding: 0 16px;
+}
+
+.room-chat__empty code {
+  background: var(--color-bg-rail);
+  padding: 1px 5px;
+  border-radius: var(--radius-sm);
+}
+
+.room-chat__message {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.room-chat__message-header {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.room-chat__message-name {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--color-text-primary);
+}
+
+.room-chat__message--self .room-chat__message-name {
+  color: var(--color-accent);
+}
+
+.room-chat__message-time {
+  font-size: 10px;
+  color: var(--color-text-secondary);
+}
+
+.room-chat__message-text {
+  margin: 0;
+  font-size: 13px;
+  color: var(--color-text-primary);
+  word-break: break-word;
+}
+
+.room-chat__bot-message {
+  display: flex;
+  gap: 8px;
+}
+
+.room-chat__bot-avatar {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-accent);
+  color: #ffffff;
+}
+
+.room-chat__bot-body {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-width: 0;
+  flex: 1;
+}
+
+.room-chat__bot-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.room-chat__bot-name {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--color-text-primary);
+}
+
+.room-chat__bot-tag {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: var(--radius-sm);
+  background: var(--color-accent);
+  color: #ffffff;
+  letter-spacing: 0.03em;
+}
+
+.room-chat__roll-attribution {
+  margin: 0;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.room-chat__roll-attribution strong {
+  color: var(--color-text-primary);
+}
+
+.room-chat__roll {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-rail);
+  border: 1px solid transparent;
+  width: fit-content;
+  max-width: 100%;
+}
+
+.room-chat__roll--success {
+  border-color: rgba(35, 165, 90, 0.4);
+}
+
+.room-chat__roll--failure {
+  border-color: rgba(242, 63, 66, 0.4);
+}
+
+.room-chat__roll-dice {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.room-chat__roll-die {
+  min-width: 22px;
+  padding: 2px 5px;
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-elevated);
+  color: var(--color-text-primary);
+  font-size: 12px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Modo perDie (ex. "2d20+5 un") — não há total agregado, então cada dado assume o destaque que o
+   room-chat__roll-total teria (ver comentário perDie em diceRoller.ts). */
+.room-chat__roll-dice--primary .room-chat__roll-die {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 34px;
+  padding: 4px 8px;
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1.15;
+}
+
+/* Valor bruto (antes do modificador) exibido embaixo do resultado final de cada dado — mesma
+   ideia do room-chat__roll-dice normal mostrando os dados crus embaixo do total agregado. */
+.room-chat__roll-die-raw {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+}
+
+/* Realce de vantagem/desvantagem (dado vencedor/perdedor, sem ser necessariamente crítico) —
+   vem antes das regras de crítico abaixo de propósito: quando os dois se aplicam ao mesmo dado
+   (ex. o maior de uma rolagem "vant" também é um 20 natural), o crítico deve vencer a cascata. */
+.room-chat__roll-die--winner {
+  background: rgba(35, 165, 90, 0.15);
+  color: var(--color-online);
+}
+
+.room-chat__roll-die--loser {
+  background: rgba(242, 63, 66, 0.1);
+  color: var(--color-danger);
+}
+
+.room-chat__roll-die--crit {
+  background: rgba(35, 165, 90, 0.2);
+  color: var(--color-online);
+  font-weight: 700;
+}
+
+.room-chat__roll-die--fail {
+  background: rgba(242, 63, 66, 0.15);
+  color: var(--color-danger);
+  font-weight: 700;
+}
+
+.room-chat__roll-detail {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.room-chat__roll-total {
+  font-size: 26px;
+  font-weight: 700;
+  color: var(--color-text-primary);
+  line-height: 1.1;
+}
+
+.room-chat__roll-callout {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.room-chat__roll-callout--success {
+  color: var(--color-online);
+}
+
+.room-chat__roll-callout--failure {
+  color: var(--color-danger);
+}
+
+.room-chat__reroll {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border: none;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 0;
+}
+
+.room-chat__reroll:hover {
+  color: var(--color-accent);
+}
+
+.room-chat__composer {
+  flex-shrink: 0;
+  display: flex;
+  gap: 8px;
+  padding: 12px;
+  border-top: 1px solid var(--color-bg-rail);
+}
+
+.room-chat__input {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-rail);
+  color: var(--color-text-primary);
+  font-size: 13px;
+}
+
+.room-chat__input:focus {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -1px;
+}
+
+.room-chat__send {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--color-accent);
+  color: #ffffff;
+}
+
+.room-chat__send:hover:not(:disabled) {
+  background: var(--color-accent-hover);
+}
+
+.room-chat__send:disabled {
+  background: var(--color-bg-rail);
+  color: var(--color-text-muted);
+}

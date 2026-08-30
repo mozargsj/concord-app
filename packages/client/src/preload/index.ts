@@ -69,6 +69,11 @@ contextBridge.exposeInMainWorld('concord', {
     load: () => ipcRenderer.invoke('session:load'),
     clear: () => ipcRenderer.invoke('session:clear')
   },
+  chatHistory: {
+    save: (roomId: string, messages: unknown) => ipcRenderer.invoke('chat-history:save', roomId, messages),
+    load: (roomId: string) => ipcRenderer.invoke('chat-history:load', roomId),
+    clear: (roomId: string) => ipcRenderer.invoke('chat-history:clear', roomId)
+  },
   app: {
     onBeforeQuit: (callback: () => void) => {
       const listener = () => callback();
