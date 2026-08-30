@@ -1,7 +1,10 @@
 const STORAGE_KEY = 'concord.audio.peerVolumes';
 
 export interface PeerVolumeSettings {
-  volume: number; // 0-100
+  // [2026-08-30, pedido do Mozar] 0-200 — acima de 100 é ganho de verdade (MediaStreamVideo.tsx
+  // roteia por um GainNode em vez do <video>.volume nativo, que trava em 1.0/100%), não só um
+  // controle de "abaixar o volume" como antes.
+  volume: number;
   muted: boolean;
 }
 

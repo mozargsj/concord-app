@@ -12,6 +12,7 @@ import { createDenoisedTrack } from '../lib/rnnoise';
 import { getRnnoiseEnabled } from '../lib/noiseSuppressionSettings';
 import { createGatedTrack } from '../lib/noiseGate';
 import { getMicSensitivity, onMicSensitivityChange, sensitivityToThresholdRms } from '../lib/micSensitivity';
+import { getMicGain, micGainToMultiplier, onMicGainChange } from '../lib/micGain';
 import { getHardwareEncodePreference } from '../lib/hardwareEncodePreference';
 
 /** The server the joined room belongs to — just enough to know who to ask for its icon (its
@@ -81,15 +82,21 @@ async function acquireMicPipeline(preferredDeviceId: string | null): Promise<Mic
     }
   }
 
-  const gate = createGatedTrack(preGateTrack, sensitivityToThresholdRms(getMicSensitivity()));
+  const gate = createGatedTrack(
+    preGateTrack,
+    sensitivityToThresholdRms(getMicSensitivity()),
+    micGainToMultiplier(getMicGain())
+  );
   const unsubscribeSensitivity = onMicSensitivityChange((value) =>
     gate.setThresholdRms(sensitivityToThresholdRms(value))
   );
+  const unsubscribeGain = onMicGainChange((value) => gate.setGainMultiplier(micGainToMultiplier(value)));
 
   return {
     track: gate.track,
     cleanup: () => {
       unsubscribeSensitivity();
+      unsubscribeGain();
       gate.stop();
       stopPreGate();
     }

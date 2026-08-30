@@ -18,16 +18,27 @@ export interface GatedTrackHandle {
   /** Live-updates the threshold without rebuilding the graph — lets the settings slider (or the
    * onMicSensitivityChange subscription) take effect immediately, mid-call. */
   setThresholdRms: (value: number) => void;
+  /** Live-updates the boost/attenuation multiplier applied while the gate is open (1 = unity,
+   * same as before this existed; 2 = +200%) — same immediate-effect contract as setThresholdRms,
+   * lib/micGain.ts's onMicGainChange subscribes to this. Ramped, not stepped, same as the
+   * gate's own open/close transitions, so dragging the slider mid-call doesn't click/pop. */
+  setGainMultiplier: (value: number) => void;
   stop: () => void;
 }
 
 /**
  * Wraps a track (raw mic, or already RNNoise-denoised) in a simple expander/gate: silences the
- * signal below `thresholdRms`, passes it through at full volume above it. This is the "corte
+ * signal below `thresholdRms`, passes it through above it — at `gainMultiplier` instead of a
+ * flat 1 (unity), so the same node also doubles as the mic boost/attenuation control
+ * (lib/micGain.ts) instead of needing a second GainNode in the chain. This is the "corte
  * automático de ruído" decisions.md had as a UI-only stub (the sensitivity slider saved a value
  * nothing ever read) — this is what actually applies it to the outgoing audio now.
  */
-export function createGatedTrack(inputTrack: MediaStreamTrack, initialThresholdRms: number): GatedTrackHandle {
+export function createGatedTrack(
+  inputTrack: MediaStreamTrack,
+  initialThresholdRms: number,
+  initialGainMultiplier = 1
+): GatedTrackHandle {
   const ctx = new AudioContext();
   const source = ctx.createMediaStreamSource(new MediaStream([inputTrack]));
   const analyser = ctx.createAnalyser();
@@ -42,6 +53,7 @@ export function createGatedTrack(inputTrack: MediaStreamTrack, initialThresholdR
   gain.connect(destination);
 
   let threshold = initialThresholdRms;
+  let gainMultiplier = initialGainMultiplier;
   let isOpen = false;
   let releaseTimer: ReturnType<typeof setTimeout> | null = null;
   const samples = new Uint8Array(analyser.fftSize);
@@ -62,7 +74,7 @@ export function createGatedTrack(inputTrack: MediaStreamTrack, initialThresholdR
       }
       if (!isOpen) {
         isOpen = true;
-        gain.gain.setTargetAtTime(1, ctx.currentTime, GAIN_RAMP_SECONDS);
+        gain.gain.setTargetAtTime(gainMultiplier, ctx.currentTime, GAIN_RAMP_SECONDS);
       }
     } else if (isOpen && !releaseTimer) {
       releaseTimer = setTimeout(() => {
@@ -77,6 +89,10 @@ export function createGatedTrack(inputTrack: MediaStreamTrack, initialThresholdR
     track: destination.stream.getAudioTracks()[0],
     setThresholdRms: (value) => {
       threshold = value;
+    },
+    setGainMultiplier: (value) => {
+      gainMultiplier = value;
+      if (isOpen) gain.gain.setTargetAtTime(value, ctx.currentTime, GAIN_RAMP_SECONDS);
     },
     stop: () => {
       clearInterval(pollHandle);
