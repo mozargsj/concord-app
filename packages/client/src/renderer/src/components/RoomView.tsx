@@ -35,11 +35,13 @@ interface RoomViewProps {
   onToggleCamera: () => void;
   onSelectCamera: (deviceId: string) => void;
   onToggleScreenShare: () => void;
+  isSharingMusic: boolean;
+  onToggleMusicShare: () => void;
   // Shared with RoomSidebar via usePeerVolumeControl (lifted to ServerListPage) so muting/
   // adjusting someone from either place stays in sync live, not just after a remount.
   getPeerVolume: (userId: string | null) => number | undefined;
-  onOpenVolumeMenu: (x: number, y: number, peerId: string, userId: string, name: string) => void;
-  isPeerMutedByMe: (userId: string) => boolean;
+  onOpenVolumeMenu: (x: number, y: number, peerId: string, userId: string, name: string, volumeKey?: string) => void;
+  isPeerMutedByMe: (volumeKey: string) => boolean;
   onViewProfile: (userId: string, name: string, avatarUrl: string | null) => void;
   // userId of whoever's volume popup is currently open (shared with RoomSidebar) — drives the
   // "clicked" highlight so the action has visible feedback beyond the popup itself.
@@ -87,6 +89,8 @@ export default function RoomView({
   onToggleCamera,
   onSelectCamera,
   onToggleScreenShare,
+  isSharingMusic,
+  onToggleMusicShare,
   getPeerVolume,
   onOpenVolumeMenu,
   activeVolumeMenuUserId,
@@ -428,6 +432,22 @@ export default function RoomView({
         })}
       </div>
 
+      {/* [2026-08-30, pedido do Mozar] "Compartilhar áudio" — só toca, nunca vira tile visível
+          (não há imagem, só o áudio). Roster/controles de volume ficam em RoomSidebar.tsx (linha
+          "Music <nome>"); getPeerVolume aqui usa a mesma chave composta `${userId}:music` pra ter
+          volume/mudo independentes da voz da mesma pessoa. */}
+      {peers
+        .filter((peer) => peer.musicStream)
+        .map((peer) => (
+          <MediaStreamVideo
+            key={`${peer.peerId}-music`}
+            stream={peer.musicStream!}
+            muted={isDeafened}
+            volume={getPeerVolume(`${peer.userId}:music`)}
+            hidden
+          />
+        ))}
+
       <CallControls
         isMicMuted={isMicMuted}
         onToggleMic={onToggleMic}
@@ -438,6 +458,8 @@ export default function RoomView({
         onSelectCamera={onSelectCamera}
         isSharingScreen={!!screenStream}
         onToggleScreenShare={onToggleScreenShare}
+        isSharingMusic={isSharingMusic}
+        onToggleMusicShare={onToggleMusicShare}
         onLeave={onLeave}
         isFocused={focusedTileKey !== null}
         onExitFocus={() => setFocusedTileKey(null)}

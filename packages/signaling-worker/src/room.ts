@@ -144,6 +144,9 @@ export class RoomDurableObject extends DurableObject<Env> {
       case 'screen-share-changed':
         await this.handleScreenShareChanged(ws, message.isSharing);
         break;
+      case 'music-share-changed':
+        await this.handleMusicShareChanged(ws, message.isSharing);
+        break;
       case 'avatar-changed':
         await this.handleAvatarChanged(ws);
         break;
@@ -360,6 +363,13 @@ export class RoomDurableObject extends DurableObject<Env> {
     if (!peer) return;
     const roomId = await this.getRoomId();
     this.broadcast({ type: 'peer-screen-share-changed', roomId, peerId: peer.peerId, isSharing }, peer.peerId);
+  }
+
+  private async handleMusicShareChanged(ws: WebSocket, isSharing: boolean): Promise<void> {
+    const peer = ws.deserializeAttachment() as PeerAttachment | null;
+    if (!peer) return;
+    const roomId = await this.getRoomId();
+    this.broadcast({ type: 'peer-music-share-changed', roomId, peerId: peer.peerId, isSharing }, peer.peerId);
   }
 
   private async handleAvatarChanged(ws: WebSocket): Promise<void> {

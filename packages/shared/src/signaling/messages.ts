@@ -86,6 +86,15 @@ export interface ScreenShareChangedMessage {
   isSharing: boolean;
 }
 
+/** [2026-08-30, pedido do Mozar] Mesmo papel do screen-share-changed acima, só que pra
+ * "compartilhar áudio" (transmite só o áudio de um app escolhido, via WASAPI process-loopback em
+ * modo INCLUDE — ver process_loopback.cc). Sinal explícito pela mesma razão: o evento nativo da
+ * track (`onended`) não é confiável o bastante sozinho pra saber quando parou. */
+export interface MusicShareChangedMessage {
+  type: 'music-share-changed';
+  isSharing: boolean;
+}
+
 /** Avatar images are P2P-only (never touch this server, see decisions.md §3) — a peer only ever
  * asks another for their avatar once, right when that peer is first seen (requestPeerImages in
  * useRoomConnection.ts). Changing the picture mid-call leaves no observable trace of its own
@@ -130,6 +139,7 @@ export type ClientToServerMessage =
   | DeviceSwitchedMessage
   | MicStateMessage
   | ScreenShareChangedMessage
+  | MusicShareChangedMessage
   | AvatarChangedMessage
   | PeerMuteStatusMessage
   | ServerIconChangedMessage;
@@ -216,6 +226,13 @@ export interface PeerScreenShareChangedMessage {
   isSharing: boolean;
 }
 
+export interface PeerMusicShareChangedMessage {
+  type: 'peer-music-share-changed';
+  roomId: string;
+  peerId: string;
+  isSharing: boolean;
+}
+
 /** userId included directly (like peer-joined) rather than making the receiving client look one
  * up from its own peer list — avoids any dependency on that list being up to date at the moment
  * this arrives. */
@@ -252,6 +269,7 @@ export type ServerToClientMessage =
   | PeerDeviceSwitchedMessage
   | PeerMicStateMessage
   | PeerScreenShareChangedMessage
+  | PeerMusicShareChangedMessage
   | PeerAvatarChangedMessage
   | PeerMuteStatusRelayMessage
   | PeerServerIconChangedMessage;

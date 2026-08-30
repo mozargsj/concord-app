@@ -1,10 +1,11 @@
 // Bridges the main-process native loopback capture (process_loopback.cc — Windows-only WASAPI
-// capture that excludes Concord's own audio from the loopback, see that file's header comment
-// for the "viewer hears their own echo" bug this fixes) into a real MediaStreamTrack, so the
-// rest of the screen-share pipeline (webrtcMesh.ts) can treat it exactly like the track today's
-// getUserMedia-based capture produces. Returns null whenever the native path isn't available —
-// wrong platform, addon missing, blocked by an OS security policy, activation rejected by an
-// older Windows build — so the caller (ServerListPage.tsx) can fall back to that existing path.
+// capture, either excluding one process from the mix or including only it) into a real
+// MediaStreamTrack, so callers can treat it exactly like a getUserMedia-produced track. Returns
+// null whenever the native path isn't available — wrong platform, addon missing, blocked by an
+// OS security policy, activation rejected by an older Windows build, or (INCLUDE mode) the
+// target process already closed — so callers fall back accordingly (screen-share system audio
+// falls back to the legacy whole-desktop capture; app-audio sharing has no fallback, there's
+// nothing else that can isolate one app's audio).
 const SAMPLE_RATE = 48000;
 const CHANNEL_COUNT = 2;
 // Small scheduling lookahead so the very first buffer doesn't get clipped by AudioContext
@@ -16,12 +17,22 @@ export interface LoopbackAudioSession {
   stop: () => void;
 }
 
-export async function startExcludedLoopbackAudio(): Promise<LoopbackAudioSession | null> {
+/** sessionId namespaces this capture from any other one running at the same time (screen-share
+ * system audio and an app-audio share can both be active together) — each gets its own IPC event
+ * channel on the main-process side. mode/targetPid map straight to the native addon's WASAPI
+ * process-loopback activation: 'exclude' captures everything except targetPid (used with your
+ * own pid, for screen-share system audio), 'include' captures only targetPid (used with a chosen
+ * app's pid, for "compartilhar áudio"). */
+export async function startProcessLoopbackAudio(
+  sessionId: string,
+  mode: 'exclude' | 'include',
+  targetPid: number
+): Promise<LoopbackAudioSession | null> {
   if (!window.concord?.processLoopback) return null;
 
   let started = false;
   try {
-    started = await window.concord.processLoopback.start();
+    started = await window.concord.processLoopback.start(sessionId, mode, targetPid);
   } catch {
     started = false;
   }
@@ -31,7 +42,7 @@ export async function startExcludedLoopbackAudio(): Promise<LoopbackAudioSession
   const destination = audioContext.createMediaStreamDestination();
   let nextStartTime = audioContext.currentTime + SCHEDULING_LOOKAHEAD_SECONDS;
 
-  const unsubscribeChunk = window.concord.processLoopback.onChunk((chunk) => {
+  const unsubscribeChunk = window.concord.processLoopback.onChunk(sessionId, (chunk) => {
     const floats = new Float32Array(chunk.buffer, chunk.byteOffset, chunk.byteLength / Float32Array.BYTES_PER_ELEMENT);
     const frameCount = Math.floor(floats.length / CHANNEL_COUNT);
     if (frameCount === 0) return;
@@ -57,21 +68,44 @@ export async function startExcludedLoopbackAudio(): Promise<LoopbackAudioSession
     nextStartTime += buffer.duration;
   });
 
-  const unsubscribeStopped = window.concord.processLoopback.onStopped(() => {
-    // Native capture ended on its own (e.g. an unexpected WASAPI error mid-session) — the
-    // destination's track keeps emitting silence rather than throwing, and stop() below is
-    // still safe to call whenever the caller's own screen-share teardown runs.
-  });
-
   const track = destination.stream.getAudioTracks()[0];
+
+  const unsubscribeStopped = window.concord.processLoopback.onStopped(sessionId, () => {
+    // Native capture ended on its own (e.g. an unexpected WASAPI error mid-session, or — INCLUDE
+    // mode specifically — the target process exited). track.stop() fires the standard 'ended'
+    // event on the track — callers already listen for that on their own tracks (e.g.
+    // ServerListPage.tsx's videoTrack.onended for "shared window closed") to detect this exact
+    // kind of unexpected stop and update their own UI/state, so this reuses that same signal
+    // instead of a bespoke one. Safe to call even if the caller's own stop() below runs right
+    // after — MediaStreamTrack.stop() on an already-stopped track is a no-op.
+    track.stop();
+  });
 
   const stop = () => {
     unsubscribeChunk();
     unsubscribeStopped();
-    window.concord.processLoopback.stop();
+    window.concord.processLoopback.stop(sessionId);
     track.stop();
     void audioContext.close();
   };
 
   return { track, stop };
+}
+
+/** Own process, EXCLUDE mode — screen-share system audio, unchanged behavior/call shape from
+ * before this file supported multiple concurrent sessions (2026-08-30). Kept as a thin wrapper
+ * so ServerListPage.tsx's existing call site didn't need to know about session ids. The main
+ * process resolves the real target pid itself for 'exclude' mode (its own process tree root) —
+ * the 0 here is never actually used, see processLoopbackAudio.ts (main). */
+export function startExcludedLoopbackAudio(): Promise<LoopbackAudioSession | null> {
+  return startProcessLoopbackAudio('screen-system-audio', 'exclude', 0);
+}
+
+/** Apps with an active audio session right now, for the "share this app's audio" picker —
+ * excludes Concord's own process (see the native addon). Empty array (not null) whenever the
+ * native path isn't available, so a caller can render "no apps found" the same way whether
+ * that's really true or the platform/addon just doesn't support this. */
+export function listAudioSessions(): Promise<Array<{ pid: number; name: string }>> {
+  if (!window.concord?.processLoopback) return Promise.resolve([]);
+  return window.concord.processLoopback.listAudioSessions();
 }

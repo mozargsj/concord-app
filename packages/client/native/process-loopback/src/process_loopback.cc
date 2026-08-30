@@ -1,13 +1,22 @@
-// Captures Windows system-audio loopback while excluding a specific process (and its child
-// processes) from the mix, via the WASAPI "process loopback" activation path documented at
+// Windows WASAPI "process loopback" capture — two uses:
+//   (1) EXCLUDE mode: captures the whole system mix except one target process (and its
+//       children). Used to strip Concord's own playback (every other participant's voice) out
+//       of screen-share system audio, so remote peers never hear an echo of themselves.
+//   (2) INCLUDE mode: captures only one target process (and its children). Used for "share this
+//       app's audio" (2026-08-30, pedido do Mozar — a transmissão de tela já usava (1), esta
+//       parte é o modo espelhado, mesma API do Windows, só o enum diferente).
 // https://learn.microsoft.com/en-us/windows/win32/coreaudio/process-loopback-recording
-// (Windows 10 2004+). Used to exclude Concord's own process from the loopback captured for
-// screen-share system audio, so remote peers' voices — which Concord itself is playing back
-// through the sharer's speakers — never get folded back into the outgoing screen-audio track.
+// (Windows 10 2004+). Also exposes ListAudioSessions(), enumerating processes with an active
+// audio session — the source list for the "which app?" picker feeding INCLUDE-mode captures.
 //
 // Adapted from Microsoft's own reference sample (microsoft/Windows-classic-samples,
-// Samples/ApplicationLoopback), swapping its WRL/wil/Media-Foundation plumbing for a plain
+// Samples/ApplicationLoopback), swapping its WRL/wil/Media-Foundation plumbing for plain
 // std::thread + raw COM (no extra dependencies) and N-API delivery instead of writing a WAV file.
+//
+// Multiple concurrent capture sessions are supported (2026-08-30) — a user can share screen
+// system audio (EXCLUDE-self) and a specific app's audio (INCLUDE-one-app) at the same time, so
+// the single global g_isCapturing/g_stopEvent this file used to have (one capture ever) became a
+// map keyed by a caller-supplied sessionId string instead.
 
 #include <napi.h>
 
@@ -15,12 +24,16 @@
 #include <mmdeviceapi.h>
 #include <audioclient.h>
 #include <audioclientactivationparams.h>
+#include <audiopolicy.h>
 
 #include <atomic>
 #include <cstdio>
 #include <cstring>
+#include <map>
+#include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace {
 
@@ -119,12 +132,32 @@ void DeliverEvent(Napi::Env env, Napi::Function jsCallback, CaptureEvent* event)
   delete event;
 }
 
-std::atomic<bool> g_isCapturing{false};
-HANDLE g_stopEvent = nullptr;
+// One stop-event per active session (keyed by the caller-supplied sessionId), guarded by a
+// mutex — replaces the old single global g_isCapturing/g_stopEvent so EXCLUDE-self (screen
+// share) and INCLUDE-one-app (music share) can run at the same time without stepping on each
+// other.
+std::mutex g_sessionsMutex;
+std::map<std::string, HANDLE> g_stopEvents;
 
-void CaptureThreadMain(DWORD excludePid, Napi::ThreadSafeFunction tsfn) {
+void CaptureThreadMain(std::string sessionId, PROCESS_LOOPBACK_MODE mode, DWORD targetPid,
+                        Napi::ThreadSafeFunction tsfn) {
   HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
   bool needsCoUninit = SUCCEEDED(hr);
+
+  HANDLE stopEvent;
+  {
+    std::lock_guard<std::mutex> lock(g_sessionsMutex);
+    stopEvent = g_stopEvents[sessionId];
+  }
+
+  auto cleanupSession = [&]() {
+    std::lock_guard<std::mutex> lock(g_sessionsMutex);
+    auto it = g_stopEvents.find(sessionId);
+    if (it != g_stopEvents.end()) {
+      CloseHandle(it->second);
+      g_stopEvents.erase(it);
+    }
+  };
 
   auto fail = [&](const std::string& msg, ActivationHandler* handler, IAudioClient* audioClient,
                    IAudioCaptureClient* captureClient, HANDLE sampleEvent) {
@@ -135,7 +168,7 @@ void CaptureThreadMain(DWORD excludePid, Napi::ThreadSafeFunction tsfn) {
     if (handler) handler->Release();
     if (needsCoUninit) CoUninitialize();
     tsfn.Release();
-    g_isCapturing.store(false);
+    cleanupSession();
   };
 
   ActivationHandler* handler = new ActivationHandler();
@@ -143,8 +176,8 @@ void CaptureThreadMain(DWORD excludePid, Napi::ThreadSafeFunction tsfn) {
 
   AUDIOCLIENT_ACTIVATION_PARAMS activationParams = {};
   activationParams.ActivationType = AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK;
-  activationParams.ProcessLoopbackParams.ProcessLoopbackMode = PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE;
-  activationParams.ProcessLoopbackParams.TargetProcessId = excludePid;
+  activationParams.ProcessLoopbackParams.ProcessLoopbackMode = mode;
+  activationParams.ProcessLoopbackParams.TargetProcessId = targetPid;
 
   PROPVARIANT activateParams = {};
   activateParams.vt = VT_BLOB;
@@ -164,8 +197,8 @@ void CaptureThreadMain(DWORD excludePid, Napi::ThreadSafeFunction tsfn) {
   if (asyncOp) asyncOp->Release();
 
   if (FAILED(handler->result) || !handler->audioClient) {
-    fail("process-loopback activation rejected (Windows version too old, or unsupported)", handler, nullptr, nullptr,
-         nullptr);
+    fail("process-loopback activation rejected (Windows version too old, target process gone, or unsupported)",
+         handler, nullptr, nullptr, nullptr);
     return;
   }
 
@@ -212,27 +245,15 @@ void CaptureThreadMain(DWORD excludePid, Napi::ThreadSafeFunction tsfn) {
     return;
   }
 
-  UINT32 engineBufferFrames = 0;
-  audioClient->GetBufferSize(&engineBufferFrames);
-
   tsfn.NonBlockingCall(new CaptureEvent{EventType::Started}, DeliverEvent);
 
-  int wakeUps = 0, timeouts = 0, packetsWithData = 0, getBufferFailures = 0, otherWait = 0;
-
-  HANDLE waitHandles[2] = {sampleEvent, g_stopEvent};
+  HANDLE waitHandles[2] = {sampleEvent, stopEvent};
   bool keepRunning = true;
   while (keepRunning) {
     DWORD waitResult = WaitForMultipleObjects(2, waitHandles, FALSE, 2000);
     if (waitResult == WAIT_OBJECT_0 + 1) break;  // stop requested
-    if (waitResult == WAIT_TIMEOUT) {
-      timeouts++;
-      continue;
-    }
-    if (waitResult != WAIT_OBJECT_0) {
-      otherWait++;
-      break;  // WAIT_FAILED / WAIT_ABANDONED — bail out rather than spin
-    }
-    wakeUps++;
+    if (waitResult == WAIT_TIMEOUT) continue;
+    if (waitResult != WAIT_OBJECT_0) break;  // WAIT_FAILED / WAIT_ABANDONED — bail rather than spin
 
     UINT32 packetLength = 0;
     while (SUCCEEDED(captureClient->GetNextPacketSize(&packetLength)) && packetLength > 0) {
@@ -240,11 +261,7 @@ void CaptureThreadMain(DWORD excludePid, Napi::ThreadSafeFunction tsfn) {
       UINT32 framesAvailable = 0;
       DWORD flags = 0;
       hr = captureClient->GetBuffer(&data, &framesAvailable, &flags, nullptr, nullptr);
-      if (FAILED(hr)) {
-        getBufferFailures++;
-        break;
-      }
-      packetsWithData++;
+      if (FAILED(hr)) break;
 
       if (framesAvailable > 0) {
         size_t sampleCount = static_cast<size_t>(framesAvailable) * format.nChannels;
@@ -266,57 +283,191 @@ void CaptureThreadMain(DWORD excludePid, Napi::ThreadSafeFunction tsfn) {
 
   audioClient->Stop();
   captureClient->Release();
-  CloseHandle(sampleEvent);
   audioClient->Release();
   if (needsCoUninit) CoUninitialize();
 
-  {
-    char diag[256];
-    snprintf(diag, sizeof(diag),
-             "engineBufferFrames=%u wakeUps=%d timeouts=%d packetsWithData=%d getBufferFailures=%d otherWait=%d",
-             engineBufferFrames, wakeUps, timeouts, packetsWithData, getBufferFailures, otherWait);
-    CaptureEvent* diagEvent = new CaptureEvent{EventType::Error, std::string("DIAG: ") + diag};
-    tsfn.NonBlockingCall(diagEvent, DeliverEvent);
-  }
-
   tsfn.NonBlockingCall(new CaptureEvent{EventType::Stopped}, DeliverEvent);
   tsfn.Release();
-  g_isCapturing.store(false);
+  cleanupSession();
 }
 
 Napi::Value Start(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();
-  if (g_isCapturing.load()) {
-    Napi::Error::New(env, "already capturing").ThrowAsJavaScriptException();
-    return env.Undefined();
-  }
-  if (info.Length() < 2 || !info[0].IsNumber() || !info[1].IsFunction()) {
-    Napi::TypeError::New(env, "expected (excludePid: number, onEvent: function)").ThrowAsJavaScriptException();
+  if (info.Length() < 4 || !info[0].IsString() || !info[1].IsString() || !info[2].IsNumber() ||
+      !info[3].IsFunction()) {
+    Napi::TypeError::New(env, "expected (sessionId: string, mode: 'exclude'|'include', targetPid: number, "
+                               "onEvent: function)")
+        .ThrowAsJavaScriptException();
     return env.Undefined();
   }
 
-  DWORD excludePid = static_cast<DWORD>(info[0].As<Napi::Number>().Uint32Value());
-  Napi::Function callback = info[1].As<Napi::Function>();
+  std::string sessionId = info[0].As<Napi::String>().Utf8Value();
+  std::string modeStr = info[1].As<Napi::String>().Utf8Value();
+  DWORD targetPid = static_cast<DWORD>(info[2].As<Napi::Number>().Uint32Value());
+  Napi::Function callback = info[3].As<Napi::Function>();
 
-  if (!g_stopEvent) g_stopEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-  ResetEvent(g_stopEvent);
+  PROCESS_LOOPBACK_MODE mode = modeStr == "include" ? PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE
+                                                      : PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE;
+
+  {
+    std::lock_guard<std::mutex> lock(g_sessionsMutex);
+    if (g_stopEvents.count(sessionId)) {
+      Napi::Error::New(env, "session already capturing").ThrowAsJavaScriptException();
+      return env.Undefined();
+    }
+    g_stopEvents[sessionId] = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  }
 
   Napi::ThreadSafeFunction tsfn = Napi::ThreadSafeFunction::New(env, callback, "ProcessLoopbackCapture", 0, 1);
-
-  g_isCapturing.store(true);
-  std::thread(CaptureThreadMain, excludePid, tsfn).detach();
+  std::thread(CaptureThreadMain, sessionId, mode, targetPid, tsfn).detach();
 
   return Napi::Boolean::New(env, true);
 }
 
 Napi::Value Stop(const Napi::CallbackInfo& info) {
-  if (g_stopEvent) SetEvent(g_stopEvent);
-  return info.Env().Undefined();
+  Napi::Env env = info.Env();
+  if (info.Length() < 1 || !info[0].IsString()) {
+    Napi::TypeError::New(env, "expected (sessionId: string)").ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  std::string sessionId = info[0].As<Napi::String>().Utf8Value();
+  std::lock_guard<std::mutex> lock(g_sessionsMutex);
+  auto it = g_stopEvents.find(sessionId);
+  if (it != g_stopEvents.end()) SetEvent(it->second);
+  return env.Undefined();
+}
+
+// Correct UTF-16 -> UTF-8 conversion (WideCharToMultiByte, no extra dependency) — app display
+// names/exe filenames aren't guaranteed ASCII (accents, non-Latin scripts), so a naive
+// std::string(wide.begin(), wide.end()) narrowing cast would mangle anything outside ASCII.
+std::string WideToUtf8(const std::wstring& wide) {
+  if (wide.empty()) return std::string();
+  int sizeNeeded = WideCharToMultiByte(CP_UTF8, 0, wide.data(), static_cast<int>(wide.size()), nullptr, 0, nullptr,
+                                        nullptr);
+  std::string result(sizeNeeded, 0);
+  WideCharToMultiByte(CP_UTF8, 0, wide.data(), static_cast<int>(wide.size()), result.data(), sizeNeeded, nullptr,
+                       nullptr);
+  return result;
+}
+
+// Friendly name for a PID — the session's own DisplayName when a well-behaved app set one
+// (IAudioSessionControl::GetDisplayName), otherwise the exe's own filename without extension
+// (QueryFullProcessImageNameW + manual trim, avoids pulling in Psapi.lib for GetModuleBaseName).
+std::wstring FriendlyNameForPid(DWORD pid, const std::wstring& sessionDisplayName) {
+  if (!sessionDisplayName.empty()) return sessionDisplayName;
+
+  std::wstring name = L"Processo " + std::to_wstring(pid);
+  HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+  if (!process) return name;
+
+  WCHAR path[MAX_PATH] = {};
+  DWORD size = MAX_PATH;
+  if (QueryFullProcessImageNameW(process, 0, path, &size)) {
+    std::wstring full(path);
+    size_t slash = full.find_last_of(L"\\/");
+    std::wstring fileName = slash == std::wstring::npos ? full : full.substr(slash + 1);
+    size_t dot = fileName.find_last_of(L'.');
+    name = dot == std::wstring::npos ? fileName : fileName.substr(0, dot);
+  }
+  CloseHandle(process);
+  return name;
+}
+
+// Enumerates processes with an active WASAPI render session on the default output device — the
+// source list for "which app's audio?" (INCLUDE-mode target picker). Synchronous: COM
+// enumeration here is fast (sub-100ms in practice), and every caller in this addon so far is
+// synchronous too (Start/Stop), so this stays consistent rather than adding AsyncWorker plumbing
+// for one call.
+Napi::Value ListAudioSessions(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  Napi::Array result = Napi::Array::New(env);
+
+  HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+  bool needsCoUninit = SUCCEEDED(hr);
+  // RPC_E_CHANGED_MODE means this thread already has COM initialized in a different apartment
+  // model (fine, still usable) — anything else genuinely failing CoInitialize is unusual but not
+  // fatal here either, the calls below will just fail gracefully and we return an empty list.
+
+  IMMDeviceEnumerator* deviceEnumerator = nullptr;
+  IMMDevice* device = nullptr;
+  IAudioSessionManager2* sessionManager = nullptr;
+  IAudioSessionEnumerator* sessionEnumerator = nullptr;
+
+  hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, IID_PPV_ARGS(&deviceEnumerator));
+  if (SUCCEEDED(hr)) hr = deviceEnumerator->GetDefaultAudioEndpoint(eRender, eConsole, &device);
+  if (SUCCEEDED(hr)) hr = device->Activate(__uuidof(IAudioSessionManager2), CLSCTX_ALL, nullptr,
+                                            reinterpret_cast<void**>(&sessionManager));
+  if (SUCCEEDED(hr)) hr = sessionManager->GetSessionEnumerator(&sessionEnumerator);
+
+  int written = 0;
+  if (SUCCEEDED(hr)) {
+    int sessionCount = 0;
+    sessionEnumerator->GetCount(&sessionCount);
+    DWORD selfPid = GetCurrentProcessId();
+    std::vector<DWORD> seenPids;
+
+    for (int i = 0; i < sessionCount; i++) {
+      IAudioSessionControl* control = nullptr;
+      if (FAILED(sessionEnumerator->GetSession(i, &control)) || !control) continue;
+
+      IAudioSessionControl2* control2 = nullptr;
+      if (SUCCEEDED(control->QueryInterface(IID_PPV_ARGS(&control2))) && control2) {
+        DWORD pid = 0;
+        control2->GetProcessId(&pid);
+        AudioSessionState state = AudioSessionStateInactive;
+        control->GetState(&state);
+
+        bool alreadySeen = false;
+        for (DWORD seen : seenPids) {
+          if (seen == pid) {
+            alreadySeen = true;
+            break;
+          }
+        }
+
+        // Skips: system-sounds pseudo-session, Concord's own process, duplicate sessions from
+        // the same app (one process can open several), and anything not actually active right
+        // now (expired/inactive sessions from an app that already closed its stream).
+        if (control2->IsSystemSoundsSession() != S_OK && pid != 0 && pid != selfPid && !alreadySeen &&
+            state == AudioSessionStateActive) {
+          LPWSTR rawDisplayName = nullptr;
+          std::wstring displayName;
+          if (SUCCEEDED(control->GetDisplayName(&rawDisplayName)) && rawDisplayName) {
+            displayName = rawDisplayName;
+            CoTaskMemFree(rawDisplayName);
+          }
+          // App-set display names are sometimes a literal resource reference (e.g.
+          // "@%SystemRoot%\\System32\\...") instead of real text when the app didn't bother
+          // localizing it for this call path — falling back to the exe name reads better than
+          // showing that raw string to the user.
+          if (!displayName.empty() && displayName[0] == L'@') displayName.clear();
+
+          std::wstring name = FriendlyNameForPid(pid, displayName);
+          Napi::Object entry = Napi::Object::New(env);
+          entry.Set("pid", Napi::Number::New(env, static_cast<double>(pid)));
+          entry.Set("name", Napi::String::New(env, WideToUtf8(name)));
+          result[static_cast<uint32_t>(written++)] = entry;
+          seenPids.push_back(pid);
+        }
+        control2->Release();
+      }
+      control->Release();
+    }
+  }
+
+  if (sessionEnumerator) sessionEnumerator->Release();
+  if (sessionManager) sessionManager->Release();
+  if (device) device->Release();
+  if (deviceEnumerator) deviceEnumerator->Release();
+  if (needsCoUninit) CoUninitialize();
+
+  return result;
 }
 
 Napi::Object Init(Napi::Env env, Napi::Object exports) {
   exports.Set("start", Napi::Function::New(env, Start));
   exports.Set("stop", Napi::Function::New(env, Stop));
+  exports.Set("listAudioSessions", Napi::Function::New(env, ListAudioSessions));
   return exports;
 }
 

@@ -39,6 +39,8 @@ export function validateClientMessage(raw: unknown): ClientToServerMessage | nul
         : null;
     case 'screen-share-changed':
       return typeof m.isSharing === 'boolean' ? (m as unknown as ClientToServerMessage) : null;
+    case 'music-share-changed':
+      return typeof m.isSharing === 'boolean' ? (m as unknown as ClientToServerMessage) : null;
     case 'avatar-changed':
       return m as unknown as ClientToServerMessage;
     case 'peer-mute-status':

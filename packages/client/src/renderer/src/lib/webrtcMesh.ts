@@ -80,7 +80,7 @@ interface SpeakingState {
   consecutive: number;
 }
 
-type TrackRole = 'mic' | 'camera' | 'screenVideo' | 'screenAudio';
+type TrackRole = 'mic' | 'camera' | 'screenVideo' | 'screenAudio' | 'musicAudio';
 
 // Mic audio is fine at WebRTC's default Opus ceiling (~32kbps mono) — voice doesn't need more.
 // Screen-share system audio (music, game/video sound) does: raising the ceiling here doesn't
@@ -201,8 +201,10 @@ interface PeerConnectionEntry {
   pendingCandidates: RTCIceCandidateInit[];
   personalStreamId: string | null;
   screenStreamId: string | null;
+  musicStreamId: string | null;
   personalStream: MediaStream | null;
   screenStream: MediaStream | null;
+  musicStream: MediaStream | null;
   senders: Partial<Record<TrackRole, RTCRtpSender>>;
   imagesChannel: RTCDataChannel | null;
   pendingImageRequests: { kind: ImageCacheKind; ownerId: string; knownHash: string | null }[];
@@ -262,7 +264,7 @@ interface MeshManagerOptions {
   send: (message: ClientToServerMessage) => void;
   onRemoteStreamsChange: (
     peerId: string,
-    streams: { personal: MediaStream | null; screen: MediaStream | null }
+    streams: { personal: MediaStream | null; screen: MediaStream | null; music: MediaStream | null }
   ) => void;
   onSpeakingChange: (peerId: string, isSpeaking: boolean) => void;
   onLocalSpeakingChange: (isSpeaking: boolean) => void;
@@ -342,10 +344,12 @@ export class MeshManager {
   private selfPeerId: string | null = null;
   private personalStream = new MediaStream();
   private screenStream = new MediaStream();
+  private musicStream = new MediaStream();
   private micTrack: MediaStreamTrack | null = null;
   private cameraTrack: MediaStreamTrack | null = null;
   private screenVideoTrack: MediaStreamTrack | null = null;
   private screenAudioTrack: MediaStreamTrack | null = null;
+  private musicAudioTrack: MediaStreamTrack | null = null;
   private speakingStateByPeer = new Map<string, SpeakingState>();
   // Not a SpeakingState/applySpeakingLevel() — those give both directions the same debounce,
   // exactly the mix-up this replaced (see LOCAL_SPEAKING_RELEASE_HOLD_MS's comment). Plain
@@ -701,7 +705,7 @@ export class MeshManager {
     this.pendingIceCandidatesByPeer.delete(peerId);
     this.candidateCounters.delete(peerId);
     this.speakingStateByPeer.delete(peerId);
-    this.opts.onRemoteStreamsChange(peerId, { personal: null, screen: null });
+    this.opts.onRemoteStreamsChange(peerId, { personal: null, screen: null, music: null });
   }
 
   /** Asks one peer for an image (their own avatar, or a server icon they host) — queued until
@@ -952,6 +956,33 @@ export class MeshManager {
     await Promise.all([...toRenegotiate].map((entry) => this.renegotiate(entry)));
   }
 
+  /** Mirrors forceClearScreenStream above — "this peer stopped sharing music" is authoritative
+   * from the explicit music-share-changed signal, not from track lifecycle events. */
+  forceClearMusicStream(peerId: string): void {
+    const entry = this.connections.get(peerId);
+    if (!entry) return;
+    entry.musicStream = null;
+    entry.musicStreamId = null;
+    this.emitRemoteStreams(peerId);
+  }
+
+  /** [2026-08-30, pedido do Mozar] "Compartilhar áudio" — mesmo padrão de setLocalScreenTrack,
+   * só que sempre um único track de áudio (WASAPI process-loopback em modo INCLUDE, ver
+   * lib/processLoopbackAudio.ts), nunca vídeo. Sobe numa MediaStream própria (this.musicStream),
+   * separada de screenStream — stream.id distinto é o que deixa o outro lado do mesh diferenciar
+   * "áudio de tela" de "áudio de música" ao receber (ver pc.ontrack acima). */
+  async setLocalMusicTrack(track: MediaStreamTrack | null): Promise<void> {
+    if (this.musicAudioTrack) this.musicStream.removeTrack(this.musicAudioTrack);
+    this.musicAudioTrack = track;
+    if (track) this.musicStream.addTrack(track);
+
+    const toRenegotiate = new Set<PeerConnectionEntry>();
+    for (const entry of this.connections.values()) {
+      if (this.applyTrack(entry, 'musicAudio', track, this.musicStream)) toRenegotiate.add(entry);
+    }
+    await Promise.all([...toRenegotiate].map((entry) => this.renegotiate(entry)));
+  }
+
   closeAll(): void {
     clearInterval(this.speakingPollHandle);
     clearInterval(this.localSpeakingPollHandle);
@@ -980,8 +1011,10 @@ export class MeshManager {
       pendingCandidates: this.pendingIceCandidatesByPeer.get(peerId) ?? [],
       personalStreamId: null,
       screenStreamId: null,
+      musicStreamId: null,
       personalStream: null,
       screenStream: null,
+      musicStream: null,
       senders: {},
       imagesChannel: null,
       pendingImageRequests: this.pendingImageRequestsByPeer.get(peerId) ?? [],
@@ -1165,25 +1198,48 @@ export class MeshManager {
     };
 
     // Camera and screen are both kind:'video', so which is which is determined by
-    // grouping: local tracks are added via two distinct MediaStream objects
-    // (personal vs screen), and that stream id survives the wire (msid) — the first
-    // distinct stream id seen for a peer is always "personal" since the mic track is
-    // always present from the very first offer, before screen share is ever possible.
+    // grouping: local tracks are added via distinct MediaStream objects (personal,
+    // screen, music), and that stream id survives the wire (msid) — the first distinct
+    // stream id seen for a peer is always "personal" since the mic track is always
+    // present from the very first offer, before screen share or music share is ever
+    // possible. [2026-08-30] A stream id already known as screen/music (its OTHER track
+    // arriving — screen's audio after its video, same stream.id both times) is matched
+    // directly; a genuinely new non-personal stream is screen if its track is video
+    // (music never has one) or music otherwise (screen's own audio, if any, is never the
+    // first track observed for a brand-new screen stream.id — setLocalScreenTrack always
+    // addTrack()s video before audio within the same renegotiation, and a single
+    // setRemoteDescription delivers ontrack in m-line order).
     pc.ontrack = (event) => {
       const stream = event.streams[0];
       if (!stream) return;
-      const isPersonal = entry.personalStreamId === null || entry.personalStreamId === stream.id;
-      if (isPersonal) {
+      let kind: 'personal' | 'screen' | 'music';
+      if (entry.personalStreamId === null || entry.personalStreamId === stream.id) {
+        kind = 'personal';
         entry.personalStreamId = stream.id;
         entry.personalStream = stream;
-      } else {
+      } else if (entry.screenStreamId === stream.id) {
+        kind = 'screen';
+        entry.screenStream = stream;
+      } else if (entry.musicStreamId === stream.id) {
+        kind = 'music';
+        entry.musicStream = stream;
+      } else if (event.track.kind === 'video') {
+        kind = 'screen';
         entry.screenStreamId = stream.id;
         entry.screenStream = stream;
+      } else {
+        kind = 'music';
+        entry.musicStreamId = stream.id;
+        entry.musicStream = stream;
       }
       event.track.addEventListener('ended', () => {
-        if (!isPersonal) {
+        if (kind === 'screen') {
           entry.screenStream = null;
           entry.screenStreamId = null;
+          this.emitRemoteStreams(peerId);
+        } else if (kind === 'music') {
+          entry.musicStream = null;
+          entry.musicStreamId = null;
           this.emitRemoteStreams(peerId);
         }
       });
@@ -1212,6 +1268,11 @@ export class MeshManager {
       const sender = entry.pc.addTrack(this.screenAudioTrack, this.screenStream);
       entry.senders.screenAudio = sender;
       this.raiseScreenAudioBitrateCeiling(sender);
+    }
+    if (this.musicAudioTrack) {
+      const sender = entry.pc.addTrack(this.musicAudioTrack, this.musicStream);
+      entry.senders.musicAudio = sender;
+      this.raiseScreenAudioBitrateCeiling(sender); // same "music deserves more than default opus bitrate" reasoning
     }
   }
 
@@ -1527,7 +1588,7 @@ export class MeshManager {
     if (track && !existing) {
       const sender = entry.pc.addTrack(track, groupStream);
       entry.senders[role] = sender;
-      if (role === 'screenAudio') this.raiseScreenAudioBitrateCeiling(sender);
+      if (role === 'screenAudio' || role === 'musicAudio') this.raiseScreenAudioBitrateCeiling(sender);
       if (role === 'screenVideo') {
         this.applyScreenVideoDegradationPreference(sender);
         this.preferH264ForScreenVideo(entry.pc, sender);
@@ -1760,7 +1821,8 @@ export class MeshManager {
     if (!entry) return;
     this.opts.onRemoteStreamsChange(peerId, {
       personal: entry.personalStream,
-      screen: entry.screenStream
+      screen: entry.screenStream,
+      music: entry.musicStream
     });
   }
 }

@@ -19,7 +19,7 @@ import {
   Video,
   VideoOff,
   ScreenShare,
-  LayoutGrid,
+  Music2,
   Megaphone,
   MicOff,
   HeadphoneOff,
@@ -81,8 +81,10 @@ interface RoomSidebarProps {
   onOpenProfile: () => void;
   selfCameraOn: boolean;
   selfSharingScreen: boolean;
+  selfSharingMusic: boolean;
   onToggleCamera: () => void;
   onToggleScreenShare: () => void;
+  onToggleMusicShare: () => void;
   onPlaySoundboardClip: (
     buffer: AudioBuffer,
     volume: number,
@@ -98,9 +100,16 @@ interface RoomSidebarProps {
   soundDownloadTick: number;
   /** Shared with RoomView via usePeerVolumeControl (lifted to ServerListPage) so muting/adjusting
    * someone from either place stays in sync live, not just after a remount. */
-  onOpenVolumeMenu: (x: number, y: number, peerId: string, userId: string, name: string) => void;
-  isPeerMutedByMe: (userId: string) => boolean;
+  onOpenVolumeMenu: (x: number, y: number, peerId: string, userId: string, name: string, volumeKey?: string) => void;
+  isPeerMutedByMe: (volumeKey: string) => boolean;
   onViewProfile: (userId: string, name: string, avatarUrl: string | null) => void;
+  /** [2026-08-30, pedido do Mozar] Só a linha "Music <nome>" usa isso — em vez do padrão de
+   * clique-direito-abre-menu que um participante normal tem, o ícone de som dela mesma já é o
+   * controle inteiro: clique esquerdo muta/desmuta na hora, clique direito abre o volume
+   * (onOpenVolumeMenu, mesmo popup de sempre). Não precisa de sendMuteStatus — volumeKey
+   * (`${userId}:music`) nunca é a voz de ninguém, então não existe aviso de "fulano te mutou"
+   * pra disparar aqui, diferente do toggle de mute de um participante de verdade. */
+  onToggleMusicMute: (volumeKey: string) => void;
   /** userId of whoever's volume popup is currently open — drives the "clicked" highlight so the
    * right-click action has visible feedback beyond the popup itself. */
   activeVolumeMenuUserId: string | null;
@@ -135,8 +144,10 @@ export default function RoomSidebar({
   onOpenProfile,
   selfCameraOn,
   selfSharingScreen,
+  selfSharingMusic,
   onToggleCamera,
   onToggleScreenShare,
+  onToggleMusicShare,
   onPlaySoundboardClip,
   peerSoundLists,
   onRequestPeerSoundList,
@@ -145,7 +156,8 @@ export default function RoomSidebar({
   onOpenVolumeMenu,
   activeVolumeMenuUserId,
   isPeerMutedByMe,
-  onViewProfile
+  onViewProfile,
+  onToggleMusicMute
 }: RoomSidebarProps) {
   // [2026-08-30, pedido do Mozar] Seta ao lado de "Canais de Voz" nunca tinha sido ligada a nada —
   // agora alterna entre a lista de participantes normal (nome + status, padrão) e uma versão
@@ -535,6 +547,12 @@ export default function RoomSidebar({
             // null for self — no P2P connection to yourself, so no dot to show (see the render
             // below, which only draws one when this isn't null).
             connectionStatus: 'connecting' | 'connected' | 'failed' | null;
+            // [2026-08-30, pedido do Mozar] "Music <nome>" — mesmo peer/userId de uma linha de voz
+            // já existente, mas volume/mudo próprios (volumeKey `${userId}:music`, ver
+            // usePeerVolumeControl.ts) e sem os badges que não fazem sentido pra áudio compartilhado
+            // (mic mutado/host — ver render abaixo, filtra por isMusicRow).
+            isMusicRow: boolean;
+            volumeKey: string;
           }[] = isJoined
             ? [
                 {
@@ -544,34 +562,62 @@ export default function RoomSidebar({
                   isSelf: true,
                   isHost: selfPeerId !== null && selfPeerId === hostPeerId,
                   isSpeaking,
-                  isBroadcasting: selfCameraOn || selfSharingScreen,
+                  isBroadcasting: selfCameraOn || selfSharingScreen || selfSharingMusic,
                   isMicMuted,
                   isDeafened,
                   mutedMe: false,
                   mutedByMe: false,
                   userId: null,
-                  connectionStatus: null
+                  connectionStatus: null,
+                  isMusicRow: false,
+                  volumeKey: ''
                 },
-                ...peers.map((peer) => ({
-                  key: peer.peerId,
-                  name: peer.displayName,
-                  // Only ever populated after a P2P fetch from this peer succeeds — see
-                  // useRoomConnection's onImageReceived. Falls back to the initial letter below
-                  // until then, same as it did before P2P avatars existed at all.
-                  avatarUrl: peer.avatarUrl,
-                  isSelf: false,
-                  isHost: peer.peerId === hostPeerId,
-                  isSpeaking: peer.isSpeaking,
-                  isBroadcasting:
-                    (!!peer.personalStream && peer.personalStream.getVideoTracks().length > 0) ||
-                    !!peer.screenStream,
-                  isMicMuted: peer.isMicMuted,
-                  isDeafened: peer.isDeafened,
-                  mutedMe: peer.mutedMe,
-                  mutedByMe: isPeerMutedByMe(peer.userId),
-                  userId: peer.userId,
-                  connectionStatus: peer.connectionStatus
-                }))
+                ...peers.flatMap((peer) => {
+                  const voiceRow = {
+                    key: peer.peerId,
+                    name: peer.displayName,
+                    // Only ever populated after a P2P fetch from this peer succeeds — see
+                    // useRoomConnection's onImageReceived. Falls back to the initial letter below
+                    // until then, same as it did before P2P avatars existed at all.
+                    avatarUrl: peer.avatarUrl,
+                    isSelf: false,
+                    isHost: peer.peerId === hostPeerId,
+                    isSpeaking: peer.isSpeaking,
+                    isBroadcasting:
+                      (!!peer.personalStream && peer.personalStream.getVideoTracks().length > 0) ||
+                      !!peer.screenStream,
+                    isMicMuted: peer.isMicMuted,
+                    isDeafened: peer.isDeafened,
+                    mutedMe: peer.mutedMe,
+                    mutedByMe: isPeerMutedByMe(peer.userId),
+                    userId: peer.userId,
+                    connectionStatus: peer.connectionStatus,
+                    isMusicRow: false,
+                    volumeKey: peer.userId
+                  };
+                  if (!peer.musicStream) return [voiceRow];
+                  const musicVolumeKey = `${peer.userId}:music`;
+                  return [
+                    voiceRow,
+                    {
+                      key: `${peer.peerId}-music`,
+                      name: `Music ${peer.displayName}`,
+                      avatarUrl: peer.avatarUrl,
+                      isSelf: false,
+                      isHost: false,
+                      isSpeaking: false,
+                      isBroadcasting: true,
+                      isMicMuted: false,
+                      isDeafened: false,
+                      mutedMe: false,
+                      mutedByMe: isPeerMutedByMe(musicVolumeKey),
+                      userId: peer.userId,
+                      connectionStatus: null,
+                      isMusicRow: true,
+                      volumeKey: musicVolumeKey
+                    }
+                  ];
+                })
               ]
             : [];
 
@@ -642,7 +688,7 @@ export default function RoomSidebar({
                 >
                   {participants.map((participant) => {
                     const isVolumeTarget = !participant.isSelf && !!participant.userId;
-                    const isVolumeMenuActive = isVolumeTarget && participant.userId === activeVolumeMenuUserId;
+                    const isVolumeMenuActive = isVolumeTarget && participant.volumeKey === activeVolumeMenuUserId;
                     return (
                     <div
                       key={participant.key}
@@ -659,7 +705,10 @@ export default function RoomSidebar({
                           : undefined
                       }
                       onContextMenu={
-                        isVolumeTarget
+                        // Music rows' right-click lives on their own icon instead (see below) —
+                        // opening the same volume menu from anywhere on the row would be a second,
+                        // redundant path to it.
+                        isVolumeTarget && !participant.isMusicRow
                           ? (event) => {
                               event.preventDefault();
                               onOpenVolumeMenu(
@@ -667,7 +716,8 @@ export default function RoomSidebar({
                                 event.clientY,
                                 participant.key,
                                 participant.userId!,
-                                participant.name
+                                participant.name,
+                                participant.volumeKey
                               );
                             }
                           : undefined
@@ -727,10 +777,42 @@ export default function RoomSidebar({
                               <EarOff size={18} />
                             </span>
                           )}
-                          {participant.mutedByMe && (
+                          {participant.mutedByMe && !participant.isMusicRow && (
                             <span className="room-sidebar__muted-by-me-status" title={`Você mutou ${participant.name}`}>
                               <VolumeX size={18} />
                             </span>
+                          )}
+                          {/* [2026-08-30, pedido do Mozar] "Music <nome>" não usa o padrão de
+                              clique-direito-abre-menu de um participante normal — o ícone é o
+                              controle inteiro: clique esquerdo muta/desmuta na hora, clique
+                              direito abre o volume (mesmo popup de sempre, ParticipantVolumeMenu).
+                              stopPropagation nos dois pra não também disparar o onClick/
+                              onContextMenu da linha (Ver perfil / nada, já que o próprio
+                              onContextMenu da linha é desligado pra linhas de música acima). */}
+                          {participant.isMusicRow && (
+                            <button
+                              type="button"
+                              className="room-sidebar__music-mute-button"
+                              title={participant.mutedByMe ? `Desmutar ${participant.name}` : `Mutar ${participant.name}`}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                onToggleMusicMute(participant.volumeKey);
+                              }}
+                              onContextMenu={(event) => {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                onOpenVolumeMenu(
+                                  event.clientX,
+                                  event.clientY,
+                                  participant.key,
+                                  participant.userId!,
+                                  participant.name,
+                                  participant.volumeKey
+                                );
+                              }}
+                            >
+                              {participant.mutedByMe ? <VolumeX size={18} /> : <Volume2 size={18} />}
+                            </button>
                           )}
                           {participant.isBroadcasting && <LiveBadge className="room-sidebar__live-badge" />}
                           {participant.isHost && <HostStarBadge className="room-sidebar__host-star" />}
@@ -777,8 +859,14 @@ export default function RoomSidebar({
               >
                 <ScreenShare size={18} />
               </button>
-              <button className="room-sidebar__quick-action" title="Em breve" disabled>
-                <LayoutGrid size={18} />
+              <button
+                className={
+                  'room-sidebar__quick-action' + (selfSharingMusic ? ' room-sidebar__quick-action--active' : '')
+                }
+                title={selfSharingMusic ? 'Parar de compartilhar áudio' : 'Compartilhar áudio'}
+                onClick={onToggleMusicShare}
+              >
+                <Music2 size={18} />
               </button>
               <button
                 className={

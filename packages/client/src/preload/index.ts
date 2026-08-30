@@ -17,19 +17,28 @@ contextBridge.exposeInMainWorld('concord', {
     pickImage: () => ipcRenderer.invoke('media:pick-image'),
     pickAudio: () => ipcRenderer.invoke('media:pick-audio')
   },
+  // [2026-08-30, pedido do Mozar] sessionId identifica cada captura independente — a exclusão do
+  // próprio processo (áudio de sistema da transmissão de tela) e a inclusão de um app específico
+  // (compartilhar áudio de um app só) podem rodar ao mesmo tempo, cada uma com seu próprio canal
+  // de eventos (`process-loopback:chunk:${sessionId}`/`:stopped:${sessionId}`).
   processLoopback: {
-    start: (): Promise<boolean> => ipcRenderer.invoke('process-loopback:start'),
-    stop: () => ipcRenderer.send('process-loopback:stop'),
+    start: (sessionId: string, mode: 'exclude' | 'include', targetPid: number): Promise<boolean> =>
+      ipcRenderer.invoke('process-loopback:start', sessionId, mode, targetPid),
+    stop: (sessionId: string) => ipcRenderer.send('process-loopback:stop', sessionId),
     isAvailable: (): Promise<boolean> => ipcRenderer.invoke('process-loopback:is-available'),
-    onChunk: (callback: (chunk: Uint8Array) => void) => {
+    listAudioSessions: (): Promise<Array<{ pid: number; name: string }>> =>
+      ipcRenderer.invoke('process-loopback:list-audio-sessions'),
+    onChunk: (sessionId: string, callback: (chunk: Uint8Array) => void) => {
+      const channel = `process-loopback:chunk:${sessionId}`;
       const listener = (_event: unknown, chunk: Uint8Array) => callback(chunk);
-      ipcRenderer.on('process-loopback:chunk', listener);
-      return () => ipcRenderer.removeListener('process-loopback:chunk', listener);
+      ipcRenderer.on(channel, listener);
+      return () => ipcRenderer.removeListener(channel, listener);
     },
-    onStopped: (callback: () => void) => {
+    onStopped: (sessionId: string, callback: () => void) => {
+      const channel = `process-loopback:stopped:${sessionId}`;
       const listener = () => callback();
-      ipcRenderer.on('process-loopback:stopped', listener);
-      return () => ipcRenderer.removeListener('process-loopback:stopped', listener);
+      ipcRenderer.on(channel, listener);
+      return () => ipcRenderer.removeListener(channel, listener);
     }
   },
   imageCache: {

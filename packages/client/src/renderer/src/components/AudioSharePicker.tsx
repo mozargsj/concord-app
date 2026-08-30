@@ -1,0 +1,115 @@
+import { useEffect, useState } from 'react';
+import { Music2, X } from 'lucide-react';
+import Tooltip from './Tooltip';
+import { listAudioSessions } from '../lib/processLoopbackAudio';
+import '../styles/AudioSharePicker.css';
+
+interface AudioSession {
+  pid: number;
+  name: string;
+}
+
+interface AudioSharePickerProps {
+  onSelect: (session: AudioSession) => void;
+  onClose: () => void;
+}
+
+/**
+ * "Compartilhar áudio" — mesmo formato de modal do ScreenSharePicker.tsx, mas escolhendo um
+ * processo em vez de uma tela/janela (pedido do Mozar, 2026-08-30): a lista vem do addon nativo
+ * (process_loopback.cc's ListAudioSessions, WASAPI IAudioSessionEnumerator) — só apps com uma
+ * sessão de áudio ativa agora, o Concord fica de fora da própria lista. Windows-only, mesma
+ * limitação de todo o recurso de process-loopback.
+ */
+export default function AudioSharePicker({ onSelect, onClose }: AudioSharePickerProps) {
+  const [sessions, setSessions] = useState<AudioSession[] | null>(null);
+  const [selectedPid, setSelectedPid] = useState<number | null>(null);
+  const [isAvailable, setIsAvailable] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    window.concord.processLoopback
+      .isAvailable()
+      .then((available) => {
+        if (cancelled) return;
+        setIsAvailable(available);
+        if (!available) {
+          setSessions([]);
+          return;
+        }
+        return listAudioSessions().then((result) => {
+          if (!cancelled) setSessions(result);
+        });
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setIsAvailable(false);
+          setSessions([]);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const selectedSession = sessions?.find((session) => session.pid === selectedPid) ?? null;
+
+  return (
+    <div className="audio-picker__backdrop" onClick={onClose}>
+      <div className="audio-picker" onClick={(event) => event.stopPropagation()}>
+        <header className="audio-picker__header">
+          <h2>Compartilhar áudio</h2>
+          <Tooltip label="Fechar">
+            <button className="audio-picker__close" onClick={onClose}>
+              <X size={18} />
+            </button>
+          </Tooltip>
+        </header>
+
+        <p className="audio-picker__hint">
+          Transmite só o áudio de um app escolhido — aparece na sala como "Music {'{'}seu nome{'}'}", com volume e
+          mudo independentes da sua voz.
+        </p>
+
+        {isAvailable === false && (
+          <p className="audio-picker__unavailable">
+            Recurso indisponível neste PC (precisa do Windows 10 2004 ou mais recente).
+          </p>
+        )}
+
+        {isAvailable !== false && sessions === null && <p className="audio-picker__hint">Procurando apps com áudio ativo…</p>}
+
+        {isAvailable !== false && sessions !== null && sessions.length === 0 && (
+          <p className="audio-picker__hint">Nenhum app tocando áudio agora — abra um player e toque algo antes.</p>
+        )}
+
+        {sessions !== null && sessions.length > 0 && (
+          <div className="audio-picker__list">
+            {sessions.map((session) => (
+              <button
+                key={session.pid}
+                className={
+                  'audio-picker__item' + (session.pid === selectedPid ? ' audio-picker__item--selected' : '')
+                }
+                onClick={() => setSelectedPid(session.pid)}
+              >
+                <Music2 size={18} className="audio-picker__item-icon" />
+                <span className="audio-picker__item-name">{session.name}</span>
+              </button>
+            ))}
+          </div>
+        )}
+
+        <footer className="audio-picker__footer">
+          <button
+            className="audio-picker__confirm"
+            disabled={!selectedSession}
+            onClick={() => selectedSession && onSelect(selectedSession)}
+          >
+            Compartilhar
+          </button>
+        </footer>
+      </div>
+    </div>
+  );
+}

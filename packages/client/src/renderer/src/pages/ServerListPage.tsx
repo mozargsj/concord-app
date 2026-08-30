@@ -8,6 +8,7 @@ import RoomView from '../components/RoomView';
 import ServerActionsModal from '../components/ServerActionsModal';
 import InviteCodeModal from '../components/InviteCodeModal';
 import ScreenSharePicker from '../components/ScreenSharePicker';
+import AudioSharePicker from '../components/AudioSharePicker';
 import LoadingSpinner from '../components/LoadingSpinner';
 import NoInternetScreen from '../components/NoInternetScreen';
 import ParticipantVolumeMenu from '../components/ParticipantVolumeMenu';
@@ -30,7 +31,11 @@ import { useRoomConnection } from '../hooks/useRoomConnection';
 import { usePeerVolumeControl } from '../hooks/usePeerVolumeControl';
 import { getPreferredDeviceId } from '../lib/devicePreferences';
 import { loadCachedImage } from '../lib/imageCache';
-import { startExcludedLoopbackAudio, type LoopbackAudioSession } from '../lib/processLoopbackAudio';
+import {
+  startExcludedLoopbackAudio,
+  startProcessLoopbackAudio,
+  type LoopbackAudioSession
+} from '../lib/processLoopbackAudio';
 import type { ScreenQualityMode } from '../lib/screenSharePreferences';
 import {
   playCameraStart,
@@ -86,6 +91,11 @@ export default function ServerListPage({
   const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
   const [screenStream, setScreenStream] = useState<MediaStream | null>(null);
   const [isScreenPickerOpen, setIsScreenPickerOpen] = useState(false);
+  // [2026-08-30, pedido do Mozar] "Compartilhar áudio" — isMusicSharing (não uma MediaStream local
+  // pra guardar, já que é só um track de áudio de captura por processo, sem preview visual próprio
+  // como a tela tem) é o suficiente pra UI saber se está ativo agora.
+  const [isMusicSharing, setIsMusicSharing] = useState(false);
+  const [isAudioPickerOpen, setIsAudioPickerOpen] = useState(false);
   const [mediaError, setMediaError] = useState<string | null>(null);
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [serverActionsMode, setServerActionsMode] = useState<'create' | 'join' | null>(null);
@@ -159,6 +169,7 @@ export default function ServerListPage({
     peerSoundLists,
     setLocalCameraTrack,
     setLocalScreenTrack,
+    setLocalMusicTrack,
     switchMicDevice,
     refreshMicPipeline,
     sendDeviceSwitched,
@@ -185,6 +196,11 @@ export default function ServerListPage({
   // on screenStreamRef like any other, but the native capture thread + AudioContext behind it
   // need their own teardown call, which plain track.stop() doesn't reach.
   const loopbackAudioSessionRef = useRef<LoopbackAudioSession | null>(null);
+  // [2026-08-30, pedido do Mozar] "Compartilhar áudio" — captura por processo (INCLUDE mode) é a
+  // ÚNICA fonte possível pra isso, sem fallback nenhum (diferente do áudio de sistema da tela, que
+  // cai pro getUserMedia legado se o addon nativo não estiver disponível) — não existe outra forma
+  // de isolar o áudio de um app só.
+  const musicLoopbackSessionRef = useRef<LoopbackAudioSession | null>(null);
 
   function stopScreenShareTracks() {
     screenStreamRef.current?.getTracks().forEach((track) => track.stop());
@@ -349,14 +365,18 @@ export default function ServerListPage({
     cameraStreamRef.current?.getTracks().forEach((track) => track.stop());
     cameraStreamRef.current = null;
     stopScreenShareTracks();
+    musicLoopbackSessionRef.current?.stop();
+    musicLoopbackSessionRef.current = null;
     setCameraStream(null);
     setScreenStream(null);
+    setIsMusicSharing(false);
   }, [selectedRoomId]);
 
   useEffect(() => {
     return () => {
       cameraStreamRef.current?.getTracks().forEach((track) => track.stop());
       stopScreenShareTracks();
+      musicLoopbackSessionRef.current?.stop();
     };
   }, []);
 
@@ -516,6 +536,45 @@ export default function ServerListPage({
       setMediaError(error instanceof Error ? error.message : 'Não foi possível capturar a tela escolhida.');
       void reportClientError('ScreenCaptureError', error instanceof Error ? error.message : String(error), error instanceof Error ? error.stack : undefined);
     }
+  }
+
+  // [2026-08-30, pedido do Mozar] "Compartilhar áudio" — mesmo padrão de stopScreenShare/
+  // handleToggleScreenShare/handlePickScreenSource, só que sempre via captura por processo
+  // (nunca getUserMedia — não existe outra forma de isolar o áudio de um app só) e sem vídeo.
+  function stopMusicShare() {
+    musicLoopbackSessionRef.current?.stop();
+    musicLoopbackSessionRef.current = null;
+    setIsMusicSharing(false);
+    setLocalMusicTrack(null);
+  }
+
+  function handleToggleMusicShare() {
+    if (isMusicSharing) {
+      stopMusicShare();
+      return;
+    }
+    setIsAudioPickerOpen(true);
+  }
+
+  async function handlePickAudioSource(session: { pid: number; name: string }) {
+    setIsAudioPickerOpen(false);
+    const loopbackSession = await startProcessLoopbackAudio(`music-${session.pid}`, 'include', session.pid);
+    if (!loopbackSession) {
+      setMediaError('Não foi possível capturar o áudio desse app.');
+      return;
+    }
+    musicLoopbackSessionRef.current = loopbackSession;
+    setMediaError(null);
+    setIsMusicSharing(true);
+    setLocalMusicTrack(loopbackSession.track);
+
+    // Mirrors handlePickScreenSource's videoTrack.onended — the app closing (or its audio
+    // session simply ending) is exactly this same signal on this track, see
+    // processLoopbackAudio.ts's onStopped -> track.stop() bridge.
+    loopbackSession.track.onended = () => {
+      if (musicLoopbackSessionRef.current !== loopbackSession) return; // stale handler from an already-replaced session
+      stopMusicShare();
+    };
   }
 
   function handleToggleMic() {
@@ -730,17 +789,20 @@ export default function ServerListPage({
         onOpenProfile={() => setIsProfileOpen(true)}
         selfCameraOn={!!cameraStream}
         selfSharingScreen={!!screenStream}
+        selfSharingMusic={isMusicSharing}
         onToggleCamera={handleToggleCamera}
         onToggleScreenShare={handleToggleScreenShare}
+        onToggleMusicShare={handleToggleMusicShare}
         onPlaySoundboardClip={playSoundboardClip}
         peerSoundLists={peerSoundLists}
         onRequestPeerSoundList={requestPeerSoundList}
         onRequestPeerSound={requestPeerSound}
         soundDownloadTick={soundDownloadTick}
         onOpenVolumeMenu={peerVolume.openVolumeMenu}
-        activeVolumeMenuUserId={peerVolume.volumeMenu?.userId ?? null}
-        isPeerMutedByMe={(userId) => peerVolume.getEffectivePeerSettings(userId).muted}
+        activeVolumeMenuUserId={peerVolume.volumeMenu?.volumeKey ?? null}
+        isPeerMutedByMe={(volumeKey) => peerVolume.getEffectivePeerSettings(volumeKey).muted}
         onViewProfile={(userId, name, avatarUrl) => setViewingProfile({ userId, name, avatarUrl })}
+        onToggleMusicMute={(volumeKey) => peerVolume.handleTogglePeerMute(volumeKey)}
       />
 
       <div className="server-list-page__main">
@@ -765,10 +827,12 @@ export default function ServerListPage({
           onToggleCamera={handleToggleCamera}
           onSelectCamera={handleSelectCamera}
           onToggleScreenShare={handleToggleScreenShare}
+          isSharingMusic={isMusicSharing}
+          onToggleMusicShare={handleToggleMusicShare}
           getPeerVolume={peerVolume.getEffectiveVolume}
           onOpenVolumeMenu={peerVolume.openVolumeMenu}
-          activeVolumeMenuUserId={peerVolume.volumeMenu?.userId ?? null}
-          isPeerMutedByMe={(userId) => peerVolume.getEffectivePeerSettings(userId).muted}
+          activeVolumeMenuUserId={peerVolume.volumeMenu?.volumeKey ?? null}
+          isPeerMutedByMe={(volumeKey) => peerVolume.getEffectivePeerSettings(volumeKey).muted}
           onViewProfile={(userId, name, avatarUrl) => setViewingProfile({ userId, name, avatarUrl })}
         />
       </div>
@@ -806,17 +870,26 @@ export default function ServerListPage({
         <ScreenSharePicker onSelect={handlePickScreenSource} onClose={() => setIsScreenPickerOpen(false)} />
       )}
 
+      {isAudioPickerOpen && (
+        <AudioSharePicker onSelect={handlePickAudioSource} onClose={() => setIsAudioPickerOpen(false)} />
+      )}
+
       {peerVolume.volumeMenu && (
         <ParticipantVolumeMenu
           x={peerVolume.volumeMenu.x}
           y={peerVolume.volumeMenu.y}
           name={peerVolume.volumeMenu.name}
-          volume={peerVolume.getEffectivePeerSettings(peerVolume.volumeMenu.userId).volume}
-          isMuted={peerVolume.getEffectivePeerSettings(peerVolume.volumeMenu.userId).muted}
-          onVolumeChange={(value) => peerVolume.handlePeerVolumeChange(peerVolume.volumeMenu!.userId, value)}
+          volume={peerVolume.getEffectivePeerSettings(peerVolume.volumeMenu.volumeKey).volume}
+          isMuted={peerVolume.getEffectivePeerSettings(peerVolume.volumeMenu.volumeKey).muted}
+          onVolumeChange={(value) => peerVolume.handlePeerVolumeChange(peerVolume.volumeMenu!.volumeKey, value)}
           onToggleMute={() => {
-            const isMuted = peerVolume.handleTogglePeerMute(peerVolume.volumeMenu!.userId);
-            sendMuteStatus(peerVolume.volumeMenu!.peerId, isMuted);
+            const isMuted = peerVolume.handleTogglePeerMute(peerVolume.volumeMenu!.volumeKey);
+            // Only a real "you muted this person's voice" is worth telling them about (drives
+            // their own "fulano te mutou" badge) — a compound volumeKey (e.g. muting their shared
+            // music) is a different, narrower thing than muting the person, never broadcast.
+            if (peerVolume.volumeMenu!.volumeKey === peerVolume.volumeMenu!.userId) {
+              sendMuteStatus(peerVolume.volumeMenu!.peerId, isMuted);
+            }
           }}
           onViewProfile={() => {
             const targetUserId = peerVolume.volumeMenu!.userId;

@@ -520,6 +520,26 @@
   color: var(--color-danger);
 }
 
+/* [2026-08-30, pedido do Mozar] Ícone interativo próprio da linha "Music <nome>" — clique
+   esquerdo muta/desmuta na hora, clique direito abre o volume (ver RoomSidebar.tsx). Sem fundo/
+   borda por padrão (parece um badge normal), acende no hover como qualquer outro botão de ícone
+   do app pra deixar claro que é clicável, diferente dos badges estáticos ao lado. */
+.room-sidebar__music-mute-button {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  padding: 2px;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+}
+
+.room-sidebar__music-mute-button:hover {
+  background: var(--color-bg-elevated-hover);
+  color: var(--color-text-primary);
+}
+
 .room-sidebar__live-badge {
   padding: 1px 5px;
   font-size: 9px;

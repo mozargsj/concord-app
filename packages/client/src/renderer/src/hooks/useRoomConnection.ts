@@ -111,6 +111,10 @@ export interface RoomPeer {
   displayName: string;
   personalStream: MediaStream | null;
   screenStream: MediaStream | null;
+  /** [2026-08-30, pedido do Mozar] "Compartilhar áudio" — só áudio, nunca vídeo, sempre exibido
+   * como um participante à parte ("Music <nome>") em vez de um tile próprio (não há imagem pra
+   * mostrar). Mesmo padrão de screenStream: null enquanto não estiver compartilhando. */
+  musicStream: MediaStream | null;
   isSpeaking: boolean;
   isMicMuted: boolean;
   isDeafened: boolean;
@@ -363,7 +367,7 @@ export function useRoomConnection(
           ...prev,
           peers: prev.peers.map((peer) =>
             peer.peerId === peerId
-              ? { ...peer, personalStream: streams.personal, screenStream: streams.screen }
+              ? { ...peer, personalStream: streams.personal, screenStream: streams.screen, musicStream: streams.music }
               : peer
           )
         }));
@@ -435,6 +439,7 @@ export function useRoomConnection(
               displayName: peer.displayName,
               personalStream: null,
               screenStream: null,
+              musicStream: null,
               isSpeaking: false,
               isMicMuted: false,
               isDeafened: false,
@@ -460,6 +465,7 @@ export function useRoomConnection(
                 displayName: message.displayName,
                 personalStream: null,
                 screenStream: null,
+                musicStream: null,
                 isSpeaking: false,
                 isMicMuted: false,
                 isDeafened: false,
@@ -540,6 +546,18 @@ export function useRoomConnection(
               ...prev,
               peers: prev.peers.map((peer) =>
                 peer.peerId === message.peerId ? { ...peer, screenStream: null } : peer
+              )
+            }));
+          }
+          break;
+        case 'peer-music-share-changed':
+          // Mirrors peer-screen-share-changed exactly — see that case's comment.
+          if (!message.isSharing) {
+            mesh.forceClearMusicStream(message.peerId);
+            setState((prev) => ({
+              ...prev,
+              peers: prev.peers.map((peer) =>
+                peer.peerId === message.peerId ? { ...peer, musicStream: null } : peer
               )
             }));
           }
@@ -686,6 +704,14 @@ export function useRoomConnection(
     signalingRef.current?.send({ type: 'screen-share-changed', isSharing: !!stream });
   }
 
+  /** [2026-08-30, pedido do Mozar] Mesmo padrão de setLocalScreenTrack — track já pronto (a
+   * captura por processo já roda fora daqui, ver ServerListPage.tsx) em vez de uma MediaStream
+   * inteira, já que "compartilhar áudio" nunca tem vídeo. */
+  function setLocalMusicTrack(track: MediaStreamTrack | null): void {
+    void meshRef.current?.setLocalMusicTrack(track);
+    signalingRef.current?.send({ type: 'music-share-changed', isSharing: !!track });
+  }
+
   /** Broadcasts a local soundboard clip to every peer as if it were the mic (see
    * MeshManager.playSoundboardClip) — no-ops outside a room, same as every other mesh action.
    * Returns a stop handle so the caller's play/pause toggle can cut it short. */
@@ -759,6 +785,7 @@ export function useRoomConnection(
     peerSoundLists: state.peerSoundLists,
     setLocalCameraTrack,
     setLocalScreenTrack,
+    setLocalMusicTrack,
     switchMicDevice,
     refreshMicPipeline,
     sendDeviceSwitched,

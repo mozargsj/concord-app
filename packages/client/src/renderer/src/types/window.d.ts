@@ -91,11 +91,12 @@ declare global {
         pickAudio: () => Promise<PickedAudio | null>;
       };
       processLoopback: {
-        start: () => Promise<boolean>;
-        stop: () => void;
+        start: (sessionId: string, mode: 'exclude' | 'include', targetPid: number) => Promise<boolean>;
+        stop: (sessionId: string) => void;
         isAvailable: () => Promise<boolean>;
-        onChunk: (callback: (chunk: Uint8Array) => void) => () => void;
-        onStopped: (callback: () => void) => () => void;
+        listAudioSessions: () => Promise<Array<{ pid: number; name: string }>>;
+        onChunk: (sessionId: string, callback: (chunk: Uint8Array) => void) => () => void;
+        onStopped: (sessionId: string, callback: () => void) => () => void;
       };
       imageCache: {
         save: (key: string, data: ArrayBuffer, mimeType: string) => Promise<boolean>;

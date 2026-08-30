@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Mic, MicOff, Video, VideoOff, ChevronDown, ScreenShare, MoreHorizontal, PhoneOff, Minimize2 } from 'lucide-react';
+import { Mic, MicOff, Video, VideoOff, ChevronDown, ScreenShare, Music2, PhoneOff, Minimize2 } from 'lucide-react';
 import DeviceMenu from './DeviceMenu';
 import MutedHint from './MutedHint';
 import '../styles/CallControls.css';
@@ -14,6 +14,8 @@ interface CallControlsProps {
   onSelectCamera: (deviceId: string) => void;
   isSharingScreen: boolean;
   onToggleScreenShare: () => void;
+  isSharingMusic: boolean;
+  onToggleMusicShare: () => void;
   onLeave: () => void;
   /** A tile (screen or camera) is currently in fullscreen focus — see RoomView's focusedTileKey.
    * While true, the red button below means "exit that focused view", not "leave the call": it
@@ -34,6 +36,8 @@ export default function CallControls({
   onSelectCamera,
   isSharingScreen,
   onToggleScreenShare,
+  isSharingMusic,
+  onToggleMusicShare,
   onLeave,
   isFocused,
   onExitFocus
@@ -97,8 +101,14 @@ export default function CallControls({
         >
           <ScreenShare size={18} />
         </button>
-        <button className="call-controls__button" title="Mais opções">
-          <MoreHorizontal size={18} />
+        <button
+          className={
+            'call-controls__button' + (isSharingMusic ? ' call-controls__button--accent' : '')
+          }
+          title={isSharingMusic ? 'Parar de compartilhar áudio' : 'Compartilhar áudio'}
+          onClick={onToggleMusicShare}
+        >
+          <Music2 size={18} />
         </button>
       </div>
 
