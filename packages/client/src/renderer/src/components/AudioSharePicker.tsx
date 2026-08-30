@@ -15,6 +15,13 @@ interface AudioSharePickerProps {
   onClose: () => void;
 }
 
+// [Bug relatado pelo Mozar] Spotify pausado não aparecia na lista, e não tinha como atualizar
+// sem fechar e reabrir o seletor — a sessão WASAPI só existe como "ativa" enquanto o app está de
+// fato emitindo som (ver ListAudioSessions em process_loopback.cc), então dar play depois de abrir
+// o seletor não bastava. Um poll baixo o bastante pra não pesar (a própria enumeração já é
+// sub-100ms) resolve sem precisar mudar o filtro nativo de "só sessão ativa".
+const REFRESH_INTERVAL_MS = 1500;
+
 /**
  * "Compartilhar áudio" — mesmo formato de modal do ScreenSharePicker.tsx, mas escolhendo um
  * processo em vez de uma tela/janela (pedido do Mozar, 2026-08-30): a lista vem do addon nativo
@@ -59,6 +66,21 @@ export default function AudioSharePicker({ onSelect, onClose }: AudioSharePicker
     };
   }, []);
 
+  // Reconsulta enquanto o seletor fica aberto — pega quem começou a tocar (ou pausou) depois da
+  // consulta inicial, sem exigir que a pessoa feche e reabra o modal. Some silenciosamente com
+  // quem some da lista (ex. pausou); se era o selecionado, cai a seleção junto — melhor do que
+  // deixar "Compartilhar" habilitado apontando pra um pid que não está mais tocando nada.
+  useEffect(() => {
+    if (!isAvailable) return;
+    const interval = setInterval(() => {
+      listAudioSessions().then((result) => {
+        setSessions(result);
+        setSelectedPid((prev) => (prev !== null && result.some((s) => s.pid === prev) ? prev : null));
+      });
+    }, REFRESH_INTERVAL_MS);
+    return () => clearInterval(interval);
+  }, [isAvailable]);
+
   const selectedSession = sessions?.find((session) => session.pid === selectedPid) ?? null;
 
   return (
@@ -93,7 +115,7 @@ export default function AudioSharePicker({ onSelect, onClose }: AudioSharePicker
         {isAvailable !== false && sessions === null && <p className="audio-picker__hint">Procurando apps com áudio ativo…</p>}
 
         {isAvailable !== false && sessions !== null && sessions.length === 0 && (
-          <p className="audio-picker__hint">Nenhum app tocando áudio agora — abra um player e toque algo antes.</p>
+          <p className="audio-picker__hint">Nenhum app tocando áudio agora — dê play em algo, a lista atualiza sozinha.</p>
         )}
 
         {sessions !== null && sessions.length > 0 && (
