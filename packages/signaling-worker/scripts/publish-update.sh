@@ -72,4 +72,5 @@ else
   echo "    Quem já está com o app aberto só vai saber do update reabrindo (checagem de boot)." >&2
 fi
 
-echo "==> Pronto: $VERSION publicada nos dois canais."
+echo "==> Pronto: $VERSION publicada no canal de auto-update (R2)."
+echo "    Landing page é um comando separado agora: packages/client/scripts/publish-landing-page.sh $VERSION"

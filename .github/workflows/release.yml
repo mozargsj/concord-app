@@ -1,4 +1,4 @@
-name: Build and publish installer
+name: Build installer
 
 on:
   push:
@@ -48,25 +48,20 @@ jobs:
         working-directory: packages/client
         run: npx electron-builder --config.artifactName=Concord-Setup.exe
 
-      - name: Publish to landing page (rolling "latest" release)
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.CONCORDPROJECT_RELEASE_TOKEN }}
-        run: |
-          gh release delete latest --repo mozargsj/concordProject --yes --cleanup-tag || true
-          gh release create latest release/Concord-Setup.exe \
-            --repo mozargsj/concordProject \
-            --title "Concord — instalador mais recente" \
-            --notes "Publicado automaticamente a partir de ${{ github.ref_name }} (commit ${{ github.sha }})."
+      # [2026-08-30, pedido do Mozar] Publicar na landing page deixou de ser automático aqui —
+      # rodava sem ordem explícita separada toda vez que a tag saía, misturado com o build no
+      # mesmo job. Virou um comando manual e independente (packages/client/scripts/
+      # publish-landing-page.sh), espelhando o publish-update.sh do auto-update — este job agora
+      # só builda e deixa o instalador pronto como artefato de CI, sem publicar em canal nenhum
+      # sozinho. Ver decisions.md.
 
       # [2026-08-29] electron-builder always writes latest.yml/*.blockmap locally alongside the
       # installer once a `publish` config exists (electron-builder.yml), regardless of whether an
-      # actual upload happens — these are electron-updater's update-check metadata, distinct from
-      # the landing-page installer published above (existing installs, not new downloads). Never
-      # actually uploaded anywhere automatically before now (decisions.md — "no publish automation
-      # yet"); this just preserves them as a workflow artifact so they can be pushed to
-      # GET /updates/* (now R2-backed, packages/signaling-worker) — still a manual step until R2
-      # credentials are wired into this workflow too.
+      # actual upload happens — these are electron-updater's update-check metadata. This CI
+      # artifact (`update-artifacts`) is the one shared source both publish scripts consume:
+      # packages/signaling-worker/scripts/publish-update.sh (auto-update channel, R2) and
+      # packages/client/scripts/publish-landing-page.sh (landing page, concordProject) — each run
+      # independently, by hand, whenever that specific channel should actually be touched.
       - name: Upload auto-update artifacts (latest.yml, blockmap)
         uses: actions/upload-artifact@v4
         with:
