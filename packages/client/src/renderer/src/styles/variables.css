@@ -15,6 +15,10 @@
   --color-online: #23a55a;
   --color-warning: #f0b132;
   --color-danger: #f23f42;
+  /* [Feature nova] Laranja dedicado pro badge "Reconectando" (RoomSidebar.css/RoomView.css) —
+     deliberadamente diferente de --color-warning (mais amarelo-ouro, já usado pro dot de
+     "conectando" e pra faixa de latência média) para não confundir os dois sinais. */
+  --color-reconnecting: #f97316;
 
   --color-toggle-on-bg: #c4b5fd;
   --color-toggle-off-bg: #9a9ea6;

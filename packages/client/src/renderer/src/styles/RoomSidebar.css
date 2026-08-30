@@ -489,13 +489,74 @@
   }
 }
 
-.room-sidebar__participant-name {
+/* Positioning context for .room-sidebar__reconnecting-overlay below — takes over the flex:1 the
+   name span used to have directly, since the overlay needs to sit on top of the name, not beside
+   it (min-width:0 is required for the ellipsis on the name span inside to actually kick in, same
+   reason any ellipsis-in-flex-child needs it). */
+.room-sidebar__name-wrap {
+  position: relative;
   flex: 1;
+  min-width: 0;
+}
+
+.room-sidebar__participant-name {
+  display: block;
   font-size: 15px;
   color: var(--color-text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* [Feature nova] "Conectando"/"Reconectando" — sobrepõe o nome (não substitui: o nome continua
+   visível por baixo, translúcido) sempre que o ICE desse participante está em 'connecting'
+   ('Conectando' na primeira vez, 'Reconectando' se já esteve 'connected' antes — ver
+   RoomPeer.hasConnectedOnce/getConnectionOverlayLabel, useRoomConnection.ts/
+   lib/connectionOverlayLabel.ts) — ou, pra mim mesmo, enquanto connectivityStatus !== 'online'
+   (ServerListPage), sempre "Reconectando" (não existe "primeira vez" pra mim, self não conecta
+   consigo mesmo). Mesma animação nos dois casos, só a palavra muda. Barra translúcida em listras
+   verticais (referência visual do Mozar) com um brilho laranja varrendo por cima, puramente CSS —
+   sem asset novo. A bolinha de status (.room-sidebar__connection-dot acima) continua igual, sem
+   mudança — este overlay é aditivo, não substitui o dot. */
+.room-sidebar__reconnecting-overlay {
+  position: absolute;
+  inset: -2px -4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--color-reconnecting);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
+  overflow: hidden;
+  pointer-events: none;
+  background-image:
+    linear-gradient(
+      90deg,
+      transparent 0%,
+      color-mix(in srgb, var(--color-reconnecting) 45%, transparent) 45%,
+      color-mix(in srgb, var(--color-reconnecting) 45%, transparent) 55%,
+      transparent 100%
+    ),
+    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.18) 0 2px, transparent 2px 5px);
+  background-size:
+    250% 100%,
+    100% 100%;
+  animation: room-sidebar-reconnecting-sweep 1.6s ease-in-out infinite;
+}
+
+@keyframes room-sidebar-reconnecting-sweep {
+  0% {
+    background-position:
+      -150% 0,
+      0 0;
+  }
+  100% {
+    background-position:
+      250% 0,
+      0 0;
+  }
 }
 
 .room-sidebar__mic-status {

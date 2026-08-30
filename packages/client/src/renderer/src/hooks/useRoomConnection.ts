@@ -132,6 +132,13 @@ export interface RoomPeer {
    * (derived from iceConnectionState). Starts 'connecting' the instant the peer is known, before
    * any real ICE event has fired yet — matches the connection's own actual starting state. */
   connectionStatus: 'connecting' | 'connected' | 'failed';
+  /** True once this peer has reached 'connected' at least once — never reset back to false.
+   * Distinguishes "still doing the initial handshake" (connectionStatus === 'connecting' right
+   * after joining, hasConnectedOnce still false — no "reconectando" badge, they were never
+   * connected to begin with) from "was connected, ICE blipped" (connectionStatus === 'connecting'
+   * again, hasConnectedOnce already true — this is the actual "perdeu a conexão por alguns
+   * segundos" case the reconnecting overlay is for, RoomSidebar.tsx/RoomView.tsx). */
+  hasConnectedOnce: boolean;
 }
 
 interface RoomConnectionState {
@@ -453,7 +460,11 @@ export function useRoomConnection(
       onConnectionStatusChange: (peerId, status) => {
         setState((prev) => ({
           ...prev,
-          peers: prev.peers.map((peer) => (peer.peerId === peerId ? { ...peer, connectionStatus: status } : peer))
+          peers: prev.peers.map((peer) =>
+            peer.peerId === peerId
+              ? { ...peer, connectionStatus: status, hasConnectedOnce: peer.hasConnectedOnce || status === 'connected' }
+              : peer
+          )
         }));
       },
       onImageRequest,
@@ -526,7 +537,8 @@ export function useRoomConnection(
               isDeafened: false,
               mutedMe: false,
               avatarUrl: null,
-              connectionStatus: 'connecting'
+              connectionStatus: 'connecting',
+              hasConnectedOnce: false
             }))
           }));
           for (const peer of message.peers) {
@@ -556,7 +568,8 @@ export function useRoomConnection(
                 isDeafened: false,
                 mutedMe: false,
                 avatarUrl: null,
-                connectionStatus: 'connecting'
+                connectionStatus: 'connecting',
+                hasConnectedOnce: false
               }
             ]
           }));

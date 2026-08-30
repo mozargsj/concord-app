@@ -33,6 +33,7 @@ import {
   GripVertical
 } from 'lucide-react';
 import { getAvatarColor } from '../lib/avatarColor';
+import { getConnectionOverlayLabel } from '../lib/connectionOverlayLabel';
 import type { RoomPeer } from '../hooks/useRoomConnection';
 import { decodeAudioFile } from '../lib/audioClip';
 import { getRnnoiseEnabled, setRnnoiseEnabled } from '../lib/noiseSuppressionSettings';
@@ -113,6 +114,9 @@ interface RoomSidebarProps {
   /** userId of whoever's volume popup is currently open — drives the "clicked" highlight so the
    * right-click action has visible feedback beyond the popup itself. */
   activeVolumeMenuUserId: string | null;
+  // Own connectivity (ServerListPage, NoInternetScreen's source of truth) — drives the
+  // "Reconectando" overlay on my own row, same badge peers get from their own connectionStatus.
+  connectivityStatus: 'online' | 'offline' | 'reconnecting';
 }
 
 export default function RoomSidebar({
@@ -157,7 +161,8 @@ export default function RoomSidebar({
   activeVolumeMenuUserId,
   isPeerMutedByMe,
   onViewProfile,
-  onToggleMusicMute
+  onToggleMusicMute,
+  connectivityStatus
 }: RoomSidebarProps) {
   // [2026-08-30, pedido do Mozar] Seta ao lado de "Canais de Voz" nunca tinha sido ligada a nada —
   // agora alterna entre a lista de participantes normal (nome + status, padrão) e uma versão
@@ -547,6 +552,15 @@ export default function RoomSidebar({
             // null for self — no P2P connection to yourself, so no dot to show (see the render
             // below, which only draws one when this isn't null).
             connectionStatus: 'connecting' | 'connected' | 'failed' | null;
+            // Overlay label on the name — null means no overlay. "Conectando" while a peer's very
+            // first handshake is still in flight (connectionStatus === 'connecting',
+            // hasConnectedOnce still false), "Reconectando" once it's lost a connection it already
+            // had (same connectionStatus, hasConnectedOnce now true) — same animation either way
+            // (see .room-sidebar__reconnecting-overlay, RoomSidebar.css), only the word changes.
+            // Self has no P2P connection to itself to derive this from — uses connectivityStatus
+            // (whole-app network signal) instead, always "Reconectando" (self is never "meeting
+            // this peer for the first time", so there's no "Conectando" case for my own row).
+            connectionOverlayLabel: 'Conectando' | 'Reconectando' | null;
             // [2026-08-30, pedido do Mozar] "Music <nome>" — mesmo peer/userId de uma linha de voz
             // já existente, mas volume/mudo próprios (volumeKey `${userId}:music`, ver
             // usePeerVolumeControl.ts) e sem os badges que não fazem sentido pra áudio compartilhado
@@ -573,6 +587,7 @@ export default function RoomSidebar({
                   mutedByMe: false,
                   userId: null,
                   connectionStatus: null,
+                  connectionOverlayLabel: connectivityStatus !== 'online' ? 'Reconectando' : null,
                   isMusicRow: false,
                   volumeKey: ''
                 },
@@ -592,6 +607,7 @@ export default function RoomSidebar({
                         mutedByMe: false,
                         userId: null,
                         connectionStatus: null,
+                        connectionOverlayLabel: null,
                         isMusicRow: true,
                         volumeKey: ''
                       }
@@ -617,6 +633,7 @@ export default function RoomSidebar({
                     mutedByMe: isPeerMutedByMe(peer.userId),
                     userId: peer.userId,
                     connectionStatus: peer.connectionStatus,
+                    connectionOverlayLabel: getConnectionOverlayLabel(peer.connectionStatus, peer.hasConnectedOnce),
                     isMusicRow: false,
                     volumeKey: peer.userId
                   };
@@ -638,6 +655,7 @@ export default function RoomSidebar({
                       mutedByMe: isPeerMutedByMe(musicVolumeKey),
                       userId: peer.userId,
                       connectionStatus: null,
+                      connectionOverlayLabel: null,
                       isMusicRow: true,
                       volumeKey: musicVolumeKey
                     }
@@ -787,7 +805,14 @@ export default function RoomSidebar({
                           host, "te mutou"/"você mutou") somem, sobra só uma fita de avatares. */}
                       {!isParticipantsCompact && (
                         <>
-                          <span className="room-sidebar__participant-name">{participant.name}</span>
+                          <span className="room-sidebar__name-wrap">
+                            <span className="room-sidebar__participant-name">{participant.name}</span>
+                            {participant.connectionOverlayLabel && (
+                              <span className="room-sidebar__reconnecting-overlay">
+                                {participant.connectionOverlayLabel}
+                              </span>
+                            )}
+                          </span>
                           {participant.isMicMuted && (
                             <span
                               className="room-sidebar__mic-status"

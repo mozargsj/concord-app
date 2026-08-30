@@ -685,7 +685,12 @@ export default function ServerListPage({
     }
   }
 
-  if (connectivityStatus === 'offline' || connectivityStatus === 'reconnecting') {
+  // [Feature nova] Full-app takeover só quando NÃO há sala selecionada (nada de sidebar/roster pra
+  // preservar). Com uma sala ativa, a queda de conexão agora é tratada de forma mais leve — ver o
+  // render da sala mais abaixo: RoomView troca só o próprio painel principal pelo mesmo
+  // NoInternetScreen, e RoomSidebar (que continua montada) mostra "Reconectando" na minha própria
+  // linha, mesmo tratamento visual que já existe pra ICE de peer (RoomSidebar.tsx/RoomView.tsx).
+  if ((connectivityStatus === 'offline' || connectivityStatus === 'reconnecting') && !selectedRoomId) {
     return (
       <div className="server-list-page server-list-page--loading">
         <NoInternetScreen status={connectivityStatus} />
@@ -813,6 +818,7 @@ export default function ServerListPage({
         isPeerMutedByMe={(volumeKey) => peerVolume.getEffectivePeerSettings(volumeKey).muted}
         onViewProfile={(userId, name, avatarUrl) => setViewingProfile({ userId, name, avatarUrl })}
         onToggleMusicMute={(volumeKey) => peerVolume.handleTogglePeerMute(volumeKey)}
+        connectivityStatus={connectivityStatus}
       />
 
       <div className="server-list-page__main">
@@ -849,6 +855,7 @@ export default function ServerListPage({
             activeVolumeMenuUserId={peerVolume.volumeMenu?.volumeKey ?? null}
             isPeerMutedByMe={(volumeKey) => peerVolume.getEffectivePeerSettings(volumeKey).muted}
             onViewProfile={(userId, name, avatarUrl) => setViewingProfile({ userId, name, avatarUrl })}
+            connectivityStatus={connectivityStatus}
           />
           {selectedRoom && isChatOpen && (
             <RoomChat

@@ -11,6 +11,14 @@
   color: var(--color-text-muted);
 }
 
+/* [Feature nova] Painel principal trocado pelo NoInternetScreen enquanto MINHA conexão (não a de
+   um peer específico) está caindo — sidebar continua montada por fora (RoomSidebar.tsx tem seu
+   próprio "Reconectando" na minha linha), só esta área central some no lugar da grade. */
+.room-view--offline {
+  align-items: center;
+  justify-content: center;
+}
+
 .room-view__error {
   margin: 12px 24px 0;
   padding: 8px 12px;
@@ -244,6 +252,60 @@
 
 .room-view__participant-status-icon--muted-me {
   color: var(--color-danger);
+}
+
+/* Positioning context for .room-view__reconnecting-overlay below — same role as
+   .room-sidebar__name-wrap in RoomSidebar.css (min-width:0 needed for the ellipsis on the name
+   span itself, which .room-view__participant-status span already applies via a descendant
+   selector — it also happens to hit this wrapper span and the overlay span, harmlessly, since
+   both only ever hold short single-line text). */
+.room-view__name-wrap {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+  min-width: 0;
+}
+
+/* [Feature nova] Mesmo tratamento visual do RoomSidebar.css (ver o comentário lá) — sobrepõe o
+   nome no tile em vez de substituí-lo. */
+.room-view__reconnecting-overlay {
+  position: absolute;
+  inset: -2px -5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px;
+  font-weight: 700;
+  color: var(--color-reconnecting);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
+  overflow: hidden;
+  pointer-events: none;
+  background-image:
+    linear-gradient(
+      90deg,
+      transparent 0%,
+      color-mix(in srgb, var(--color-reconnecting) 45%, transparent) 45%,
+      color-mix(in srgb, var(--color-reconnecting) 45%, transparent) 55%,
+      transparent 100%
+    ),
+    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.18) 0 2px, transparent 2px 5px);
+  background-size:
+    250% 100%,
+    100% 100%;
+  animation: room-view-reconnecting-sweep 1.6s ease-in-out infinite;
+}
+
+@keyframes room-view-reconnecting-sweep {
+  0% {
+    background-position:
+      -150% 0,
+      0 0;
+  }
+  100% {
+    background-position:
+      250% 0,
+      0 0;
+  }
 }
 
 .room-view__host-star {

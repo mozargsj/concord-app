@@ -7,7 +7,9 @@ import MediaStreamVideo from './MediaStreamVideo';
 import ScreenShareTile from './ScreenShareTile';
 import HostStarBadge from './HostStarBadge';
 import LiveBadge from './LiveBadge';
+import NoInternetScreen from './NoInternetScreen';
 import { getAvatarColor } from '../lib/avatarColor';
+import { getConnectionOverlayLabel } from '../lib/connectionOverlayLabel';
 import { getGridContainerStyle, getGridItemStyle } from '../lib/participantGrid';
 import { playCameraStart, playCameraStop, playTransmissionEnter, playTransmissionExit } from '../lib/soundEffects';
 import '../styles/RoomView.css';
@@ -46,6 +48,11 @@ interface RoomViewProps {
   // userId of whoever's volume popup is currently open (shared with RoomSidebar) — drives the
   // "clicked" highlight so the action has visible feedback beyond the popup itself.
   activeVolumeMenuUserId: string | null;
+  // Own connectivity, lifted from ServerListPage (NoInternetScreen's source of truth) — a few
+  // seconds' worth of trouble here means MY connection to the room is the problem, not any one
+  // peer's, so it replaces the whole grid instead of a per-tile badge (that's what
+  // isReconnecting on each participant tile is for, driven by peer.connectionStatus instead).
+  connectivityStatus: 'online' | 'offline' | 'reconnecting';
 }
 
 type Tile =
@@ -66,6 +73,12 @@ type Tile =
       mutedByMe: boolean;
       // null for self — there's no incoming stream to adjust volume on for your own tile.
       userId: string | null;
+      // Overlay label on the tile's name — null means no overlay. "Conectando" during a peer's
+      // first handshake, "Reconectando" once it's lost a connection it already had (see
+      // useRoomConnection.ts's RoomPeer.hasConnectedOnce) — same animation, only the word
+      // changes. Always null for the self tile: connectivityStatus !== 'online' already
+      // short-circuits to the full-panel NoInternetScreen before tiles are ever built (below).
+      connectionOverlayLabel: 'Conectando' | 'Reconectando' | null;
     }
   | { kind: 'screen'; key: string; name: string; stream: MediaStream };
 
@@ -95,7 +108,8 @@ export default function RoomView({
   onOpenVolumeMenu,
   activeVolumeMenuUserId,
   isPeerMutedByMe,
-  onViewProfile
+  onViewProfile,
+  connectivityStatus
 }: RoomViewProps) {
   const [focusedTileKey, setFocusedTileKey] = useState<string | null>(null);
   // [2026-08-30, pedido do Mozar] Largura/altura reais do vídeo em foco (16:9, 21:9, 4:3, o que a
@@ -189,6 +203,19 @@ export default function RoomView({
     );
   }
 
+  // Own connectivity down for a few seconds — this is about MY link to the room, not any
+  // specific peer's, so it replaces the whole grid rather than a per-tile badge. Sidebar (and
+  // its own "reconectando" badge on my row, RoomSidebar.tsx) stays mounted the whole time —
+  // only this main panel swaps, unlike the full-app NoInternetScreen takeover ServerListPage
+  // still does when there's no room selected at all.
+  if (connectivityStatus !== 'online') {
+    return (
+      <div className="room-view room-view--offline">
+        <NoInternetScreen status={connectivityStatus} />
+      </div>
+    );
+  }
+
   const isSelfHost = selfPeerId !== null && selfPeerId === hostPeerId;
   const tiles: Tile[] = [
     {
@@ -204,7 +231,9 @@ export default function RoomView({
       isDeafened,
       mutedMe: false,
       mutedByMe: false,
-      userId: null
+      userId: null,
+      // See the field's own comment above — never shown for the self tile.
+      connectionOverlayLabel: null
     },
     ...peers.map(
       (peer): Tile => ({
@@ -220,7 +249,8 @@ export default function RoomView({
         isDeafened: peer.isDeafened,
         mutedMe: peer.mutedMe,
         mutedByMe: isPeerMutedByMe(peer.userId),
-        userId: peer.userId
+        userId: peer.userId,
+        connectionOverlayLabel: getConnectionOverlayLabel(peer.connectionStatus, peer.hasConnectedOnce)
       })
     )
   ];
@@ -345,7 +375,12 @@ export default function RoomView({
                   />
                 </span>
               )}
-              <span>{tile.name}</span>
+              <span className="room-view__name-wrap">
+                <span>{tile.name}</span>
+                {tile.kind === 'participant' && tile.connectionOverlayLabel && (
+                  <span className="room-view__reconnecting-overlay">{tile.connectionOverlayLabel}</span>
+                )}
+              </span>
               {isHost && <HostStarBadge className="room-view__host-star" />}
             </div>
           );
