@@ -207,6 +207,28 @@ export class RoomDurableObject extends DurableObject<Env> {
       return;
     }
 
+    // [Bug real corrigido, 2026-08-30, achado pelo Mozar] A mesma conta podia acabar com dois
+    // peers ao mesmo tempo na sala — nada aqui checava userId duplicado, só a capacidade total.
+    // Reproduzido de verdade quando uma conexão morre sem um fechamento limpo de socket (processo
+    // derrubado à força, crash, queda de rede) e a reconexão da mesma conta chega antes do runtime
+    // perceber que a conexão antiga sumiu (não existe watchdog de heartbeat perdido — só reage a
+    // um fechamento real, ver handleDisconnect). Toda conexão já existente com o mesmo userId é,
+    // por definição, mais antiga que a que está entrando agora — derrubada aqui antes de montar o
+    // roster que vai pra esse peer novo, reaproveitando handleDisconnect (broadcast de peer-left +
+    // migração de host se o peer derrubado era o host) pra não duplicar essa lógica.
+    for (const duplicate of this.livePeers().filter((p) => p.userId === userId)) {
+      const duplicateWs = this.ctx
+        .getWebSockets()
+        .find((s) => (s.deserializeAttachment() as PeerAttachment | null)?.peerId === duplicate.peerId);
+      if (!duplicateWs) continue;
+      await this.handleDisconnect(duplicateWs);
+      try {
+        duplicateWs.close(1000, 'Reconectado em outra sessão');
+      } catch {
+        // já fechando/fechado por conta própria — sem problema, handleDisconnect já rodou
+      }
+    }
+
     const existingPeers = this.livePeers();
     if (existingPeers.length >= ROOM_CAP) {
       this.send(ws, { type: 'join-rejected', roomId: message.roomId, reason: 'room-full' });
