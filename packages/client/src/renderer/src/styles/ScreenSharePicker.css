@@ -202,20 +202,6 @@
   color: var(--color-text-secondary);
 }
 
-.screen-picker__echo-hint {
-  border: none;
-  background: none;
-  padding: 0;
-  font-size: 11px;
-  color: var(--color-warning);
-  text-decoration: underline;
-  cursor: pointer;
-}
-
-.screen-picker__echo-hint:hover {
-  opacity: 0.85;
-}
-
 .screen-picker__confirm {
   border: none;
   border-radius: var(--radius-sm);

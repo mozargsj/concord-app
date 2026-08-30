@@ -41,6 +41,9 @@ contextBridge.exposeInMainWorld('concord', {
       return () => ipcRenderer.removeListener(channel, listener);
     }
   },
+  smartAppControl: {
+    isActive: (): Promise<boolean> => ipcRenderer.invoke('smart-app-control:is-active')
+  },
   imageCache: {
     save: (key: string, data: ArrayBuffer, mimeType: string) =>
       ipcRenderer.invoke('image-cache:save', key, data, mimeType),

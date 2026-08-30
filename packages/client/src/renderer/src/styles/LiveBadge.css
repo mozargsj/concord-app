@@ -20,6 +20,15 @@
   animation: live-badge-blink 1.2s ease-in-out infinite;
 }
 
+.live-badge--icon {
+  padding: 5px;
+}
+
+.live-badge__icon {
+  color: var(--color-danger);
+  animation: live-badge-blink 1.2s ease-in-out infinite;
+}
+
 @keyframes live-badge-blink {
   0%,
   100% {

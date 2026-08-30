@@ -5,6 +5,7 @@ import path from 'node:path';
 import { loginWithGoogle } from './googleAuth';
 import { checkForUpdatesOnDemand, checkForUpdatesOnStartup, isInstallingUpdate } from './autoUpdate';
 import './processLoopbackAudio';
+import './smartAppControl';
 
 const isDev = !app.isPackaged;
 

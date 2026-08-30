@@ -350,7 +350,9 @@ export default function RoomView({
             </div>
           );
 
-          const liveIndicator = tile.kind === 'screen' && <LiveBadge className="room-view__live-badge" />;
+          const liveIndicator = tile.kind === 'screen' && (
+            <LiveBadge className="room-view__live-badge" variant="icon" />
+          );
 
           return (
             // [2026-08-30, pedido do Mozar] Slot invisível: só dá o contexto de container-query

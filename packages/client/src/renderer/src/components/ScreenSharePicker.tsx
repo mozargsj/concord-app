@@ -8,7 +8,7 @@ import {
   setScreenQualityMode,
   type ScreenQualityMode
 } from '../lib/screenSharePreferences';
-import NativeLoopbackHelpModal from './NativeLoopbackHelpModal';
+import SmartAppControlHint from './SmartAppControlHint';
 import Toggle from './Toggle';
 import Tooltip from './Tooltip';
 import '../styles/ScreenSharePicker.css';
@@ -30,7 +30,6 @@ export default function ScreenSharePicker({ onSelect, onClose }: ScreenSharePick
   const [qualityMode, setQualityMode] = useState<ScreenQualityMode>(getScreenQualityMode);
   // null while the check is in flight — the hint only makes sense once we actually know either way.
   const [isEchoFixAvailable, setIsEchoFixAvailable] = useState<boolean | null>(null);
-  const [isHelpOpen, setIsHelpOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -154,9 +153,7 @@ export default function ScreenSharePicker({ onSelect, onClose }: ScreenSharePick
               Incluir áudio do sistema
             </label>
             {includeAudio && isEchoFixAvailable === false && (
-              <button type="button" className="screen-picker__echo-hint" onClick={() => setIsHelpOpen(true)}>
-                ⚠ Correção de eco indisponível neste PC — como ativar
-              </button>
+              <SmartAppControlHint text="Correção de eco indisponível neste PC" />
             )}
           </div>
 
@@ -169,7 +166,6 @@ export default function ScreenSharePicker({ onSelect, onClose }: ScreenSharePick
           </button>
         </footer>
       </div>
-      {isHelpOpen && <NativeLoopbackHelpModal onClose={() => setIsHelpOpen(false)} />}
     </div>
   );
 }

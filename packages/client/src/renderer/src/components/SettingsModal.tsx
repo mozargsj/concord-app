@@ -15,6 +15,7 @@ import { getRnnoiseEnabled, setRnnoiseEnabled } from '../lib/noiseSuppressionSet
 import { getHardwareEncodePreference, setHardwareEncodePreference } from '../lib/hardwareEncodePreference';
 import { runNetworkSelfTest, type NetworkSelfTestResult } from '../lib/networkSelfTest';
 import { reportClientError } from '../lib/api';
+import SmartAppControlStatus from './SmartAppControlStatus';
 import {
   MASTER_VOLUME_DEFAULT,
   MASTER_VOLUME_MAX,
@@ -251,6 +252,10 @@ export default function SettingsModal({ onClose, onNoiseSuppressionChange }: Set
             </span>
             <Toggle id="hardware-encode-toggle" checked={isHardwareEncodeEnabled} onChange={handleToggleHardwareEncode} />
           </label>
+        </div>
+
+        <div className="settings-modal__section">
+          <SmartAppControlStatus />
         </div>
 
         <div className="settings-modal__section">

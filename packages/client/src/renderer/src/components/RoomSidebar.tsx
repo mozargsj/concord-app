@@ -562,7 +562,11 @@ export default function RoomSidebar({
                   isSelf: true,
                   isHost: selfPeerId !== null && selfPeerId === hostPeerId,
                   isSpeaking,
-                  isBroadcasting: selfCameraOn || selfSharingScreen || selfSharingMusic,
+                  // Camera/screen only — music share gets its own row below (mirrors peers'
+                  // voiceRow/music-row split) so the two indicators never collapse into one and
+                  // "cancel out": starting music share while already screen-sharing (or vice
+                  // versa) must add a second badge, not silently reuse the same OR'd flag.
+                  isBroadcasting: selfCameraOn || selfSharingScreen,
                   isMicMuted,
                   isDeafened,
                   mutedMe: false,
@@ -572,6 +576,27 @@ export default function RoomSidebar({
                   isMusicRow: false,
                   volumeKey: ''
                 },
+                ...(selfSharingMusic
+                  ? [
+                      {
+                        key: 'self-music',
+                        name: `Music ${currentUser.displayName}`,
+                        avatarUrl: currentUser.avatarUrl,
+                        isSelf: true,
+                        isHost: false,
+                        isSpeaking: false,
+                        isBroadcasting: true,
+                        isMicMuted: false,
+                        isDeafened: false,
+                        mutedMe: false,
+                        mutedByMe: false,
+                        userId: null,
+                        connectionStatus: null,
+                        isMusicRow: true,
+                        volumeKey: ''
+                      }
+                    ]
+                  : []),
                 ...peers.flatMap((peer) => {
                   const voiceRow = {
                     key: peer.peerId,
@@ -789,7 +814,10 @@ export default function RoomSidebar({
                               stopPropagation nos dois pra não também disparar o onClick/
                               onContextMenu da linha (Ver perfil / nada, já que o próprio
                               onContextMenu da linha é desligado pra linhas de música acima). */}
-                          {participant.isMusicRow && (
+                          {/* Self's own music row has no listener volume/mute — that's what the
+                              "Compartilhar áudio" toggle already controls, muting your own
+                              outgoing stream from your own row doesn't map to anything real. */}
+                          {participant.isMusicRow && !participant.isSelf && (
                             <button
                               type="button"
                               className="room-sidebar__music-mute-button"
@@ -814,7 +842,12 @@ export default function RoomSidebar({
                               {participant.mutedByMe ? <VolumeX size={18} /> : <Volume2 size={18} />}
                             </button>
                           )}
-                          {participant.isBroadcasting && <LiveBadge className="room-sidebar__live-badge" />}
+                          {participant.isBroadcasting && (
+                            <LiveBadge
+                              className="room-sidebar__live-badge"
+                              variant={participant.isMusicRow ? 'icon' : 'text'}
+                            />
+                          )}
                           {participant.isHost && <HostStarBadge className="room-sidebar__host-star" />}
                         </>
                       )}

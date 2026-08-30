@@ -98,6 +98,9 @@ declare global {
         onChunk: (sessionId: string, callback: (chunk: Uint8Array) => void) => () => void;
         onStopped: (sessionId: string, callback: () => void) => () => void;
       };
+      smartAppControl: {
+        isActive: () => Promise<boolean>;
+      };
       imageCache: {
         save: (key: string, data: ArrayBuffer, mimeType: string) => Promise<boolean>;
         load: (key: string) => Promise<CachedImage | null>;

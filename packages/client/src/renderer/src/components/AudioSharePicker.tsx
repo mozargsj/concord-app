@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Music2, X } from 'lucide-react';
+import SmartAppControlHint from './SmartAppControlHint';
 import Tooltip from './Tooltip';
 import { listAudioSessions } from '../lib/processLoopbackAudio';
 import '../styles/AudioSharePicker.css';
@@ -25,6 +26,9 @@ export default function AudioSharePicker({ onSelect, onClose }: AudioSharePicker
   const [sessions, setSessions] = useState<AudioSession[] | null>(null);
   const [selectedPid, setSelectedPid] = useState<number | null>(null);
   const [isAvailable, setIsAvailable] = useState<boolean | null>(null);
+  // Only checked when the addon fails to load — distinguishes "blocked by Smart App Control"
+  // (has a fix, shows the hint) from "unsupported Windows version" (no fix to offer).
+  const [isSacActive, setIsSacActive] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -35,6 +39,9 @@ export default function AudioSharePicker({ onSelect, onClose }: AudioSharePicker
         setIsAvailable(available);
         if (!available) {
           setSessions([]);
+          void window.concord.smartAppControl.isActive().then((active) => {
+            if (!cancelled) setIsSacActive(active);
+          });
           return;
         }
         return listAudioSessions().then((result) => {
@@ -71,7 +78,13 @@ export default function AudioSharePicker({ onSelect, onClose }: AudioSharePicker
           mudo independentes da sua voz.
         </p>
 
-        {isAvailable === false && (
+        {isAvailable === false && isSacActive && (
+          <div className="audio-picker__unavailable">
+            <SmartAppControlHint text="Bloqueado pelo Smart App Control do Windows" />
+          </div>
+        )}
+
+        {isAvailable === false && !isSacActive && (
           <p className="audio-picker__unavailable">
             Recurso indisponível neste PC (precisa do Windows 10 2004 ou mais recente).
           </p>
@@ -84,19 +97,23 @@ export default function AudioSharePicker({ onSelect, onClose }: AudioSharePicker
         )}
 
         {sessions !== null && sessions.length > 0 && (
-          <div className="audio-picker__list">
-            {sessions.map((session) => (
-              <button
-                key={session.pid}
-                className={
-                  'audio-picker__item' + (session.pid === selectedPid ? ' audio-picker__item--selected' : '')
-                }
-                onClick={() => setSelectedPid(session.pid)}
-              >
-                <Music2 size={18} className="audio-picker__item-icon" />
-                <span className="audio-picker__item-name">{session.name}</span>
-              </button>
-            ))}
+          <div className="audio-picker__body">
+            <div className="audio-picker__grid">
+              {sessions.map((session) => (
+                <button
+                  key={session.pid}
+                  className={
+                    'audio-picker__item' + (session.pid === selectedPid ? ' audio-picker__item--selected' : '')
+                  }
+                  onClick={() => setSelectedPid(session.pid)}
+                >
+                  <div className="audio-picker__item-icon-box">
+                    <Music2 size={28} className="audio-picker__item-icon" />
+                  </div>
+                  <span className="audio-picker__item-name">{session.name}</span>
+                </button>
+              ))}
+            </div>
           </div>
         )}
 

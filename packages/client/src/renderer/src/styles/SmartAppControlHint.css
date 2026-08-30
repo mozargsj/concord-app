@@ -1,0 +1,27 @@
+.sac-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sac-hint__text {
+  color: var(--color-warning);
+  font-size: 12px;
+}
+
+.sac-hint__info {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--color-warning);
+}
+
+.sac-hint__info:hover {
+  background: var(--color-bg-elevated-hover);
+}

@@ -10,13 +10,15 @@ export default function NativeLoopbackHelpModal({ onClose }: NativeLoopbackHelpM
     <div className="native-loopback-help__backdrop" onClick={onClose}>
       <div className="native-loopback-help" onClick={(event) => event.stopPropagation()}>
         <header className="native-loopback-help__header">
-          <h2>Áudio sem eco na transmissão</h2>
+          <h2>Recursos avançados de áudio bloqueados</h2>
         </header>
 
         <p className="native-loopback-help__intro">
-          Ao compartilhar tela com "Incluir áudio do sistema", o Windows tem uma proteção (Smart App
-          Control) que pode bloquear a correção do Concord pra esse eco. Ativar a melhoria exige um
-          passo manual — não é o Concord pedindo permissão, é uma configuração do próprio Windows.
+          O Windows tem uma proteção chamada Smart App Control que pode bloquear um addon nativo
+          usado por dois recursos do Concord: a correção de eco ao incluir áudio do sistema na
+          transmissão de tela, e o "Compartilhar áudio" de um app específico. Ativar esses recursos
+          exige um passo manual — não é o Concord pedindo permissão, é uma configuração do próprio
+          Windows.
         </p>
 
         <ol className="native-loopback-help__steps">
@@ -34,8 +36,9 @@ export default function NativeLoopbackHelpModal({ onClose }: NativeLoopbackHelpM
         </p>
 
         <p className="native-loopback-help__fallback">
-          Sem esse passo, o compartilhamento de tela com áudio continua funcionando normalmente —
-          só sem essa correção específica de eco.
+          Sem esse passo, a transmissão de tela com áudio do sistema continua funcionando
+          normalmente — só sem a correção de eco. Já o "Compartilhar áudio" de um app específico
+          não tem alternativa: depende diretamente desse addon pra funcionar.
         </p>
 
         <div className="native-loopback-help__actions">
