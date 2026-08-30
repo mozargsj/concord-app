@@ -40,11 +40,26 @@
   justify-content: center;
   gap: 6px;
   min-width: 0;
+  /* [Bug corrigido] Arrastar a janela só funcionava à esquerda deste bloco (o `.title-bar__left`
+     com a tag release/dev + versão) — reforçado aqui em vez de confiar só na herança do
+     `-webkit-app-region: drag` lá do `.title-bar` (ver o comentário no `.title-bar__logo` abaixo
+     pra causa raiz de verdade). */
+  -webkit-app-region: drag;
 }
 
 .title-bar__logo {
   width: 16px;
   height: 16px;
+  /* [Bug corrigido, achado pelo Mozar] Causa raiz real do "só arrasta à esquerda do 'Concord'":
+     todo <img> tem `draggable` nativo do HTML por padrão (gesto de arrastar-e-soltar a própria
+     imagem) — dentro de uma região `-webkit-app-region: drag`, o mousedown sobre esse ícone é
+     capturado por esse gesto nativo do Chromium em vez de virar HTCAPTION (mover a janela pelo
+     SO), e isso quebra o arrasto pro resto daquele clique, não só nos pixels exatos do ícone —
+     por isso o "Concord"/nome da sala ao lado também parava de arrastar, mesmo sendo só texto.
+     `-webkit-user-drag: none` desliga esse gesto nativo especificamente pra imagem, sem afetar o
+     resto da app-region. */
+  -webkit-user-drag: none;
+  user-select: none;
 }
 
 .title-bar__title {
