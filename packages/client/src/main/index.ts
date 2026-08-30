@@ -115,9 +115,11 @@ async function confirmAndClose(window: BrowserWindow, markConfirmed: () => void)
   window.close();
 }
 
-// [2026-08-30, pedido do Mozar] Janela sempre 16:9 — nem o tamanho inicial, nem o resize manual,
-// nem "maximizar" fogem dessa proporção, independente do monitor. 1280x720/960x540 já nascem
-// exatos em 16:9 (o valor antigo, 1280x800/960x600, era 16:10).
+// [2026-08-30, pedido do Mozar] Tamanho inicial e "maximizar" ficam em 16:9, independente do
+// monitor — 1280x720/960x540 já nascem exatos (o valor antigo, 1280x800/960x600, era 16:10).
+// Resize manual arrastando a borda **não** é travado nessa proporção (tentativa inicial usava
+// `window.setAspectRatio`, que trava resize nativo do SO também — removida a pedido do Mozar
+// depois de testar e achar que largura/altura devem ficar independentes ao arrastar a borda).
 const WINDOW_ASPECT_RATIO = 16 / 9;
 
 /** Maior retângulo 16:9 que cabe na área de trabalho do monitor onde a janela está agora, mesma
@@ -173,7 +175,6 @@ function createMainWindow(): void {
       nodeIntegration: false
     }
   });
-  window.setAspectRatio(WINDOW_ASPECT_RATIO);
 
   let isCloseConfirmed = false;
   window.on('close', (event) => {

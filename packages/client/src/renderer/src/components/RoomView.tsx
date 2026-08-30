@@ -95,7 +95,7 @@ export default function RoomView({
 }: RoomViewProps) {
   const [focusedTileKey, setFocusedTileKey] = useState<string | null>(null);
   // [2026-08-30, pedido do Mozar] Largura/altura reais do vídeo em foco (16:9, 21:9, 4:3, o que a
-  // transmissão de verdade for) — a letterbox do .room-view__focus-frame usa isso em vez de um
+  // transmissão de verdade for) — a letterbox do .room-view__participant-tile usa isso em vez de um
   // 16:9 travado. null até o <video> carregar metadata pela primeira vez (novo alvo de foco);
   // volta a 16/9 nesse meio-tempo (CSS var(--focus-ratio, 1.7778)) pra não piscar 0.
   const [focusedAspectRatio, setFocusedAspectRatio] = useState<number | null>(null);
@@ -349,58 +349,58 @@ export default function RoomView({
           const liveIndicator = tile.kind === 'screen' && <LiveBadge className="room-view__live-badge" />;
 
           return (
+            // [2026-08-30, pedido do Mozar] Slot invisível: só dá o contexto de container-query
+            // (cqw/cqh) que o tile filho usa pra se travar em 16:9 (ou na proporção real quando em
+            // foco), e — só quando em foco — sai do fluxo do grid pra cobrir a área toda
+            // (`--focused`, `position:absolute; inset:24px`). Nunca tem fundo/borda própria — a
+            // única caixa visível é o `.room-view__participant-tile` filho (o mesmo que acende no
+            // hover); antes existia uma terceira camada (`.room-view__focus-frame`) com fundo preto
+            // próprio, o que deixava uma sobra cinza visível entre ela e o tile — removida.
             <div
               key={tile.key}
-              className={
-                'room-view__participant-tile' +
-                (isFocused ? ' room-view__participant-tile--focused' : '') +
-                (isFocusable ? ' room-view__participant-tile--focusable' : '') +
-                (isVolumeTarget ? ' room-view__participant-tile--volume-target' : '') +
-                (isVolumeMenuActive ? ' room-view__participant-tile--volume-active' : '')
-              }
+              className={'room-view__tile-slot' + (isFocused ? ' room-view__tile-slot--focused' : '')}
               style={isFocused ? undefined : getGridItemStyle(index, tiles.length)}
-              onClick={
-                isFocusable && !isFocused
-                  ? () => {
-                      setFocusedTileKey(tile.key);
-                      if (hasRemoteVideo) {
-                        setViewedCameraPeerIds((prev) => (prev.has(tile.key) ? prev : new Set(prev).add(tile.key)));
-                      }
-                    }
-                  : // No video to focus (just the avatar circle) — click views the real profile
-                    // instead, same trigger point as RoomSidebar's participant row.
-                    isVolumeTarget && !isFocusable
-                    ? () => onViewProfile(tile.userId!, tile.name, tile.kind === 'participant' ? tile.avatarUrl : null)
-                    : undefined
-              }
-              onContextMenu={
-                tile.kind === 'participant' && tile.userId
-                  ? (event) => {
-                      event.preventDefault();
-                      onOpenVolumeMenu(event.clientX, event.clientY, tile.key, tile.userId!, tile.name);
-                    }
-                  : undefined
-              }
             >
-              {/* Always the same wrapper, for every tile kind, focused or not — only the CSS
-                  differs (16:9-locked fullscreen vs. plain 100%-fill grid cell, and a
-                  `--participant` override that keeps an unfocused camera tile looking exactly
-                  like the old unwrapped fragment: no black board, no rounding, no clipping).
-                  Screen tiles keep local state (ScreenShareTile's isLive/volume) that must
-                  survive a click toggling focus; conditionally mounting/unmounting a wrapper
-                  around `media` based on tile kind or camera-on/off used to change the parent
-                  shape, which made React tear the subtree down and remount it right after that
-                  same click had just set isLive — keeping the wrapper's presence tied only to
-                  `tile.key` (never to `tile.kind` or `hasCameraVideo`) avoids that for camera
-                  tiles too, now that turning a camera on/off can also flip whether a tile is
-                  focusable. */}
+              {/* Always the same node, for every tile kind, focused or not — only the CSS differs
+                  (16:9-locked vs. real-ratio-locked box, both centered in the slot above). Screen
+                  tiles keep local state (ScreenShareTile's isLive/volume) that must survive a click
+                  toggling focus; conditionally mounting/unmounting this wrapper based on tile kind
+                  or camera-on/off used to change the parent shape, which made React tear the
+                  subtree down and remount it right after that same click had just set isLive —
+                  keeping this node's presence tied only to `tile.key` (never to `tile.kind` or
+                  `hasCameraVideo`) avoids that for camera tiles too, now that turning a camera
+                  on/off can also flip whether a tile is focusable. */}
               <div
                 className={
-                  'room-view__focus-frame' +
-                  (isFocused ? '' : ' room-view__focus-frame--grid') +
-                  (tile.kind === 'participant' ? ' room-view__focus-frame--participant' : '')
+                  'room-view__participant-tile' +
+                  (isFocused ? ' room-view__participant-tile--focused' : '') +
+                  (isFocusable ? ' room-view__participant-tile--focusable' : '') +
+                  (isVolumeTarget ? ' room-view__participant-tile--volume-target' : '') +
+                  (isVolumeMenuActive ? ' room-view__participant-tile--volume-active' : '')
                 }
                 style={isFocused ? ({ '--focus-ratio': focusedAspectRatio ?? 16 / 9 } as CSSProperties) : undefined}
+                onClick={
+                  isFocusable && !isFocused
+                    ? () => {
+                        setFocusedTileKey(tile.key);
+                        if (hasRemoteVideo) {
+                          setViewedCameraPeerIds((prev) => (prev.has(tile.key) ? prev : new Set(prev).add(tile.key)));
+                        }
+                      }
+                    : // No video to focus (just the avatar circle) — click views the real profile
+                      // instead, same trigger point as RoomSidebar's participant row.
+                      isVolumeTarget && !isFocusable
+                      ? () => onViewProfile(tile.userId!, tile.name, tile.kind === 'participant' ? tile.avatarUrl : null)
+                      : undefined
+                }
+                onContextMenu={
+                  tile.kind === 'participant' && tile.userId
+                    ? (event) => {
+                        event.preventDefault();
+                        onOpenVolumeMenu(event.clientX, event.clientY, tile.key, tile.userId!, tile.name);
+                      }
+                    : undefined
+                }
               >
                 {/* Screen tiles' close button lives inside ScreenShareTile instead — closing has
                     to reset that component's own play/audio state, not just this file's focus

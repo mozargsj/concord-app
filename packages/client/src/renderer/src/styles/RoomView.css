@@ -24,22 +24,60 @@
   position: relative;
   flex: 1;
   display: grid;
-  gap: 16px;
-  padding: 24px;
+  gap: 8px;
+  padding: 12px;
   min-height: 0;
 }
 
-.room-view__participant-tile {
+/* [2026-08-30, pedido do Mozar] Slot invisível — só dá o contexto de container-query (cqw/cqh)
+   que o .room-view__participant-tile filho usa pra se travar em proporção, e (só quando em foco)
+   sai do fluxo do grid pra cobrir a área toda. Nunca tem fundo/raio próprio quando não focado —
+   uma versão anterior tinha uma terceira camada (`.room-view__focus-frame`) com fundo preto
+   próprio entre este slot e o tile, o que deixava uma sobra visível entre as duas caixas; a
+   sobra sumiu fundindo aquela camada aqui dentro do próprio `.room-view__participant-tile`. */
+.room-view__tile-slot {
   position: relative;
   min-width: 0;
   min-height: 0;
   container-type: size;
-  background: var(--color-bg-elevated);
-  border-radius: var(--radius-md);
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+/* Foco sai do fluxo do grid e cobre a área toda — o fundo preto aqui é a barra de letterbox
+   (visível nas sobras ao redor do .room-view__participant-tile filho quando a proporção real da
+   transmissão não preenche esse espaço todo, ex. 21:9 numa área mais quadrada). */
+.room-view__tile-slot--focused {
+  position: absolute;
+  inset: 12px;
+  z-index: 20;
+  background: #000000;
+}
+
+/* [2026-08-30, pedido do Mozar] A única caixa visível/interativa — mesmo elemento que acende no
+   hover (`--volume-target:hover` abaixo) é o que trava a proporção (16:9 parado na grade, real da
+   transmissão quando em foco via --focus-ratio). min()/cqw/cqh contra o `.room-view__tile-slot`
+   pai escolhe qual eixo é o limitante, a caixa nunca estica além dessa proporção — o espaço vazio
+   ao redor (dentro do slot) é quem mostra o fundo/letterbox do slot pai, não uma terceira caixa
+   própria. var(--focus-ratio, 1.7778) cai pra 16:9 quando não focado (custom property nem chega a
+   ser setada) e antes do vídeo carregar metadata pela primeira vez após focar. */
+.room-view__participant-tile {
+  position: relative;
+  /* Sizing (width/height) resolves cqw/cqh against .room-view__tile-slot, the parent — but this
+     element must ALSO be its own container-query context for ITS children (avatar circle's
+     70cqmin, media fill), or they'd resolve against the slot's differently-shaped box instead of
+     this tile's real (16:9-locked) box, ending up the wrong size. Without this, the avatar looked
+     stuck at some size disconnected from the tile actually shown on screen. */
+  container-type: size;
+  width: min(100cqw, calc(100cqh * var(--focus-ratio, 1.7778)));
+  height: min(100cqh, calc(100cqw / var(--focus-ratio, 1.7778)));
+  background: var(--color-bg-elevated);
+  border-radius: var(--radius-md);
   overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .room-view__participant-tile--focusable {
@@ -47,9 +85,6 @@
 }
 
 .room-view__participant-tile--focused {
-  position: absolute;
-  inset: 24px;
-  z-index: 20;
   cursor: default;
   background: #000000;
 }
@@ -67,53 +102,6 @@
 .room-view__participant-tile--volume-active {
   outline: 2px solid var(--color-accent);
   outline-offset: -2px;
-}
-
-/* [2026-08-30] Trava o tile em foco na proporção real da transmissão (--focus-ratio,
-   width/height de verdade do vídeo — RoomView.tsx via onDimensionsChange), não mais um 16:9 fixo
-   — 21:9, 4:3, o que a tela compartilhada for. min()/cqw/cqh escolhe qual eixo é o limitante, a
-   caixa nunca estica além dessa proporção; o espaço vazio ao redor é a barra de letterbox.
-   var(--focus-ratio, 1.7778) cai pra 16:9 antes do vídeo carregar metadata pela primeira vez. */
-.room-view__focus-frame {
-  position: relative;
-  container-type: size;
-  width: min(100cqw, calc(100cqh * var(--focus-ratio, 1.7778)));
-  height: min(100cqh, calc(100cqw / var(--focus-ratio, 1.7778)));
-  background: #000000;
-  overflow: hidden;
-  border-radius: var(--radius-md);
-}
-
-/* Not-focused state — same wrapper (see RoomView.tsx's comment on why it's never conditionally
-   unmounted), just filling the grid cell plainly instead of the 16:9-locked fullscreen box. */
-.room-view__focus-frame--grid {
-  width: 100%;
-  height: 100%;
-}
-
-/* [Bug corrigido] Participant tiles used to be centered by the outer .room-view__participant-tile
-   flex container directly (media/liveIndicator/status were its direct children, status pulled out
-   of flow by its own position:absolute). Wrapping them in .room-view__focus-frame put this div in
-   between as the *only* flex child instead — since this wrapper itself isn't a flex container, its
-   own children (the avatar circle, in particular) fell back to normal block flow and landed
-   top-left instead of centered. Harmless for the video cases (camera/screen fill 100% either way,
-   centering an element that big does nothing visible), but very visible for the avatar-placeholder
-   circle, which doesn't fill the tile. */
-.room-view__focus-frame--participant {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-/* An unfocused participant tile (camera on or off) must look exactly like the plain unwrapped
-   fragment it used to be — the base .room-view__focus-frame's black board + rounding + clipping
-   is only appropriate for the focused 16:9 box (or a screen tile, which fills a whole tile either
-   way). Without this override, every participant tile would show a solid black square behind its
-   avatar circle instead of the tile's own --color-bg-elevated background. */
-.room-view__focus-frame--participant.room-view__focus-frame--grid {
-  background: transparent;
-  border-radius: 0;
-  overflow: visible;
 }
 
 /* Mirrors .screen-share-tile__close — a focused camera tile has no ScreenShareTile of its own to
