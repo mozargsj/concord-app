@@ -1,17 +1,19 @@
 # Copy to .dev.vars (gitignored) for `wrangler dev`. In production these are `wrangler secret put`
 # values instead — never committed, never put in wrangler.jsonc.
 
-# Same HMAC key as packages/server/.env SESSION_SECRET — must match exactly, so a token issued by
-# either backend verifies against the other during the migration window.
+# HMAC key for session tokens (auth.ts).
 SESSION_SECRET=
 
-# R2 API token (R2 dashboard > Manage API tokens), NOT the general Cloudflare account API token.
-# Used only for presigned URLs (src/r2.ts) — the native MEDIA binding (updates, avatar import)
-# doesn't need these.
-R2_ACCESS_KEY_ID=
-R2_SECRET_ACCESS_KEY=
-
 # Cloudflare Realtime TURN key (Dashboard: Calls > TURN Keys) — optional, blank = client falls
-# back to STUN-only. Same as packages/server/.env TURN_KEY_ID/TURN_API_TOKEN.
+# back to STUN-only.
 TURN_KEY_ID=
 TURN_API_TOKEN=
+
+# Shared secret for POST /admin/notify-update (server-push "update available" broadcast) — also
+# what scripts/publish-update.sh reads from here to notify already-open clients automatically.
+ADMIN_SECRET=
+
+# Google OAuth client secret — token exchange happens server-side now (rest.ts's
+# handleGoogleExchange), see decisions.md's security-audit section for why this moved here from
+# packages/client/.env.
+GOOGLE_OAUTH_CLIENT_SECRET=
