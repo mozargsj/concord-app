@@ -162,10 +162,32 @@
   text-transform: uppercase;
 }
 
+/* [2026-08-30, pedido do Mozar] Seta nunca tinha sido ligada a nada — agora alterna o modo
+   compacto dos participantes (ver .room-sidebar__participants--compact abaixo). Padrão aberto:
+   aponta pra baixo; "fechada" (compacto) gira -90deg, apontando pra direita, mesma convenção
+   visual de qualquer seta de recolher/expandir. */
+.room-sidebar__category-chevron-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  flex-shrink: 0;
+}
+
 .room-sidebar__category-chevron {
   width: 18px;
   height: 18px;
   opacity: 0.8;
+  transition: transform 0.15s ease;
+}
+
+.room-sidebar__category-chevron--collapsed {
+  transform: rotate(-90deg);
 }
 
 .room-sidebar__category-actions {
@@ -328,6 +350,20 @@
   padding: 4px 0 8px 28px;
 }
 
+/* [2026-08-30, pedido do Mozar] Modo compacto — uma fita horizontal de avatares (nome/status
+   escondidos, ver JSX) em vez da lista vertical detalhada. `nowrap` + margem negativa em cada
+   avatar (abaixo) é o que produz a sobreposição quando não cabem lado a lado sem se tocar —
+   sempre se sobrepõem um pouco por design, não só quando "estoura" o espaço, já que não há como
+   medir espaço disponível em CSS puro; o efeito visual pedido (mais gente = mais sobreposição
+   percebida, tudo numa linha só) já sai certo assim. */
+.room-sidebar__participants--compact {
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 0;
+  overflow: hidden;
+}
+
 .room-sidebar__participant {
   display: flex;
   align-items: center;
@@ -348,6 +384,30 @@
 
 .room-sidebar__participant--volume-active {
   background: color-mix(in srgb, var(--color-accent) 20%, transparent);
+}
+
+.room-sidebar__participant--compact {
+  gap: 0;
+  padding: 0;
+  flex-shrink: 0;
+  margin-left: -8px;
+}
+
+.room-sidebar__participant--compact:first-child {
+  margin-left: 0;
+}
+
+/* Brings the hovered/targeted avatar to the front of the overlap stack, and gives it a ring in
+   the sidebar's own background color so it reads as a distinct circle instead of blending into
+   whichever neighbor it overlaps — same "cutout" trick real avatar stacks (Slack, Teams) use. */
+.room-sidebar__participant--compact:hover,
+.room-sidebar__participant--compact.room-sidebar__participant--volume-active {
+  z-index: 1;
+}
+
+.room-sidebar__participant--compact .room-sidebar__participant-avatar {
+  box-sizing: border-box;
+  border: 2px solid var(--color-bg-sidebar);
 }
 
 /* Wraps the avatar circle + its status dot. Needs to exist separately from

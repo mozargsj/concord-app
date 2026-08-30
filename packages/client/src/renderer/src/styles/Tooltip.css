@@ -3,9 +3,15 @@
   display: inline-flex;
 }
 
+/* [2026-08-30, pedido do Mozar] `position: fixed` (não mais `absolute`) — o balão é portado pro
+   `document.body` (Tooltip.tsx) e posicionado em coordenadas de viewport via `style` inline
+   (left/top/transform, calculadas do `getBoundingClientRect()` do trigger), pra nunca mais ficar
+   cortado por overflow de um ancestral (achado real: `.room-sidebar__rooms`, `overflow-y: auto`,
+   cortava o balão pela metade). z-index alto o bastante pra ficar acima de qualquer outro
+   container do app, já que agora é o único filho direto do body nesse momento. */
 .tooltip-balloon {
-  position: absolute;
-  z-index: 200;
+  position: fixed;
+  z-index: 1000;
   max-width: 220px;
   width: max-content;
   padding: 6px 10px;
@@ -21,7 +27,10 @@
 }
 
 /* Chat-bubble tail — same trick as a WhatsApp message bubble: a small square, rotated 45deg,
-   half-hidden behind the balloon's own background so only one triangular corner shows. */
+   half-hidden behind the balloon's own background so only one triangular corner shows. Position
+   is still relative to the balloon itself (unaffected by the portal — the balloon is still its
+   own positioning context for this pseudo-element), only the balloon's own left/top/transform
+   moved to inline style above. */
 .tooltip-balloon::after {
   content: '';
   position: absolute;
@@ -31,11 +40,6 @@
   transform: rotate(45deg);
 }
 
-.tooltip-balloon--top {
-  bottom: calc(100% + 9px);
-  left: 50%;
-  transform: translateX(-50%);
-}
 .tooltip-balloon--top::after {
   top: 100%;
   left: 50%;
@@ -43,11 +47,6 @@
   margin-top: -4px;
 }
 
-.tooltip-balloon--bottom {
-  top: calc(100% + 9px);
-  left: 50%;
-  transform: translateX(-50%);
-}
 .tooltip-balloon--bottom::after {
   bottom: 100%;
   left: 50%;
@@ -55,11 +54,6 @@
   margin-bottom: -4px;
 }
 
-.tooltip-balloon--left {
-  right: calc(100% + 9px);
-  top: 50%;
-  transform: translateY(-50%);
-}
 .tooltip-balloon--left::after {
   left: 100%;
   top: 50%;
@@ -67,11 +61,6 @@
   margin-left: -4px;
 }
 
-.tooltip-balloon--right {
-  left: calc(100% + 9px);
-  top: 50%;
-  transform: translateY(-50%);
-}
 .tooltip-balloon--right::after {
   right: 100%;
   top: 50%;

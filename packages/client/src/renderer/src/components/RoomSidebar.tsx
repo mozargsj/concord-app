@@ -147,6 +147,11 @@ export default function RoomSidebar({
   isPeerMutedByMe,
   onViewProfile
 }: RoomSidebarProps) {
+  // [2026-08-30, pedido do Mozar] Seta ao lado de "Canais de Voz" nunca tinha sido ligada a nada —
+  // agora alterna entre a lista de participantes normal (nome + status, padrão) e uma versão
+  // compacta (só avatares numa linha, sobrepostos, sem nome/mic/ao-vivo/etc — só o brilho de "está
+  // falando" sobrevive). Padrão aberto (`false` = detalhado).
+  const [isParticipantsCompact, setIsParticipantsCompact] = useState(false);
   const [isCreatingRoom, setIsCreatingRoom] = useState(false);
   const [newRoomName, setNewRoomName] = useState('');
   const [editingRoomId, setEditingRoomId] = useState<string | null>(null);
@@ -443,7 +448,20 @@ export default function RoomSidebar({
       <div className="room-sidebar__rooms">
         <div className="room-sidebar__category">
           <div className="room-sidebar__category-label">
-            <ChevronDown size={18} className="room-sidebar__category-chevron" />
+            <Tooltip label={isParticipantsCompact ? 'Mostrar detalhes dos participantes' : 'Ocultar detalhes dos participantes'}>
+              <button
+                className="room-sidebar__category-chevron-button"
+                onClick={() => setIsParticipantsCompact((prev) => !prev)}
+              >
+                <ChevronDown
+                  size={18}
+                  className={
+                    'room-sidebar__category-chevron' +
+                    (isParticipantsCompact ? ' room-sidebar__category-chevron--collapsed' : '')
+                  }
+                />
+              </button>
+            </Tooltip>
             <span>Canais de Voz</span>
           </div>
           {canCreateOrDeleteRooms && (
@@ -616,7 +634,12 @@ export default function RoomSidebar({
               )}
 
               {participants.length > 0 && (
-                <div className="room-sidebar__participants">
+                <div
+                  className={
+                    'room-sidebar__participants' +
+                    (isParticipantsCompact ? ' room-sidebar__participants--compact' : '')
+                  }
+                >
                   {participants.map((participant) => {
                     const isVolumeTarget = !participant.isSelf && !!participant.userId;
                     const isVolumeMenuActive = isVolumeTarget && participant.userId === activeVolumeMenuUserId;
@@ -625,9 +648,11 @@ export default function RoomSidebar({
                       key={participant.key}
                       className={
                         'room-sidebar__participant' +
+                        (isParticipantsCompact ? ' room-sidebar__participant--compact' : '') +
                         (isVolumeTarget ? ' room-sidebar__participant--volume-target' : '') +
                         (isVolumeMenuActive ? ' room-sidebar__participant--volume-active' : '')
                       }
+                      title={isParticipantsCompact ? participant.name : undefined}
                       onClick={
                         isVolumeTarget
                           ? () => onViewProfile(participant.userId!, participant.name, participant.avatarUrl)
@@ -682,28 +707,35 @@ export default function RoomSidebar({
                           />
                         )}
                       </span>
-                      <span className="room-sidebar__participant-name">{participant.name}</span>
-                      {participant.isMicMuted && (
-                        <span
-                          className="room-sidebar__mic-status"
-                          title={participant.isDeafened ? 'Não está ouvindo nem falando' : 'Microfone desativado'}
-                        >
-                          <MicOff size={18} />
-                          {participant.isDeafened && <HeadphoneOff size={18} />}
-                        </span>
+                      {/* [2026-08-30, pedido do Mozar] Modo compacto — só o avatar (com o anel de
+                          "está falando", se aplicável) sobrevive; nome e os badges (mutado, ao vivo,
+                          host, "te mutou"/"você mutou") somem, sobra só uma fita de avatares. */}
+                      {!isParticipantsCompact && (
+                        <>
+                          <span className="room-sidebar__participant-name">{participant.name}</span>
+                          {participant.isMicMuted && (
+                            <span
+                              className="room-sidebar__mic-status"
+                              title={participant.isDeafened ? 'Não está ouvindo nem falando' : 'Microfone desativado'}
+                            >
+                              <MicOff size={18} />
+                              {participant.isDeafened && <HeadphoneOff size={18} />}
+                            </span>
+                          )}
+                          {participant.mutedMe && (
+                            <span className="room-sidebar__muted-me-status" title={`${participant.name} te mutou`}>
+                              <EarOff size={18} />
+                            </span>
+                          )}
+                          {participant.mutedByMe && (
+                            <span className="room-sidebar__muted-by-me-status" title={`Você mutou ${participant.name}`}>
+                              <VolumeX size={18} />
+                            </span>
+                          )}
+                          {participant.isBroadcasting && <LiveBadge className="room-sidebar__live-badge" />}
+                          {participant.isHost && <HostStarBadge className="room-sidebar__host-star" />}
+                        </>
                       )}
-                      {participant.mutedMe && (
-                        <span className="room-sidebar__muted-me-status" title={`${participant.name} te mutou`}>
-                          <EarOff size={18} />
-                        </span>
-                      )}
-                      {participant.mutedByMe && (
-                        <span className="room-sidebar__muted-by-me-status" title={`Você mutou ${participant.name}`}>
-                          <VolumeX size={18} />
-                        </span>
-                      )}
-                      {participant.isBroadcasting && <LiveBadge className="room-sidebar__live-badge" />}
-                      {participant.isHost && <HostStarBadge className="room-sidebar__host-star" />}
                     </div>
                     );
                   })}
