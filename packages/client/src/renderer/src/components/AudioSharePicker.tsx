@@ -120,6 +120,7 @@ export default function AudioSharePicker({ onSelect, onClose }: AudioSharePicker
 
         {sessions !== null && sessions.length > 0 && (
           <div className="audio-picker__body">
+            <h3 className="audio-picker__section-title">Aplicativos</h3>
             <div className="audio-picker__grid">
               {sessions.map((session) => (
                 <button

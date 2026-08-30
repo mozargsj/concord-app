@@ -71,6 +71,15 @@
   margin-bottom: 12px;
 }
 
+.audio-picker__section-title {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: var(--color-text-secondary);
+}
+
 .audio-picker__grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
