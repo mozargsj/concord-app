@@ -22,6 +22,10 @@ interface ScreenShareTileProps {
    * playing its audio back to them would echo whatever system sound they're already hearing
    * directly from the OS. */
   isOwnPreview?: boolean;
+  /** [2026-08-30, pedido do Mozar] Repassa as dimensões reais do vídeo assim que conhecidas — ver
+   * MediaStreamVideo.tsx. Só importa pro RoomView.tsx quando esse tile está em foco (a letterbox
+   * 16:9-travada virou dinâmica, segue a proporção de verdade da transmissão). */
+  onDimensionsChange?: (width: number, height: number) => void;
 }
 
 /**
@@ -53,7 +57,8 @@ export default function ScreenShareTile({
   isDeafened,
   isFocused,
   onCloseFocus,
-  isOwnPreview = false
+  isOwnPreview = false,
+  onDimensionsChange
 }: ScreenShareTileProps) {
   const [hasStartedViewing, setHasStartedViewing] = useState(isOwnPreview);
   const [isLive, setIsLive] = useState(isOwnPreview);
@@ -209,7 +214,13 @@ export default function ScreenShareTile({
               playing it here too would double it up. Stays mounted even while the searching/
               failed overlay covers it, since it's the same element whose 'playing' event the
               effect above is listening for — swapping it out would mean it never fires. */}
-          <MediaStreamVideo stream={stream} fit="contain" muted videoRef={visibleVideoRef} />
+          <MediaStreamVideo
+            stream={stream}
+            fit="contain"
+            muted
+            videoRef={visibleVideoRef}
+            onDimensionsChange={onDimensionsChange}
+          />
           {!hasReceivedFrame && !connectionFailed && (
             <div className="screen-share-tile__overlay screen-share-tile__overlay--searching">
               <div className="screen-share-tile__message">

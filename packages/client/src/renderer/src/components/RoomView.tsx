@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import type { RoomSummary } from '@concord/shared';
 import type { RoomPeer } from '../hooks/useRoomConnection';
 import { Eye, EarOff, HeadphoneOff, MicOff, VolumeX, X } from 'lucide-react';
@@ -94,6 +94,14 @@ export default function RoomView({
   onViewProfile
 }: RoomViewProps) {
   const [focusedTileKey, setFocusedTileKey] = useState<string | null>(null);
+  // [2026-08-30, pedido do Mozar] Largura/altura reais do vídeo em foco (16:9, 21:9, 4:3, o que a
+  // transmissão de verdade for) — a letterbox do .room-view__focus-frame usa isso em vez de um
+  // 16:9 travado. null até o <video> carregar metadata pela primeira vez (novo alvo de foco);
+  // volta a 16/9 nesse meio-tempo (CSS var(--focus-ratio, 1.7778)) pra não piscar 0.
+  const [focusedAspectRatio, setFocusedAspectRatio] = useState<number | null>(null);
+  useEffect(() => {
+    setFocusedAspectRatio(null);
+  }, [focusedTileKey]);
   // A remote peer's camera stays blurred/gated (same "clique para visualizar" idea as a screen
   // share, decision from the Mozar) until clicked at least once — keyed by tile.key, same
   // identifier focusedTileKey already uses. Never applies to the local user's own camera preview
@@ -255,6 +263,10 @@ export default function RoomView({
 
           const effectiveVolume = tile.kind === 'participant' ? getPeerVolume(tile.userId) : undefined;
 
+          const handleFocusedDimensions = isFocused
+            ? (width: number, height: number) => setFocusedAspectRatio(width / height)
+            : undefined;
+
           const media =
             tile.kind === 'screen' ? (
               <ScreenShareTile
@@ -263,16 +275,23 @@ export default function RoomView({
                 isFocused={isFocused}
                 onCloseFocus={() => setFocusedTileKey(null)}
                 isOwnPreview={tile.key === 'self-screen'}
+                onDimensionsChange={handleFocusedDimensions}
               />
             ) : showCamera ? (
-              <MediaStreamVideo stream={cameraStream} mirrored fit="cover" />
+              <MediaStreamVideo stream={cameraStream} mirrored fit="cover" onDimensionsChange={handleFocusedDimensions} />
             ) : hasRemoteVideo ? (
               <div
                 className={
                   'room-view__camera-wrap' + (viewedCameraPeerIds.has(tile.key) ? '' : ' room-view__camera-wrap--gated')
                 }
               >
-                <MediaStreamVideo stream={remoteStream!} muted={isDeafened} volume={effectiveVolume} fit="cover" />
+                <MediaStreamVideo
+                  stream={remoteStream!}
+                  muted={isDeafened}
+                  volume={effectiveVolume}
+                  fit="cover"
+                  onDimensionsChange={handleFocusedDimensions}
+                />
                 {!viewedCameraPeerIds.has(tile.key) && (
                   <div className="room-view__camera-gate-message">
                     <Eye size={22} />
@@ -381,6 +400,7 @@ export default function RoomView({
                   (isFocused ? '' : ' room-view__focus-frame--grid') +
                   (tile.kind === 'participant' ? ' room-view__focus-frame--participant' : '')
                 }
+                style={isFocused ? ({ '--focus-ratio': focusedAspectRatio ?? 16 / 9 } as CSSProperties) : undefined}
               >
                 {/* Screen tiles' close button lives inside ScreenShareTile instead — closing has
                     to reset that component's own play/audio state, not just this file's focus

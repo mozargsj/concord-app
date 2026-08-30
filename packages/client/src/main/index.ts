@@ -1,4 +1,4 @@
-import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, safeStorage } from 'electron';
+import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, safeStorage, screen } from 'electron';
 import dotenv from 'dotenv';
 import { mkdir, readdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -115,12 +115,52 @@ async function confirmAndClose(window: BrowserWindow, markConfirmed: () => void)
   window.close();
 }
 
+// [2026-08-30, pedido do Mozar] Janela sempre 16:9 — nem o tamanho inicial, nem o resize manual,
+// nem "maximizar" fogem dessa proporção, independente do monitor. 1280x720/960x540 já nascem
+// exatos em 16:9 (o valor antigo, 1280x800/960x600, era 16:10).
+const WINDOW_ASPECT_RATIO = 16 / 9;
+
+/** Maior retângulo 16:9 que cabe na área de trabalho do monitor onde a janela está agora, mesma
+ * lógica de "letterbox" já usada pro tile de transmissão em destaque (RoomView.css) — só que
+ * aplicada à janela do SO em si, não a um elemento dentro da página. */
+function getMaximized16by9Bounds(window: BrowserWindow): Electron.Rectangle {
+  const { workArea } = screen.getDisplayMatching(window.getBounds());
+  let width = workArea.width;
+  let height = Math.round(width / WINDOW_ASPECT_RATIO);
+  if (height > workArea.height) {
+    height = workArea.height;
+    width = Math.round(height * WINDOW_ASPECT_RATIO);
+  }
+  return {
+    x: workArea.x + Math.round((workArea.width - width) / 2),
+    y: workArea.y + Math.round((workArea.height - height) / 2),
+    width,
+    height
+  };
+}
+
+let isPseudoMaximized = false;
+let restoreBounds: Electron.Rectangle | null = null;
+
+function enterPseudoMaximize(window: BrowserWindow): void {
+  restoreBounds = window.getBounds();
+  window.setBounds(getMaximized16by9Bounds(window));
+  isPseudoMaximized = true;
+  window.webContents.send('window:maximized-change', true);
+}
+
+function exitPseudoMaximize(window: BrowserWindow): void {
+  if (restoreBounds) window.setBounds(restoreBounds);
+  isPseudoMaximized = false;
+  window.webContents.send('window:maximized-change', false);
+}
+
 function createMainWindow(): void {
   const window = new BrowserWindow({
     width: 1280,
-    height: 800,
+    height: 720,
     minWidth: 960,
-    minHeight: 600,
+    minHeight: 540,
     frame: false,
     backgroundColor: '#1e1f22',
     // Packaged builds get the icon embedded in the .exe by electron-builder (win.icon in
@@ -133,6 +173,7 @@ function createMainWindow(): void {
       nodeIntegration: false
     }
   });
+  window.setAspectRatio(WINDOW_ASPECT_RATIO);
 
   let isCloseConfirmed = false;
   window.on('close', (event) => {
@@ -145,8 +186,15 @@ function createMainWindow(): void {
     });
   });
 
-  window.on('maximize', () => window.webContents.send('window:maximized-change', true));
-  window.on('unmaximize', () => window.webContents.send('window:maximized-change', false));
+  // Frameless window still responds to OS-level maximize triggers (double-click/Aero Snap on the
+  // draggable title bar region) even though our own button never calls the native win.maximize()
+  // — this catches that path too, immediately swapping the real full-bleed maximize for the same
+  // 16:9-shaped pseudo-maximize the button uses, so the window is always 16:9 no matter how
+  // "maximize" gets triggered.
+  window.on('maximize', () => {
+    window.unmaximize();
+    enterPseudoMaximize(window);
+  });
 
   // Waits for the page's own script (and its onUpdateStatus listener) to be ready before
   // sending anything — checkForUpdatesOnStartup's status events would otherwise risk arriving
@@ -180,10 +228,10 @@ ipcMain.on('window:minimize', (event) => {
 ipcMain.on('window:maximize-toggle', (event) => {
   const win = BrowserWindow.fromWebContents(event.sender);
   if (!win) return;
-  if (win.isMaximized()) {
-    win.unmaximize();
+  if (isPseudoMaximized) {
+    exitPseudoMaximize(win);
   } else {
-    win.maximize();
+    enterPseudoMaximize(win);
   }
 });
 

@@ -69,14 +69,16 @@
   outline-offset: -2px;
 }
 
-/* Locks the focused tile to 16:9 no matter the shape of the space around it —
-   min()/cqw/cqh picks whichever axis is the limiting one, so the box never
-   stretches past 16:9; the empty space around it reads as letterbox bars. */
+/* [2026-08-30] Trava o tile em foco na proporção real da transmissão (--focus-ratio,
+   width/height de verdade do vídeo — RoomView.tsx via onDimensionsChange), não mais um 16:9 fixo
+   — 21:9, 4:3, o que a tela compartilhada for. min()/cqw/cqh escolhe qual eixo é o limitante, a
+   caixa nunca estica além dessa proporção; o espaço vazio ao redor é a barra de letterbox.
+   var(--focus-ratio, 1.7778) cai pra 16:9 antes do vídeo carregar metadata pela primeira vez. */
 .room-view__focus-frame {
   position: relative;
   container-type: size;
-  width: min(100cqw, 177.78cqh);
-  height: min(100cqh, 56.25cqw);
+  width: min(100cqw, calc(100cqh * var(--focus-ratio, 1.7778)));
+  height: min(100cqh, calc(100cqw / var(--focus-ratio, 1.7778)));
   background: #000000;
   overflow: hidden;
   border-radius: var(--radius-md);

@@ -19,6 +19,11 @@ interface MediaStreamVideoProps {
    * a frame onto a canvas right before tearing this element down. Falls back to an internal ref
    * when not provided, same as every other caller today. */
   videoRef?: RefObject<HTMLVideoElement>;
+  /** [2026-08-30, pedido do Mozar] Fires once real pixel dimensions are known (video's own
+   * `loadedmetadata`, same event the frame-capture logic elsewhere already waits on implicitly
+   * via videoWidth) — RoomView.tsx uses this to shape the focused tile's letterbox to the real
+   * proporção transmitida (16:9, 21:9, 4:3, o que for) em vez de sempre travar em 16:9. */
+  onDimensionsChange?: (width: number, height: number) => void;
 }
 
 export default function MediaStreamVideo({
@@ -28,7 +33,8 @@ export default function MediaStreamVideo({
   muted = true,
   volume,
   hidden = false,
-  videoRef: externalVideoRef
+  videoRef: externalVideoRef,
+  onDimensionsChange
 }: MediaStreamVideoProps) {
   const internalVideoRef = useRef<HTMLVideoElement>(null);
   const videoRef = externalVideoRef ?? internalVideoRef;
@@ -70,6 +76,16 @@ export default function MediaStreamVideo({
       autoPlay
       muted={muted}
       playsInline
+      onLoadedMetadata={
+        onDimensionsChange
+          ? (event) => {
+              const video = event.currentTarget;
+              if (video.videoWidth > 0 && video.videoHeight > 0) {
+                onDimensionsChange(video.videoWidth, video.videoHeight);
+              }
+            }
+          : undefined
+      }
       style={
         hidden
           ? { position: 'absolute', width: 1, height: 1, opacity: 0, pointerEvents: 'none' }
