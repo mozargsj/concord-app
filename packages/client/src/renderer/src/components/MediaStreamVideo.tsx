@@ -103,16 +103,21 @@ export default function MediaStreamVideo({
   useEffect(() => {
     const video = videoRef.current;
     if (!video || volume === undefined) return;
+    // `muted` must win here too — once a caller passes `volume` at all, the native element's own
+    // `muted` attribute (below) no longer gates what's actually audible (that's this gain/volume
+    // instead), so deafen/mute has to be folded into the same value or it becomes a no-op for
+    // every caller that also passes `volume` (every real peer tile, via getPeerVolume).
+    const effectiveVolume = muted ? 0 : volume;
     if (gainNodeRef.current) {
-      // Instant, not ramped — this doubles as the deafen/mute path (RoomView.tsx passes 0 when
-      // deafened), which should cut immediately, not fade.
-      gainNodeRef.current.gain.value = volume;
+      // Instant, not ramped — this doubles as the deafen/mute path, which should cut immediately,
+      // not fade.
+      gainNodeRef.current.gain.value = effectiveVolume;
     } else {
       // No audio track on this stream (graph above never built) — nothing to boost, but keep the
       // native element's volume in sync anyway in case a track shows up later without a re-mount.
-      video.volume = Math.max(0, Math.min(1, volume));
+      video.volume = Math.max(0, Math.min(1, effectiveVolume));
     }
-  }, [volume]); // eslint-disable-line react-hooks/exhaustive-deps -- videoRef/gainNodeRef stable
+  }, [volume, muted]); // eslint-disable-line react-hooks/exhaustive-deps -- videoRef/gainNodeRef stable
 
   useEffect(() => {
     const video = videoRef.current as MediaElementWithSink | null;
