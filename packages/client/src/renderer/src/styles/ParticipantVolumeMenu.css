@@ -33,59 +33,48 @@
   gap: 8px;
 }
 
-.participant-volume-menu__slider {
+/* Space for the value-bubble to float above the thumb, same convention as
+   SettingsModal.css's .settings-modal__slider-wrap. */
+.participant-volume-menu__slider-wrap {
+  position: relative;
   flex: 1;
+  margin-top: 22px;
 }
 
-.participant-volume-menu__value {
-  width: 34px;
-  text-align: right;
-  font-size: 12px;
-  color: var(--color-text-secondary);
+.participant-volume-menu__slider {
+  width: 100%;
 }
 
-.participant-volume-menu__mute {
+/* [2026-08-30, pedido do Mozar] "Mutar pra mim"/"Ver perfil" viraram ícone-só (texto move pro
+   Tooltip.tsx no hover) — mesma convenção de ícone+balão já padrão no resto do app. */
+.participant-volume-menu__actions {
+  display: flex;
+  gap: 4px;
+}
+
+.participant-volume-menu__icon-action {
   display: flex;
   align-items: center;
-  gap: 6px;
+  justify-content: center;
+  flex: 1;
   border: none;
   background: transparent;
   color: var(--color-text-secondary);
-  padding: 6px 8px;
+  padding: 8px;
   border-radius: var(--radius-sm);
-  font-size: 13px;
-  text-align: left;
 }
 
-.participant-volume-menu__mute:hover {
+.participant-volume-menu__icon-action:hover {
   background: var(--color-bg-elevated-hover);
   color: var(--color-text-primary);
 }
 
 /* Same "off" language as MicOff/HeadphoneOff/VolumeX elsewhere in the app — red when active. */
-.participant-volume-menu__mute--active {
+.participant-volume-menu__icon-action--active {
   color: var(--color-danger);
 }
 
-.participant-volume-menu__mute--active:hover {
+.participant-volume-menu__icon-action--active:hover {
   background: rgba(242, 63, 66, 0.15);
   color: var(--color-danger);
-}
-
-.participant-volume-menu__view-profile {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  border: none;
-  background: transparent;
-  color: var(--color-text-secondary);
-  padding: 6px 8px;
-  border-radius: var(--radius-sm);
-  font-size: 13px;
-  text-align: left;
-}
-
-.participant-volume-menu__view-profile:hover {
-  background: var(--color-bg-elevated-hover);
-  color: var(--color-text-primary);
 }

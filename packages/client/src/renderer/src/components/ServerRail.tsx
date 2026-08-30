@@ -37,7 +37,14 @@ export default function ServerRail({
   onServerDeleted
 }: ServerRailProps) {
   const [contextMenu, setContextMenu] = useState<ServerContextMenuState | null>(null);
-  const [editingServer, setEditingServer] = useState<ServerSummary | null>(null);
+  // Holds only the id being edited — the object itself is looked up fresh from `servers` below on
+  // every render, instead of a snapshot frozen at the moment the context menu was clicked. A
+  // frozen snapshot never saw EditServerModal's own onServerUpdated calls (icon/name changes bubble
+  // up to ServerListPage and back down through the `servers` prop, not back into this component's
+  // own state), so the modal's own preview — and this rail's icon, until next reload — never
+  // reflected a change the owner had just made. [Bug real, achado pelo Mozar em teste, 2026-08-30]
+  const [editingServerId, setEditingServerId] = useState<string | null>(null);
+  const editingServer = editingServerId ? (servers.find((server) => server.id === editingServerId) ?? null) : null;
 
   function handleServerContextMenu(event: ReactMouseEvent, server: ServerSummary) {
     event.preventDefault();
@@ -103,7 +110,7 @@ export default function ServerRail({
           items={[
             {
               label: 'Editar servidor',
-              onSelect: () => setEditingServer(contextMenu.server)
+              onSelect: () => setEditingServerId(contextMenu.server.id)
             }
           ]}
         />
@@ -112,7 +119,7 @@ export default function ServerRail({
       {editingServer && (
         <EditServerModal
           server={editingServer}
-          onClose={() => setEditingServer(null)}
+          onClose={() => setEditingServerId(null)}
           onServerUpdated={onServerUpdated}
           onServerDeleted={onServerDeleted}
         />

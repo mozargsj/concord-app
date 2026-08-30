@@ -1,5 +1,11 @@
 import { User, VolumeX } from 'lucide-react';
+import Tooltip from './Tooltip';
 import '../styles/ParticipantVolumeMenu.css';
+import '../styles/ValueBubble.css';
+
+const VOLUME_MAX = 200;
+// [2026-08-30, pedido do Mozar] +50% sobre o tamanho original (14) dos ícones deste menu.
+const ACTION_ICON_SIZE = 21;
 
 interface ParticipantVolumeMenuProps {
   x: number;
@@ -47,30 +53,39 @@ export default function ParticipantVolumeMenu({
       <div className="participant-volume-menu" style={{ left, top }}>
         <p className="participant-volume-menu__name">{name}</p>
         <div className="participant-volume-menu__row">
-          <input
-            type="range"
-            min={0}
-            max={100}
-            value={isMuted ? 0 : volume}
-            onChange={(event) => onVolumeChange(Number(event.target.value))}
-            className="participant-volume-menu__slider"
-          />
-          <span className="participant-volume-menu__value">{isMuted ? 0 : volume}%</span>
+          <div className="participant-volume-menu__slider-wrap">
+            <div className="value-bubble" style={{ left: `${((isMuted ? 0 : volume) / VOLUME_MAX) * 100}%` }}>
+              {isMuted ? 0 : volume}%
+            </div>
+            <input
+              type="range"
+              min={0}
+              max={VOLUME_MAX}
+              value={isMuted ? 0 : volume}
+              onChange={(event) => onVolumeChange(Number(event.target.value))}
+              className="participant-volume-menu__slider"
+            />
+          </div>
         </div>
-        <button
-          type="button"
-          className={
-            'participant-volume-menu__mute' + (isMuted ? ' participant-volume-menu__mute--active' : '')
-          }
-          onClick={onToggleMute}
-        >
-          <VolumeX size={14} />
-          {isMuted ? 'Desmutar pra mim' : 'Mutar pra mim'}
-        </button>
-        <button type="button" className="participant-volume-menu__view-profile" onClick={onViewProfile}>
-          <User size={14} />
-          Ver perfil
-        </button>
+        <div className="participant-volume-menu__actions">
+          <Tooltip label={isMuted ? 'Desmutar pra mim' : 'Mutar pra mim'}>
+            <button
+              type="button"
+              className={
+                'participant-volume-menu__icon-action' +
+                (isMuted ? ' participant-volume-menu__icon-action--active' : '')
+              }
+              onClick={onToggleMute}
+            >
+              <VolumeX size={ACTION_ICON_SIZE} />
+            </button>
+          </Tooltip>
+          <Tooltip label="Ver perfil">
+            <button type="button" className="participant-volume-menu__icon-action" onClick={onViewProfile}>
+              <User size={ACTION_ICON_SIZE} />
+            </button>
+          </Tooltip>
+        </div>
       </div>
     </>
   );

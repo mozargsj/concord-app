@@ -10,6 +10,7 @@ import {
   sensitivityToThresholdDb,
   setMicSensitivity
 } from '../lib/micSensitivity';
+import { MIC_GAIN_DEFAULT, MIC_GAIN_MAX, MIC_GAIN_MIN, getMicGain, setMicGain } from '../lib/micGain';
 import { getRnnoiseEnabled, setRnnoiseEnabled } from '../lib/noiseSuppressionSettings';
 import { getHardwareEncodePreference, setHardwareEncodePreference } from '../lib/hardwareEncodePreference';
 import { runNetworkSelfTest, type NetworkSelfTestResult } from '../lib/networkSelfTest';
@@ -22,6 +23,7 @@ import {
   setMasterVolume
 } from '../lib/masterVolume';
 import '../styles/SettingsModal.css';
+import '../styles/ValueBubble.css';
 
 interface SettingsModalProps {
   onClose: () => void;
@@ -32,6 +34,7 @@ interface SettingsModalProps {
 
 export default function SettingsModal({ onClose, onNoiseSuppressionChange }: SettingsModalProps) {
   const [threshold, setThreshold] = useState(MIC_SENSITIVITY_DEFAULT);
+  const [micGain, setMicGainState] = useState(MIC_GAIN_DEFAULT);
   const [isRnnoiseEnabled, setIsRnnoiseEnabled] = useState(true);
   const [isHardwareEncodeEnabled, setIsHardwareEncodeEnabled] = useState(true);
   // [Diagnóstico, investigação de conectividade 2026-08-27] Ver lib/networkSelfTest.ts — 'idle'
@@ -46,6 +49,7 @@ export default function SettingsModal({ onClose, onNoiseSuppressionChange }: Set
 
   useEffect(() => {
     setThreshold(getMicSensitivity());
+    setMicGainState(getMicGain());
     setIsRnnoiseEnabled(getRnnoiseEnabled());
     setMasterVolumeState(getMasterVolume());
     setIsHardwareEncodeEnabled(getHardwareEncodePreference());
@@ -75,6 +79,11 @@ export default function SettingsModal({ onClose, onNoiseSuppressionChange }: Set
   function handleThresholdChange(value: number) {
     setThreshold(value);
     setMicSensitivity(value);
+  }
+
+  function handleMicGainChange(value: number) {
+    setMicGainState(value);
+    setMicGain(value);
   }
 
   function handleMasterVolumeChange(value: number) {
@@ -132,6 +141,7 @@ export default function SettingsModal({ onClose, onNoiseSuppressionChange }: Set
           </Tooltip>
         </header>
 
+        <div className="settings-modal__body">
         <div className="settings-modal__section">
           <label className="settings-modal__toggle-row">
             <span>
@@ -153,15 +163,23 @@ export default function SettingsModal({ onClose, onNoiseSuppressionChange }: Set
             Controla o volume de tudo que você ouve na sala. Pra ajustar uma pessoa específica,
             clique com o botão direito nela.
           </p>
-          <input
-            id="master-volume"
-            type="range"
-            min={MASTER_VOLUME_MIN}
-            max={MASTER_VOLUME_MAX}
-            value={masterVolume}
-            onChange={(event) => handleMasterVolumeChange(Number(event.target.value))}
-            className="settings-modal__slider"
-          />
+          <div className="settings-modal__slider-wrap">
+            <div
+              className="value-bubble"
+              style={{ left: `${(masterVolume / MASTER_VOLUME_MAX) * 100}%` }}
+            >
+              {masterVolume}%
+            </div>
+            <input
+              id="master-volume"
+              type="range"
+              min={MASTER_VOLUME_MIN}
+              max={MASTER_VOLUME_MAX}
+              value={masterVolume}
+              onChange={(event) => handleMasterVolumeChange(Number(event.target.value))}
+              className="settings-modal__slider"
+            />
+          </div>
         </div>
 
         <div className="settings-modal__section">
@@ -174,7 +192,7 @@ export default function SettingsModal({ onClose, onNoiseSuppressionChange }: Set
           </p>
 
           <div className="settings-modal__gate">
-            <div className="settings-modal__gate-tooltip" style={{ left: `${threshold}%` }}>
+            <div className="value-bubble" style={{ left: `${threshold}%` }}>
               {formatThresholdDb(threshold)}
             </div>
             <div className={'settings-modal__gate-track' + (isGateOpen ? ' settings-modal__gate-track--open' : '')}>
@@ -188,6 +206,34 @@ export default function SettingsModal({ onClose, onNoiseSuppressionChange }: Set
               value={threshold}
               onChange={(event) => handleThresholdChange(Number(event.target.value))}
               className="settings-modal__gate-slider"
+            />
+          </div>
+        </div>
+
+        <div className="settings-modal__section">
+          <label className="settings-modal__label" htmlFor="mic-gain">
+            Ganho do microfone
+          </label>
+          <p className="settings-modal__hint">
+            Amplifica sua voz antes de enviar — útil se o microfone capta baixo mesmo no volume
+            máximo do próprio aparelho. 100% é o volume natural do mic, sem alteração; acima disso
+            amplifica (até 200%), abaixo disso abaixa.
+          </p>
+          <div className="settings-modal__slider-wrap">
+            <div
+              className="value-bubble"
+              style={{ left: `${(micGain / MIC_GAIN_MAX) * 100}%` }}
+            >
+              {micGain}%
+            </div>
+            <input
+              id="mic-gain"
+              type="range"
+              min={MIC_GAIN_MIN}
+              max={MIC_GAIN_MAX}
+              value={micGain}
+              onChange={(event) => handleMicGainChange(Number(event.target.value))}
+              className="settings-modal__slider"
             />
           </div>
         </div>
@@ -236,6 +282,7 @@ export default function SettingsModal({ onClose, onNoiseSuppressionChange }: Set
                 : 'Não encontramos um endereço público. Resultado enviado pra análise.'}
             </p>
           )}
+        </div>
         </div>
       </div>
     </div>

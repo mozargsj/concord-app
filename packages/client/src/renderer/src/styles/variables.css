@@ -19,6 +19,13 @@
   --color-toggle-on-bg: #c4b5fd;
   --color-toggle-off-bg: #9a9ea6;
 
+  /* [2026-08-30, pedido do Mozar] Padrão único de "balão" pro sistema inteiro — tooltip de hover
+     (Tooltip.tsx) e balão de valor sobre slider (SettingsModal.tsx/ParticipantVolumeMenu.tsx)
+     usam as duas mesmas variáveis, em vez de cada um puxar uma cor de fundo diferente
+     (--color-bg-elevated, --color-bg-rail...) como antes. */
+  --color-bubble-bg: #16233f;
+  --color-bubble-text: #ffffff;
+
   --radius-sm: 6px;
   --radius-md: 10px;
   --radius-lg: 16px;
