@@ -351,7 +351,7 @@ export default function RoomView({
           );
 
           const liveIndicator = tile.kind === 'screen' && (
-            <LiveBadge className="room-view__live-badge" variant="icon" />
+            <LiveBadge className="room-view__live-badge" variant="text" />
           );
 
           return (
