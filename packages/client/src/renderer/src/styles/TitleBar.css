@@ -33,6 +33,25 @@
   white-space: nowrap;
 }
 
+/* [Feature nova, pedido do Mozar] "release"/"dev" na frente da versão — distinção visual entre um
+   build de produção de verdade e qualquer build de teste (dev server, test-dev, test-real), sem
+   precisar abrir nada pra saber. Cor à parte do resto de .title-bar__version (que fica em
+   opacity:0.6) pra continuar legível mesmo discreta. */
+.title-bar__build-tag {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  margin-right: 4px;
+}
+
+.title-bar__build-tag--release {
+  color: var(--color-online);
+}
+
+.title-bar__build-tag--dev {
+  color: var(--color-reconnecting);
+}
+
 .title-bar__center {
   flex: 0 0 auto;
   display: flex;

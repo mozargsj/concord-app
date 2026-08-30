@@ -26,6 +26,13 @@ export default function TitleBar({ title, pendingUpdateVersion, onRequestUpdate 
     <>
       <header className="title-bar">
       <div className="title-bar__left">
+        {/* Own span, not nested inside .title-bar__version — that one runs at opacity:0.6, which
+            would flatten this tag's color right along with it (opacity dims the whole subtree, a
+            child's own opacity:1 can't undo that) and defeat the point of a color you can
+            actually tell apart at a glance. */}
+        <span className={`title-bar__build-tag title-bar__build-tag--${__APP_BUILD_TAG__}`}>
+          {__APP_BUILD_TAG__}
+        </span>
         <span className="title-bar__version">v{__APP_VERSION__}</span>
       </div>
 
