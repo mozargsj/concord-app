@@ -6,6 +6,9 @@ contextBridge.exposeInMainWorld('concord', {
     minimize: () => ipcRenderer.send('window:minimize'),
     maximizeToggle: () => ipcRenderer.send('window:maximize-toggle'),
     close: () => ipcRenderer.send('window:close'),
+    dragStart: (screenX: number, screenY: number) => ipcRenderer.send('window:drag-start', screenX, screenY),
+    dragMove: (screenX: number, screenY: number) => ipcRenderer.send('window:drag-move', screenX, screenY),
+    dragEnd: () => ipcRenderer.send('window:drag-end'),
     onMaximizedChange: (callback: (isMaximized: boolean) => void) => {
       const listener = (_event: unknown, isMaximized: boolean) => callback(isMaximized);
       ipcRenderer.on('window:maximized-change', listener);

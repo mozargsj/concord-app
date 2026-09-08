@@ -5,8 +5,14 @@
   align-items: center;
   background: #0d0d10;
   color: var(--color-text-secondary);
-  -webkit-app-region: drag;
   padding: 0 8px;
+  /* No `-webkit-app-region: drag` here on purpose — see TitleBar.tsx's onMouseDown. The native
+     region kept failing specifically over the icon/room-name text even after fixing the <img>'s
+     own native drag gesture and with Windows display scaling confirmed at 100% (ruling out the
+     known Chromium DPI hit-test misalignment bug) — with no live repro to inspect further, moving
+     the window manually via IPC + `setPosition` sidesteps whatever native hit-testing quirk this
+     was entirely, instead of guessing at a third CSS-only fix. */
+  cursor: default;
 }
 
 /* .title-bar__left and .title-bar__actions share the same flex-basis-0 growth so they always end
@@ -59,24 +65,14 @@
   justify-content: center;
   gap: 6px;
   min-width: 0;
-  /* [Bug corrigido] Arrastar a janela só funcionava à esquerda deste bloco (o `.title-bar__left`
-     com a tag release/dev + versão) — reforçado aqui em vez de confiar só na herança do
-     `-webkit-app-region: drag` lá do `.title-bar` (ver o comentário no `.title-bar__logo` abaixo
-     pra causa raiz de verdade). */
-  -webkit-app-region: drag;
 }
 
 .title-bar__logo {
   width: 16px;
   height: 16px;
-  /* [Bug corrigido, achado pelo Mozar] Causa raiz real do "só arrasta à esquerda do 'Concord'":
-     todo <img> tem `draggable` nativo do HTML por padrão (gesto de arrastar-e-soltar a própria
-     imagem) — dentro de uma região `-webkit-app-region: drag`, o mousedown sobre esse ícone é
-     capturado por esse gesto nativo do Chromium em vez de virar HTCAPTION (mover a janela pelo
-     SO), e isso quebra o arrasto pro resto daquele clique, não só nos pixels exatos do ícone —
-     por isso o "Concord"/nome da sala ao lado também parava de arrastar, mesmo sendo só texto.
-     `-webkit-user-drag: none` desliga esse gesto nativo especificamente pra imagem, sem afetar o
-     resto da app-region. */
+  /* Every <img> has native HTML drag-and-drop on by default — without this, starting the manual
+     window-drag gesture (TitleBar.tsx) with a mousedown right on the icon fires the browser's own
+     "drag this image out" instead, eating that mousedown instead of letting it reach our handler. */
   -webkit-user-drag: none;
   user-select: none;
 }
@@ -92,7 +88,6 @@
 .title-bar__actions {
   justify-content: flex-end;
   gap: 8px;
-  -webkit-app-region: no-drag;
 }
 
 .title-bar__update-available {

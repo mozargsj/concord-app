@@ -106,6 +106,9 @@ declare global {
         minimize: () => void;
         maximizeToggle: () => void;
         close: () => void;
+        dragStart: (screenX: number, screenY: number) => void;
+        dragMove: (screenX: number, screenY: number) => void;
+        dragEnd: () => void;
         onMaximizedChange: (callback: (isMaximized: boolean) => void) => () => void;
       };
       media: {

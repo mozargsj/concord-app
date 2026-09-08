@@ -202,6 +202,37 @@ ipcMain.on('window:close', (event) => {
   BrowserWindow.fromWebContents(event.sender)?.close();
 });
 
+// Manual title-bar dragging, replacing `-webkit-app-region: drag` for the title bar entirely.
+// [Bug real, achado pelo Mozar] O CSS nativo continuava quebrado especificamente sobre o
+// ícone/nome ("Concord"/nome da sala) mesmo depois do fix de `-webkit-user-drag: none` no <img>
+// (que resolvia um problema real — o gesto nativo de arrastar-imagem do HTML — mas não era a
+// causa completa) e mesmo com a escala do Windows em 100% (descartando o bug conhecido de
+// hit-test do Chromium desalinhado sob DPI != 100%). Sem uma reprodução ao vivo pra inspecionar,
+// a rota confiável é parar de depender do hit-test nativo do SO pra essa região inteira e mover a
+// janela via `setPosition` a cada `mousemove`, dirigido inteiramente pelo processo renderer —
+// determinístico, sem depender de nenhum comportamento de app-region do Chromium.
+let dragOrigin: { mouseX: number; mouseY: number; winX: number; winY: number } | null = null;
+
+ipcMain.on('window:drag-start', (event, screenX: number, screenY: number) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win) return;
+  // Arrastar uma janela maximizada deve desmaximizar primeiro (mesmo comportamento de qualquer
+  // title bar nativa do Windows) — sem isso, `setPosition` não teria efeito visual nenhum.
+  if (win.isMaximized()) win.unmaximize();
+  const [winX, winY] = win.getPosition();
+  dragOrigin = { mouseX: screenX, mouseY: screenY, winX, winY };
+});
+
+ipcMain.on('window:drag-move', (event, screenX: number, screenY: number) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win || !dragOrigin) return;
+  win.setPosition(dragOrigin.winX + (screenX - dragOrigin.mouseX), dragOrigin.winY + (screenY - dragOrigin.mouseY));
+});
+
+ipcMain.on('window:drag-end', () => {
+  dragOrigin = null;
+});
+
 ipcMain.handle('media:pick-image', async (event) => {
   const win = BrowserWindow.fromWebContents(event.sender);
   const options: Electron.OpenDialogOptions = {
