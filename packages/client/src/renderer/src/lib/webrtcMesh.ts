@@ -874,6 +874,9 @@ export class MeshManager {
   setLocalMicTrack(track: MediaStreamTrack | null): void {
     if (this.micTrack) this.personalStream.removeTrack(this.micTrack);
     this.micTrack = track;
+    // Device acquisition/switch can finish while muted; disable the new capture track before
+    // attaching it so an async replaceTrack cannot briefly publish live microphone audio.
+    if (track) track.enabled = !this.micMuted;
     if (track) this.personalStream.addTrack(track);
     for (const entry of this.connections.values()) {
       if (this.applyTrack(entry, 'mic', track, this.personalStream)) void this.renegotiate(entry);
@@ -916,10 +919,10 @@ export class MeshManager {
     this.hardwareEncodePreferenceEnabled = enabled;
   }
 
-  /** Mutes/unmutes what's sent to peers only — capture and the local speaking analyser keep
-   * running either way, so a muted user who's still talking can be flagged locally. */
+  /** Disables mic capture and removes its sender while muted. */
   setMicMuted(muted: boolean): void {
     this.micMuted = muted;
+    if (this.micTrack) this.micTrack.enabled = !muted;
     const sendTrack = this.currentMicSendTrack();
     for (const entry of this.connections.values()) {
       void entry.senders.mic?.replaceTrack(sendTrack);
