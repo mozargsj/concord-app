@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
-import { Eye, Volume2, VolumeX, WifiOff, X } from 'lucide-react';
+import { Eye, Maximize2, Minimize2, Volume2, VolumeX, WifiOff, X } from 'lucide-react';
 import MediaStreamVideo from './MediaStreamVideo';
 import searchingArt from '../assets/images/investigando.png';
 import '../styles/ScreenShareTile.css';
@@ -14,6 +14,8 @@ interface ScreenShareTileProps {
   stream: MediaStream;
   isDeafened: boolean;
   isFocused: boolean;
+  isFullscreen: boolean;
+  onToggleFullscreen: () => void;
   onCloseFocus: () => void;
   /** The sharer's own outgoing-transmission preview — skips the click-to-view gate (they're
    * already actively sharing, requiring a click to see their own output is just friction) and
@@ -56,6 +58,8 @@ export default function ScreenShareTile({
   stream,
   isDeafened,
   isFocused,
+  isFullscreen,
+  onToggleFullscreen,
   onCloseFocus,
   isOwnPreview = false,
   onDimensionsChange
@@ -256,6 +260,12 @@ export default function ScreenShareTile({
                 : 'Clique para visualizar'}
             </span>
           </div>
+        </button>
+      )}
+
+      {isFocused && (
+        <button type="button" className="screen-share-tile__fullscreen" title={isFullscreen ? 'Sair da tela cheia' : 'Tela cheia'} onClick={(event) => { event.stopPropagation(); onToggleFullscreen(); }}>
+          {isFullscreen ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
         </button>
       )}
 

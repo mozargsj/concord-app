@@ -112,6 +112,7 @@ export default function RoomView({
   connectivityStatus
 }: RoomViewProps) {
   const [focusedTileKey, setFocusedTileKey] = useState<string | null>(null);
+  const [isScreenFullscreen, setIsScreenFullscreen] = useState(false);
   // [2026-08-30, pedido do Mozar] Largura/altura reais do vídeo em foco (16:9, 21:9, 4:3, o que a
   // transmissão de verdade for) — a letterbox do .room-view__participant-tile usa isso em vez de um
   // 16:9 travado. null até o <video> carregar metadata pela primeira vez (novo alvo de foco);
@@ -119,6 +120,7 @@ export default function RoomView({
   const [focusedAspectRatio, setFocusedAspectRatio] = useState<number | null>(null);
   useEffect(() => {
     setFocusedAspectRatio(null);
+    setIsScreenFullscreen(false);
   }, [focusedTileKey]);
   // A remote peer's camera stays blurred/gated (same "clique para visualizar" idea as a screen
   // share, decision from the Mozar) until clicked at least once — keyed by tile.key, same
@@ -307,6 +309,8 @@ export default function RoomView({
                 stream={tile.stream}
                 isDeafened={isDeafened}
                 isFocused={isFocused}
+                isFullscreen={isFocused && isScreenFullscreen}
+                onToggleFullscreen={() => setIsScreenFullscreen((value) => !value)}
                 onCloseFocus={() => setFocusedTileKey(null)}
                 isOwnPreview={tile.key === 'self-screen'}
                 onDimensionsChange={handleFocusedDimensions}
@@ -399,7 +403,7 @@ export default function RoomView({
             // próprio, o que deixava uma sobra cinza visível entre ela e o tile — removida.
             <div
               key={tile.key}
-              className={'room-view__tile-slot' + (isFocused ? ' room-view__tile-slot--focused' : '')}
+              className={'room-view__tile-slot' + (isFocused ? ' room-view__tile-slot--focused' : '') + (isFocused && isScreenFullscreen && tile.kind === 'screen' ? ' room-view__tile-slot--fullscreen' : '')}
               style={isFocused ? undefined : getGridItemStyle(index, tiles.length)}
             >
               {/* Always the same node, for every tile kind, focused or not — only the CSS differs
@@ -465,9 +469,22 @@ export default function RoomView({
                 {status}
               </div>
             </div>
+
           );
         })}
       </div>
+
+      {isScreenFullscreen && focusedTileKey?.endsWith('-screen') && (
+        <div className="room-view__fullscreen-roster" aria-label="Participantes da sala">
+          {[{ key: 'self', name: currentUserDisplayName, avatarUrl: currentUserAvatarUrl, speaking: isSpeaking && !isMicMuted }, ...peers.map((peer) => ({ key: peer.peerId, name: peer.displayName, avatarUrl: peer.avatarUrl, speaking: peer.isSpeaking }))].map((person) => (
+            <div key={person.key} className={'room-view__fullscreen-person' + (person.speaking ? ' room-view__fullscreen-person--speaking' : '')} title={person.name}>
+              <span className="room-view__fullscreen-avatar" style={person.avatarUrl ? undefined : { background: getAvatarColor(person.name) }}>
+                {person.avatarUrl ? <img src={person.avatarUrl} alt="" /> : person.name.charAt(0)}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* [2026-08-30, pedido do Mozar] "Compartilhar áudio" — só toca, nunca vira tile visível
           (não há imagem, só o áudio). Roster/controles de volume ficam em RoomSidebar.tsx (linha
