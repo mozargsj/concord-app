@@ -7,12 +7,22 @@ const os = require('node:os');
 const path = require('node:path');
 
 const handlers = new Map();
+let saveTarget = null;
 const listeners = new Map();
 const sent = [];
 const calls = [];
 const fakeElectron = {
-  app: { getPath: () => path.join(os.tmpdir(), `rc-check-${process.pid}`), on() {}, whenReady: () => new Promise(() => {}) },
-  BrowserWindow: class {},
+  app: { getPath: () => path.join(os.tmpdir(), `rc-check-${process.pid}`), getVersion: () => '9.9.9', on() {}, whenReady: () => new Promise(() => {}) },
+  screen: {
+    getAllDisplays: () => [{ id: 1, size: { width: 1920, height: 1080 }, scaleFactor: 1.25 }],
+    getPrimaryDisplay: () => ({ id: 1 })
+  },
+  dialog: { showSaveDialog: async () => (saveTarget ? { canceled: false, filePath: saveTarget } : { canceled: true }) },
+  BrowserWindow: class {
+    static fromWebContents() {
+      return null;
+    }
+  },
   clipboard: { readText: () => '', writeText() {} },
   ipcMain: { handle: (name, fn) => handlers.set(name, fn), on: (name, fn) => listeners.set(name, fn) },
   powerMonitor: { on() {} }
@@ -22,8 +32,10 @@ const fakeInjector = new Proxy(
     isInputAvailable: () => true,
     startKeyHook: () => true,
     // Delete (0x153) plays the part of a key the Ctrl+Alt+Del guard refuses; everything else is accepted.
-    injectKey: (k, d) => (calls.push(['injectKey', k, d]), k === 0x153 ? 'guard' : 'ok'),
-    injectStats: { injected: 0, failed: 0 }
+    injectKey: (k, d) => (calls.push(['injectKey', k, d]), k === 0x153 ? 'guard' : k === 0x2e ? 'fail' : 'ok'),
+    injectStats: { injected: 0, failed: 0, lastDetail: 'SendInput recusado (erro 5 — acesso negado)' },
+    readHookStats: () => ({ seen: 7, swallowed: 5, delivered: 5 }),
+    currentBackend: () => 'sendinput'
   },
   { get: (target, key) => target[key] ?? ((...args) => calls.push([key, ...args])) }
 );
@@ -122,15 +134,33 @@ const lastEnded = () => sent.filter((s) => s[0] === 'rc:ended').at(-1)?.[1];
   fire('rc:input', alice.peerId, { t: 'key', sid: s5, seq: 2, k: 0x1e, down: false }); // applied
   fire('rc:input', alice.peerId, { t: 'key', sid: s5, seq: 2, k: 0x1e, down: false }); // replay
   fire('rc:input', alice.peerId, { t: 'key', sid: s5, seq: 3, k: 0x153, down: true }); // refused by the guard
+  fire('rc:input', alice.peerId, { t: 'key', sid: s5, seq: 4, k: 0x2e, down: true }); // Windows refuses it
   fire('rc:input', alice.peerId, { t: 'btn', sid: s5, seq: 1, b: 0, down: true });
   fire('rc:move', alice.peerId, { t: 'mv', sid: s5, seq: 1, x: 0.25, y: 0.75 });
   const items = await invoke('rc:diag-items', 0);
   assert.deepEqual(
     items.map((i) => [i.kind, i.seq, i.value, i.down, i.outcome]),
-    [['key', 2, 0x1e, false, 'ok'], ['key', 2, 0x1e, false, 'seq'], ['key', 3, 0x153, true, 'guard'], ['btn', 1, 0, true, 'ok'], ['mv', 1, 0, false, 'ok']]
+    [['key', 2, 0x1e, false, 'ok'], ['key', 2, 0x1e, false, 'seq'], ['key', 3, 0x153, true, 'guard'], ['key', 4, 0x2e, true, 'fail'], ['btn', 1, 0, true, 'ok'], ['mv', 1, 0, false, 'ok']]
   );
   assert.deepEqual([items.at(-1).x, items.at(-1).y], [0.25, 0.75]);
-  assert.equal((await invoke('rc:diag-items', items[2].id)).length, 2, 'only newer events after the given id');
+  assert.match(items.find((i) => i.outcome === 'fail').detail, /erro 5/, 'a refusal carries the reason from Windows');
+  assert.equal(items.find((i) => i.outcome === 'ok').detail, undefined);
+  const diag = await invoke('rc:diag');
+  assert.deepEqual([diag.hookSeen, diag.hookSwallowed, diag.hookDelivered], [7, 5, 5]);
+  assert.equal((await invoke('rc:diag-items', items[2].id)).length, 3, 'only newer events after the given id');
+  // The report: system facts for the file, and saving is a local write the user confirms in a dialog.
+  const system = await invoke('rc:diag-system');
+  assert.deepEqual([system.appVersion, system.backend, system.displays.length, system.displays[0].primary], ['9.9.9', 'sendinput', 1, true]);
+  assert.deepEqual(await invoke('rc:diag-save', 'texto', 'controlled'), { ok: false }, 'dialog cancelled -> nothing written');
+  saveTarget = path.join(os.tmpdir(), `rc-report-${process.pid}.txt`);
+  const saved = await invoke('rc:diag-save', 'relatório ação', 'controller');
+  assert.equal(saved.ok, true);
+  const bytes = require('node:fs').readFileSync(saveTarget);
+  assert.deepEqual([...bytes.subarray(0, 3)], [0xef, 0xbb, 0xbf], 'UTF-8 BOM so Notepad shows accents');
+  assert.equal(bytes.subarray(3).toString('utf8'), 'relatório ação');
+  require('node:fs').unlinkSync(saveTarget);
+  assert.deepEqual(await invoke('rc:diag-save', '', 'controller'), { ok: false });
+
   await invoke('rc:diag-enable', false);
   assert.deepEqual(await invoke('rc:diag-items', 0), [], 'turning it off clears everything');
   await invoke('rc:end', 'revoked');

@@ -65,6 +65,8 @@ contextBridge.exposeInMainWorld('concord', {
     getLocalCaps: () => ipcRenderer.invoke('rc:local-caps'),
     getDiag: () => ipcRenderer.invoke('rc:diag'),
     diagEnable: (on: boolean) => ipcRenderer.invoke('rc:diag-enable', on),
+    diagSystem: () => ipcRenderer.invoke('rc:diag-system'),
+    diagSave: (text: string, role: string) => ipcRenderer.invoke('rc:diag-save', text, role),
     diagItems: (afterId: number) => ipcRenderer.invoke('rc:diag-items', afterId),
     sendInput: (peerId: string, frame: unknown) => ipcRenderer.send('rc:input', peerId, frame),
     sendMove: (peerId: string, frame: unknown) => ipcRenderer.send('rc:move', peerId, frame),

@@ -34,3 +34,6 @@
 
 .rc-diag__capture { margin: 4px 0 6px; padding: 5px 7px; border-radius: 6px; background: rgba(255, 255, 255, 0.05); font-size: 11px; }
 .rc-diag__capture ul { list-style: none; margin: 3px 0 0; padding: 0; color: var(--color-text-secondary); font-family: Consolas, 'Courier New', monospace; }
+
+.rc-diag__result small { color: var(--color-text-secondary); font-size: 10.5px; }
+.rc-diag__row { grid-template-columns: 74px minmax(0, 1fr) minmax(0, 1.2fr); }

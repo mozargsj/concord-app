@@ -18,6 +18,8 @@ import {
 import type { ControlHandlers, RoomPeer } from './useRoomConnection';
 import { useFileTransfer } from './useFileTransfer';
 import { negotiateCaps } from '../../../common/deviceCaps';
+import { formatDiagReport, type ReportRow } from '../../../common/diagReport';
+import { describeKey } from '../../../common/keyScan';
 
 // Renderer side of remote control (spec sections 13-17). It owns the two data channels' traffic
 // and the UI state; every DECISION (status, one session at a time, cooldown, permissions, session
@@ -57,6 +59,7 @@ export interface DiagRow {
   sentAt: number;
   /** 'pending' until the controlled PC reports back. */
   outcome: DiagOutcome | 'pending';
+  detail?: string;
 }
 
 export interface RcDialog {
@@ -152,6 +155,9 @@ export function useRemoteControl({
   // the other side vanished while its keyboard is being swallowed.
   const lastPeerFrameAt = useRef(0);
   const diagOnRef = useRef(false);
+  const diagSentRef = useRef<DiagRow[]>([]);
+  const diagRecvRef = useRef<DiagItem[]>([]);
+  const sessionStartedAt = useRef<number | null>(null);
   const ackWanted = useRef(false);
   const lastMoveLogged = useRef(0);
 
@@ -174,6 +180,7 @@ export function useRemoteControl({
     pressedButtons.current.clear();
     lastPeerFrameAt.current = Date.now();
     setSession(info);
+    sessionStartedAt.current = Date.now();
     diagOnRef.current = false;
     ackWanted.current = false;
     setDiagOn(false);
@@ -230,8 +237,14 @@ export function useRemoteControl({
         if (activeSession?.role === 'controller' && frame.sid === activeSession.sid && Array.isArray(frame.items)) {
           setDiagSent((prev) =>
             prev.map((row) => {
-              const ack = frame.items.find((item) => item.kind === row.kind && item.seq === row.seq);
-              return ack && row.outcome === 'pending' ? { ...row, outcome: ack.outcome } : row;
+              if (row.outcome !== 'pending') return row;
+              // Pointer moves are sampled independently on each side (1 per 100 ms), so an ack for move
+              // N also answers every earlier move the controller logged; everything else matches exactly.
+              const ack =
+                row.kind === 'mv'
+                  ? frame.items.filter((item) => item.kind === 'mv' && item.seq >= row.seq).sort((a, b) => a.seq - b.seq)[0]
+                  : frame.items.find((item) => item.kind === row.kind && item.seq === row.seq);
+              return ack ? { ...row, outcome: ack.outcome, detail: ack.detail } : row;
             })
           );
         }
@@ -411,6 +424,8 @@ export function useRemoteControl({
     if (selfPeerId === null && live.current.session) void window.concord.remoteControl.end('peer-left');
   }, [selfPeerId]);
 
+  diagSentRef.current = diagSent;
+  diagRecvRef.current = diagRecv;
   const hasSession = !!session;
   useEffect(() => {
     if (!hasSession) {
@@ -446,7 +461,7 @@ export function useRemoteControl({
         .then((items) => {
           if (items.length === 0) return;
           last = items[items.length - 1].id;
-          setDiagRecv((prev) => [...prev, ...items].slice(-60));
+          setDiagRecv((prev) => [...prev, ...items].slice(-500));
           if (ackWanted.current) live.current.sendControlFrame(controlledPeer, { t: 'dack', sid: controlledSid, items: items.slice(-40) });
         })
         .finally(() => {
@@ -495,7 +510,7 @@ export function useRemoteControl({
       if (now - lastMoveLogged.current < 100) return;
       lastMoveLogged.current = now;
     }
-    setDiagSent((prev) => [...prev.slice(-59), { ...row, sentAt: Date.now(), outcome: 'pending' }]);
+    setDiagSent((prev) => [...prev.slice(-499), { ...row, sentAt: Date.now(), outcome: 'pending' }]);
   }
 
   function controllerKey(keyId: number, down: boolean): void {
@@ -573,6 +588,23 @@ export function useRemoteControl({
     diagOn,
     diagSent,
     diagRecv,
+    /** Builds the plain-text diagnostics report and lets the user save it (local file, nothing sent). */
+    async saveDiagReport(): Promise<void> {
+      const s = live.current.session;
+      if (!s) return;
+      const api = window.concord.remoteControl;
+      const [system, latest] = await Promise.all([api.diagSystem(), api.getDiag()]);
+      const rows: ReportRow[] =
+        s.role === 'controller'
+          ? diagSentRef.current.map((row) => ({ ...row, at: row.sentAt }))
+          : diagRecvRef.current.map((item) => ({ ...item }));
+      const text = formatDiagReport(
+        { generatedAt: Date.now(), role: s.role, perms: s.perms, keyHook: s.keyHook, sessionStartedAt: sessionStartedAt.current, diag: latest, system, rows },
+        describeKey
+      );
+      const result = await api.diagSave(text, s.role);
+      showNotice(result.ok ? `Relatório salvo em ${result.path}` : 'Relatório não salvo.');
+    },
     /** Turns the opt-in input diagnostics on/off for this side of the session. */
     toggleDiag(on: boolean): void {
       diagOnRef.current = on;

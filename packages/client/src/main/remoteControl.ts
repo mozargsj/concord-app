@@ -1,4 +1,5 @@
-import { app, BrowserWindow, clipboard, ipcMain, powerMonitor } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, powerMonitor, screen } from 'electron';
+import { arch, release } from 'node:os';
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -14,6 +15,7 @@ import {
   type RcBlockedUser,
   type DiagItem,
   type DiagOutcome,
+  type DiagSystemInfo,
   type RcDiag,
   type RcEndReason,
   type RcIncomingVerdict,
@@ -293,18 +295,24 @@ function endSession(reason: RcEndReason, notifyPeer = true): void {
 
 /** Remembers one input event's outcome for the diagnostics panel — only while diagnostics are on
  * (opt-in, in memory, dropped with the session, never logged or persisted). Mouse moves are sampled. */
-function record(s: Session, item: Omit<DiagItem, 'id'>): void {
+function record(s: Session, item: Omit<DiagItem, 'id' | 'at'>): void {
   if (!s.diagOn) return;
   if (item.kind === 'mv') {
     const now = Date.now();
     if (now - s.diagLastMove < 100) return;
     s.diagLastMove = now;
   }
-  s.diagItems.push({ ...item, id: s.diagNext++ });
-  if (s.diagItems.length > 200) s.diagItems.shift();
+  s.diagItems.push({ ...item, id: s.diagNext++, at: Date.now() });
+  if (s.diagItems.length > 500) s.diagItems.shift();
 }
 
 const outcomeOf = (result: string): DiagOutcome => (result === 'guard' ? 'guard' : result === 'fail' ? 'fail' : 'ok');
+/** The injector's reason for the failure it just reported, attached to the diagnostics row. */
+const failDetail = (outcome: DiagOutcome): { detail?: string } => (outcome === 'fail' ? { detail: injector.injectStats.lastDetail } : {});
+function injected(result: string): { outcome: DiagOutcome; detail?: string } {
+  const outcome = outcomeOf(result);
+  return { outcome, ...failDetail(outcome) };
+}
 
 function acceptSeq(s: Session, kind: keyof Session['lastSeq'], seq: unknown): boolean {
   if (typeof seq !== 'number' || !Number.isFinite(seq) || seq <= s.lastSeq[kind]) return false; // replay / duplicate / stale
@@ -331,7 +339,7 @@ function handleInput(peerId: string, frame: ControlFrame): void {
         s.keyDropped++;
         record(s, { ...base, outcome: 'seq' });
       } else {
-        record(s, { ...base, outcome: outcomeOf(injector.injectKey(frame.k, !!frame.down)) });
+        record(s, { ...base, ...injected(injector.injectKey(frame.k, !!frame.down)) });
       }
       break;
     }
@@ -341,14 +349,14 @@ function handleInput(peerId: string, frame: ControlFrame): void {
       else if (!acceptSeq(s, 'btn', frame.seq)) record(s, { ...base, outcome: 'seq' });
       // Only buttons the controller's real mouse can produce (and the virtual one has) are injected.
       else if (frame.b >= s.negotiated.buttons) record(s, { ...base, outcome: 'perm' });
-      else record(s, { ...base, outcome: outcomeOf(injector.injectButton(frame.b, !!frame.down)) });
+      else record(s, { ...base, ...injected(injector.injectButton(frame.b, !!frame.down)) });
       break;
     }
     case 'wheel': {
       const base = { kind: 'wheel' as const, seq: frame.seq, value: 0, down: false, dx: frame.dx, dy: frame.dy };
       if (!s.perms.mouse) record(s, { ...base, outcome: 'perm' });
       else if (!acceptSeq(s, 'wheel', frame.seq) || !Number.isFinite(frame.dx) || !Number.isFinite(frame.dy)) record(s, { ...base, outcome: 'seq' });
-      else record(s, { ...base, outcome: outcomeOf(injector.injectWheel(s.negotiated.horizontalWheel ? frame.dx : 0, frame.dy)) });
+      else record(s, { ...base, ...injected(injector.injectWheel(s.negotiated.horizontalWheel ? frame.dx : 0, frame.dy)) });
       break;
     }
     case 'caps':
@@ -372,7 +380,7 @@ function handleMove(peerId: string, frame: MoveFrame): void {
   if (!s.perms.mouse) return record(s, { ...base, outcome: 'perm' });
   if (!acceptSeq(s, 'mv', frame.seq)) return record(s, { ...base, outcome: 'seq' });
   s.lastFrameAt = Date.now();
-  record(s, { ...base, outcome: outcomeOf(injector.injectMoveNormalized(shareDisplayId, frame.x, frame.y)) });
+  record(s, { ...base, ...injected(injector.injectMoveNormalized(shareDisplayId, frame.x, frame.y)) });
 }
 
 // ---- IPC -------------------------------------------------------------------------------------------
@@ -512,6 +520,40 @@ ipcMain.handle('rc:diag-items', (_event, afterId: number): DiagItem[] => {
   return session.diagItems.filter((item) => item.id > afterId).slice(-100);
 });
 
+/** Facts about this PC for the diagnostics report. */
+ipcMain.handle('rc:diag-system', async (): Promise<DiagSystemInfo> => ({
+  appVersion: app.getVersion(),
+  electron: process.versions.electron ?? 'n/a',
+  os: `Windows ${release()}`,
+  arch: arch(),
+  elevated: await isElevated(),
+  backend: injector.currentBackend(),
+  displays: screen.getAllDisplays().map((d) => ({
+    id: d.id,
+    width: d.size.width,
+    height: d.size.height,
+    scale: d.scaleFactor,
+    primary: d.id === screen.getPrimaryDisplay().id
+  }))
+}));
+
+/** Saves the diagnostics report where the user chooses (Downloads by default). Local file only. */
+ipcMain.handle('rc:diag-save', async (event, text: string, role: string) => {
+  if (typeof text !== 'string' || text.length === 0 || text.length > 5_000_000) return { ok: false };
+  const stamp = new Date().toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
+  const suggested = path.join(app.getPath('downloads'), `Concord-diagnostico-${role === 'controlled' ? 'controlado' : 'controlador'}-${stamp}.txt`);
+  const window = BrowserWindow.fromWebContents(event.sender);
+  const options: Electron.SaveDialogOptions = { defaultPath: suggested, filters: [{ name: 'Texto', extensions: ['txt'] }] };
+  const result = window ? await dialog.showSaveDialog(window, options) : await dialog.showSaveDialog(options);
+  if (result.canceled || !result.filePath) return { ok: false };
+  try {
+    writeFileSync(result.filePath, `\uFEFF${text}`, 'utf8'); // BOM so Notepad reads the accents correctly
+    return { ok: true, path: result.filePath };
+  } catch {
+    return { ok: false };
+  }
+});
+
 /** Where a typed key currently stops (counters only, never contents) — see RcDiag. */
 ipcMain.handle('rc:diag', async (): Promise<RcDiag | null> => {
   const s = session;
@@ -525,6 +567,9 @@ ipcMain.handle('rc:diag', async (): Promise<RcDiag | null> => {
     captureWhy: captureWhy(s),
     captureLog: s.captureLog,
     hookRearms: s.hookRearms,
+    hookSeen: injector.readHookStats().seen,
+    hookSwallowed: injector.readHookStats().swallowed,
+    hookDelivered: injector.readHookStats().delivered,
     hookEvents: s.hookEvents,
     keyFramesIn: s.keyFramesIn,
     keyDropped: s.keyDropped,

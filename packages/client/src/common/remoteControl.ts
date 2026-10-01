@@ -113,6 +113,8 @@ export type DiagOutcome = 'ok' | 'fail' | 'perm' | 'seq' | 'guard';
 /** One input event as seen on the controlled PC, for the diagnostics panel. */
 export interface DiagItem {
   id: number;
+  /** When it arrived (epoch ms) — the report's timeline. */
+  at: number;
   kind: DiagKind;
   /** Sequence number from the wire — the join key between "sent" (controller) and "arrived". */
   seq: number;
@@ -124,6 +126,19 @@ export interface DiagItem {
   dx?: number;
   dy?: number;
   outcome: DiagOutcome;
+  /** Why a `fail` happened (Windows error code, display not found...). */
+  detail?: string;
+}
+
+/** Facts about this PC that help read a diagnostics report. */
+export interface DiagSystemInfo {
+  appVersion: string;
+  electron: string;
+  os: string;
+  arch: string;
+  elevated: boolean;
+  backend: 'sendinput' | 'virtual-hid';
+  displays: Array<{ id: number; width: number; height: number; scale: number; primary: boolean }>;
 }
 
 /** Counters (never key contents) that show where a typed key stops: captured -> sent -> received ->
@@ -149,6 +164,10 @@ export interface RcDiag {
   captureLog: Array<{ at: number; swallowing: boolean; why: string }>;
   /** Times the native hook was re-armed on a capture start (Windows can drop a slow low-level hook silently). */
   hookRearms: number;
+  /** Native hook counters for this session: real key events it saw, kept from this PC, and handed to the app. */
+  hookSeen: number;
+  hookSwallowed: number;
+  hookDelivered: number;
 }
 
 export type RcEndReason = 'revoked' | 'share-stopped' | 'heartbeat' | 'peer-left' | 'user-exit' | 'error';

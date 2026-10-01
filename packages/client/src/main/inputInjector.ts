@@ -20,6 +20,9 @@ interface NativeModule {
   startHook: (onKey: (scan: number, extended: boolean, down: boolean, exitRequested: boolean) => void, swallow: boolean) => boolean;
   setSwallow: (swallow: boolean) => void;
   stopHook: () => void;
+  getInjectError?: () => number;
+  getHookStats?: () => { seen: number; swallowed: number; delivered: number };
+  resetHookStats?: () => void;
   getInputCapabilities?: () => {
     mouse: { count: number; buttons: number; horizontalWheel: boolean };
     keyboard: { count: number; keysTotal: number; functionKeys: number; type: number };
@@ -95,6 +98,10 @@ export async function prepareBackend(): Promise<'virtual-hid' | 'sendinput'> {
   return 'virtual-hid';
 }
 
+export function currentBackend(): 'sendinput' | 'virtual-hid' {
+  return virtualHid ? 'virtual-hid' : 'sendinput';
+}
+
 export function releaseBackend(): void {
   virtualHid?.close();
   virtualHid = null;
@@ -110,10 +117,28 @@ const pressedKeys = new Set<number>();
 
 /** Per-session counters for diagnostics: how many keys Windows accepted vs refused (SendInput
  * returns false when the target is beyond reach, e.g. an elevated window from a non-elevated Concord). */
-export const injectStats = { injected: 0, failed: 0 };
+export const injectStats = { injected: 0, failed: 0, lastDetail: '' };
 export function resetInjectStats(): void {
   injectStats.injected = 0;
   injectStats.failed = 0;
+  injectStats.lastDetail = '';
+  loadNative()?.resetHookStats?.();
+}
+
+/** Remembers why the last injection failed, for the diagnostics panel. */
+function failed(detail: string): 'fail' {
+  injectStats.lastDetail = detail;
+  return 'fail';
+}
+
+function windowsFailure(addon: NativeModule): 'fail' {
+  const code = addon.getInjectError?.() ?? 0;
+  const meaning = code === 5 ? 'acesso negado: janela com mais privilégio que o Concord' : code === 87 ? 'entrada inválida' : code === 0 ? 'bloqueado por outra thread/desktop' : '';
+  return failed(`SendInput recusado (erro ${code}${meaning ? ` — ${meaning}` : ''})`);
+}
+
+export function readHookStats(): { seen: number; swallowed: number; delivered: number } {
+  return loadNative()?.getHookStats?.() ?? { seen: 0, swallowed: 0, delivered: 0 };
 }
 const pressedButtons = new Set<number>();
 
@@ -123,11 +148,11 @@ const pressedButtons = new Set<number>();
 const guard = new InputGuard();
 
 export function injectKey(keyId: number, down: boolean): 'ok' | 'fail' | 'guard' {
-  if (!VALID_KEY_IDS.has(keyId)) return 'fail';
+  if (!VALID_KEY_IDS.has(keyId)) return failed('tecla desconhecida');
   if (!guard.allow(keyId, down)) return 'guard';
   const vhid = virtualHid;
   const addon = vhid ? null : loadNative();
-  if (!vhid && !addon) return 'fail';
+  if (!vhid && !addon) return failed('addon de entrada indisponível');
   if (down) pressedKeys.add(keyId);
   else pressedKeys.delete(keyId);
   if (vhid) {
@@ -140,14 +165,14 @@ export function injectKey(keyId: number, down: boolean): 'ok' | 'fail' | 'guard'
   const accepted = addon!.sendKey(keyId & 0xff, (keyId & 0x100) !== 0, down);
   if (accepted) injectStats.injected++;
   else injectStats.failed++;
-  return accepted ? 'ok' : 'fail';
+  return accepted ? 'ok' : windowsFailure(addon!);
 }
 
 export function injectButton(button: number, down: boolean): 'ok' | 'fail' {
-  if (!Number.isInteger(button) || button < 0 || button > 4) return 'fail';
+  if (!Number.isInteger(button) || button < 0 || button > 4) return failed('botão inválido');
   const vhid = virtualHid;
   const addon = vhid ? null : loadNative();
-  if (!vhid && !addon) return 'fail';
+  if (!vhid && !addon) return failed('addon de entrada indisponível');
   if (down) pressedButtons.add(button);
   else pressedButtons.delete(button);
   if (vhid) {
@@ -155,13 +180,13 @@ export function injectButton(button: number, down: boolean): 'ok' | 'fail' {
     vhid.sendMouse();
     return 'ok';
   }
-  return addon!.sendMouseButton(button, down) ? 'ok' : 'fail';
+  return addon!.sendMouseButton(button, down) ? 'ok' : windowsFailure(addon!);
 }
 
 export function injectWheel(dxPixels: number, dyPixels: number): 'ok' | 'fail' {
   const vhid = virtualHid;
   const addon = vhid ? null : loadNative();
-  if (!vhid && !addon) return 'fail';
+  if (!vhid && !addon) return failed('addon de entrada indisponível');
   // DOM deltaY is positive scrolling down, Windows wheel delta is positive scrolling up; deltaX
   // is positive to the right on both.
   const toDelta = (pixels: number) => Math.max(-1200, Math.min(1200, Math.round((pixels / DOM_WHEEL_PIXELS_PER_NOTCH) * WHEEL_DELTA)));
@@ -178,7 +203,7 @@ export function injectWheel(dxPixels: number, dyPixels: number): 'ok' | 'fail' {
   let accepted = true;
   if (vertical) accepted = addon!.sendWheel(vertical, false) && accepted;
   if (horizontal) accepted = addon!.sendWheel(horizontal, true) && accepted;
-  return accepted ? 'ok' : 'fail';
+  return accepted ? 'ok' : windowsFailure(addon!);
 }
 
 /** Moves the pointer to (x, y) in 0..1 of the shared display. SendInput's absolute space is the
@@ -187,11 +212,11 @@ export function injectWheel(dxPixels: number, dyPixels: number): 'ok' | 'fail' {
 export function injectMoveNormalized(displayId: string, x: number, y: number): 'ok' | 'fail' {
   const vhid = virtualHid;
   const addon = vhid ? null : loadNative();
-  if (!vhid && !addon) return 'fail';
-  if (!Number.isFinite(x) || !Number.isFinite(y)) return 'fail';
+  if (!vhid && !addon) return failed('addon de entrada indisponível');
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return failed('posição inválida');
   const displays = screen.getAllDisplays();
   const target = displays.find((d) => String(d.id) === displayId);
-  if (!target) return 'fail';
+  if (!target) return failed(`monitor ${displayId} não encontrado (monitores: ${displays.map((d) => d.id).join(', ')})`);
   const rects = displays.map((d) => screen.dipToScreenRect(null, d.bounds));
   const left = Math.min(...rects.map((r) => r.x));
   const top = Math.min(...rects.map((r) => r.y));
@@ -209,7 +234,7 @@ export function injectMoveNormalized(displayId: string, x: number, y: number): '
     vhid.sendMouse();
     return 'ok';
   }
-  return addon!.sendMouseAbs(Math.round(absX), Math.round(absY)) ? 'ok' : 'fail';
+  return addon!.sendMouseAbs(Math.round(absX), Math.round(absY)) ? 'ok' : windowsFailure(addon!);
 }
 
 /** Lets go of every key/button whose state is not in the given sets (the controller's periodic

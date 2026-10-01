@@ -1,5 +1,5 @@
 import type { ControllerCaps } from '../../../common/deviceCaps';
-import type { DiagItem, RcDiag } from '../../../common/remoteControl';
+import type { DiagItem, DiagSystemInfo, RcDiag } from '../../../common/remoteControl';
 import type {
   ControlFrame,
   FileFrame,
@@ -180,6 +180,8 @@ declare global {
         getLocalCaps: () => Promise<ControllerCaps | null>;
         getDiag: () => Promise<RcDiag | null>;
         diagEnable: (on: boolean) => Promise<void>;
+        diagSystem: () => Promise<DiagSystemInfo>;
+        diagSave: (text: string, role: string) => Promise<{ ok: boolean; path?: string }>;
         diagItems: (afterId: number) => Promise<DiagItem[]>;
         sendInput: (peerId: string, frame: ControlFrame) => void;
         sendMove: (peerId: string, frame: MoveFrame) => void;

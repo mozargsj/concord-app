@@ -21,12 +21,22 @@
 
 namespace {
 
+// Why the last SendInput failed (GetLastError at that moment) and what the keyboard hook has seen —
+// both read by the diagnostics panel. 5 (access denied) typically means the target is beyond reach
+// (an elevated window while Concord is not elevated), 87 an invalid input.
+std::atomic<DWORD> g_lastInjectError{0};
+std::atomic<uint32_t> g_hookSeen{0};
+std::atomic<uint32_t> g_hookSwallowed{0};
+std::atomic<uint32_t> g_hookDelivered{0};
+
 bool SendKeyboard(WORD scan, bool extended, bool down) {
   INPUT in = {};
   in.type = INPUT_KEYBOARD;
   in.ki.wScan = scan;
   in.ki.dwFlags = KEYEVENTF_SCANCODE | (extended ? KEYEVENTF_EXTENDEDKEY : 0) | (down ? 0 : KEYEVENTF_KEYUP);
-  return SendInput(1, &in, sizeof(INPUT)) == 1;
+  if (SendInput(1, &in, sizeof(INPUT)) == 1) return true;
+  g_lastInjectError = GetLastError();
+  return false;
 }
 
 bool SendMouse(DWORD flags, LONG dx, LONG dy, DWORD data) {
@@ -36,7 +46,9 @@ bool SendMouse(DWORD flags, LONG dx, LONG dy, DWORD data) {
   in.mi.dy = dy;
   in.mi.mouseData = data;
   in.mi.dwFlags = flags;
-  return SendInput(1, &in, sizeof(INPUT)) == 1;
+  if (SendInput(1, &in, sizeof(INPUT)) == 1) return true;
+  g_lastInjectError = GetLastError();
+  return false;
 }
 
 // sendKey(scanCode, extended, down)
@@ -161,6 +173,7 @@ bool g_shift = false;
 void Emit(KeyEvent* event) {
   if (g_tsfn.NonBlockingCall(event, [](Napi::Env env, Napi::Function cb, KeyEvent* e) {
         if (env != nullptr && cb != nullptr) {
+          g_hookDelivered++;
           cb.Call({Napi::Number::New(env, e->scan), Napi::Boolean::New(env, e->extended), Napi::Boolean::New(env, e->down),
                    Napi::Boolean::New(env, e->exitRequested)});
         }
@@ -177,6 +190,7 @@ LRESULT CALLBACK HookProc(int code, WPARAM wParam, LPARAM lParam) {
     const bool up = wParam == WM_KEYUP || wParam == WM_SYSKEYUP;
     // Keys injected by software (including this addon's own SendInput) are never intercepted.
     if ((down || up) && !(k->flags & LLKHF_INJECTED)) {
+      g_hookSeen++;
       const bool extended = (k->flags & LLKHF_EXTENDED) != 0;
       if (k->vkCode == VK_LCONTROL || k->vkCode == VK_RCONTROL || k->vkCode == VK_CONTROL) g_ctrl = down;
       if (k->vkCode == VK_LSHIFT || k->vkCode == VK_RSHIFT || k->vkCode == VK_SHIFT) g_shift = down;
@@ -189,6 +203,7 @@ LRESULT CALLBACK HookProc(int code, WPARAM wParam, LPARAM lParam) {
         return CallNextHookEx(g_hook, code, wParam, lParam);
       }
       if (g_swallow.load() && !fakeShift) {
+        g_hookSwallowed++;
         Emit(new KeyEvent{k->scanCode, extended, down, false});
         return 1;
       }
@@ -249,6 +264,26 @@ Napi::Value StopHook(const Napi::CallbackInfo& info) {
   return info.Env().Undefined();
 }
 
+// getInjectError() -> number: GetLastError of the most recent failed SendInput.
+Napi::Value GetInjectError(const Napi::CallbackInfo& info) { return Napi::Number::New(info.Env(), g_lastInjectError.load()); }
+
+// getHookStats() -> { seen, swallowed, delivered }: key events the hook observed (real, non-injected),
+// kept from reaching this PC, and handed to JS. resetHookStats() zeroes them (new session).
+Napi::Value GetHookStats(const Napi::CallbackInfo& info) {
+  Napi::Object stats = Napi::Object::New(info.Env());
+  stats.Set("seen", Napi::Number::New(info.Env(), g_hookSeen.load()));
+  stats.Set("swallowed", Napi::Number::New(info.Env(), g_hookSwallowed.load()));
+  stats.Set("delivered", Napi::Number::New(info.Env(), g_hookDelivered.load()));
+  return stats;
+}
+
+Napi::Value ResetHookStats(const Napi::CallbackInfo& info) {
+  g_hookSeen = 0;
+  g_hookSwallowed = 0;
+  g_hookDelivered = 0;
+  return info.Env().Undefined();
+}
+
 Napi::Object Init(Napi::Env env, Napi::Object exports) {
   exports.Set("sendKey", Napi::Function::New(env, SendKey));
   exports.Set("sendMouseAbs", Napi::Function::New(env, SendMouseAbs));
@@ -258,6 +293,9 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
   exports.Set("setSwallow", Napi::Function::New(env, SetSwallow));
   exports.Set("stopHook", Napi::Function::New(env, StopHook));
   exports.Set("getInputCapabilities", Napi::Function::New(env, GetInputCapabilities));
+  exports.Set("getInjectError", Napi::Function::New(env, GetInjectError));
+  exports.Set("getHookStats", Napi::Function::New(env, GetHookStats));
+  exports.Set("resetHookStats", Napi::Function::New(env, ResetHookStats));
   return exports;
 }
 
