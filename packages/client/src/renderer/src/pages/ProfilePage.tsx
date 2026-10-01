@@ -1,4 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import type { PresenceStatus } from '@concord/shared';
+import type { RcBlockedUser } from '../../../common/remoteControl';
 import { Check, Flag, Loader2, LogOut, Pencil, X } from 'lucide-react';
 import type { UserProfile } from '@concord/shared';
 import ConfirmModal from '../components/ConfirmModal';
@@ -8,6 +10,13 @@ import Tooltip from '../components/Tooltip';
 import { updateProfile } from '../lib/api';
 import { pickImageFile, type PickedImageFile } from '../lib/imagePicker';
 import { saveCachedImage } from '../lib/imageCache';
+import {
+  getPresenceStatus,
+  PRESENCE_COLORS,
+  PRESENCE_LABELS,
+  PRESENCE_STATUSES,
+  setPresenceStatus
+} from '../lib/presenceStatus';
 import '../styles/ProfilePage.css';
 
 interface ProfilePageProps {
@@ -29,6 +38,38 @@ export default function ProfilePage({ user, serverId, onClose, onUserChange, onL
   const [error, setError] = useState<string | null>(null);
   const [isLogoutConfirmOpen, setIsLogoutConfirmOpen] = useState(false);
   const [isReportOpen, setIsReportOpen] = useState(false);
+  const [status, setStatus] = useState<PresenceStatus>(getPresenceStatus);
+  // Senders this user refused (remote control cooldown, spec 13.2) — cooldown or permanent.
+  const [blocked, setBlocked] = useState<RcBlockedUser[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = () =>
+      void window.concord.remoteControl.listBlocked().then((list) => {
+        if (!cancelled) setBlocked(list);
+      });
+    load();
+    const timer = setInterval(load, 5000); // keeps the remaining cooldown time fresh
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, []);
+
+  function handleStatusChange(next: PresenceStatus) {
+    setStatus(next);
+    setPresenceStatus(next);
+  }
+
+  async function handleUnblock(userId: string) {
+    await window.concord.remoteControl.unblock(userId);
+    setBlocked((prev) => prev.filter((entry) => entry.userId !== userId));
+  }
+
+  function formatWait(ms: number): string {
+    const seconds = Math.ceil(ms / 1000);
+    return seconds < 90 ? `${seconds} s` : `${Math.ceil(seconds / 60)} min`;
+  }
 
   function handleStartEditName() {
     setDisplayName(user.displayName);
@@ -164,6 +205,48 @@ export default function ProfilePage({ user, serverId, onClose, onUserChange, onL
                 </button>
               </Tooltip>
             </div>
+          )}
+        </div>
+
+        <div className="profile-page__field">
+          <span className="profile-page__label">Status</span>
+          <div className="profile-page__status-row" role="radiogroup" aria-label="Status">
+            {PRESENCE_STATUSES.map((option) => (
+              <button
+                key={option}
+                type="button"
+                role="radio"
+                aria-checked={status === option}
+                className={'profile-page__status' + (status === option ? ' profile-page__status--active' : '')}
+                onClick={() => handleStatusChange(option)}
+              >
+                <span className="profile-page__status-dot" style={{ background: PRESENCE_COLORS[option] }} />
+                {PRESENCE_LABELS[option]}
+              </button>
+            ))}
+          </div>
+          <p className="profile-page__hint">Só quem está Online pode receber pedidos e convites de controle remoto.</p>
+        </div>
+
+        <div className="profile-page__field">
+          <span className="profile-page__label">Controle remoto: usuários bloqueados</span>
+          {blocked.length === 0 ? (
+            <p className="profile-page__hint">Ninguém bloqueado.</p>
+          ) : (
+            <ul className="profile-page__blocked-list">
+              {blocked.map((entry) => (
+                <li key={entry.userId} className="profile-page__blocked-item">
+                  <span className="profile-page__blocked-name">{entry.displayName}</span>
+                  <span className="profile-page__blocked-info">
+                    {entry.permanent ? 'Bloqueado' : `Aguardando ${formatWait(entry.retryInMs)}`} · {entry.refusals}{' '}
+                    {entry.refusals === 1 ? 'recusa' : 'recusas'}
+                  </span>
+                  <button type="button" className="profile-page__blocked-unblock" onClick={() => void handleUnblock(entry.userId)}>
+                    Desbloquear
+                  </button>
+                </li>
+              ))}
+            </ul>
           )}
         </div>
 

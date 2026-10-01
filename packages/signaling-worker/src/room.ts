@@ -1,5 +1,5 @@
 import { DurableObject } from 'cloudflare:workers';
-import type { ClientToServerMessage, DeviceKind, ServerToClientMessage } from '@concord/shared';
+import type { ClientToServerMessage, DeviceKind, PresenceStatus, ServerToClientMessage } from '@concord/shared';
 import type { Env } from './env';
 import { validateClientMessage } from './protocol';
 import { verifySessionToken } from './auth';
@@ -15,12 +15,22 @@ const CONFIRM_TIMEOUT_MS = 2000;
 // generous headroom above any real message, caps how much a hostile/misbehaving client can force
 // this object to buffer.
 const MAX_MESSAGE_BYTES = 128 * 1024;
+// Heartbeat watchdog: every client pings every 4s (useRoomConnection.ts PING_INTERVAL_MS) and any
+// message counts as a sign of life. A peer silent for this long is dead (process killed, network
+// gone, machine asleep) even though its socket never closed — without this it stays in the room
+// forever, visible to everyone as a ghost, until the same account happens to rejoin.
+const PEER_TIMEOUT_MS = 30_000;
 
 interface PeerAttachment {
   peerId: string;
   userId: string;
   displayName: string;
   joinedAt: number;
+  /** Last message received from this peer — optional because attachments persisted before the
+   * watchdog existed don't have it (joinedAt stands in). */
+  lastSeenAt?: number;
+  /** Optional for the same reason as lastSeenAt: attachments persisted before it existed. */
+  status?: PresenceStatus;
 }
 
 interface PendingMigration {
@@ -87,6 +97,7 @@ export class RoomDurableObject extends DurableObject<Env> {
     const validated = validateClientMessage(parsed);
     if (!validated) return;
 
+    this.touch(ws);
     try {
       await this.dispatch(ws, validated);
     } catch (error) {
@@ -134,6 +145,13 @@ export class RoomDurableObject extends DurableObject<Env> {
         break;
       case 'ping':
         this.send(ws, { type: 'pong', nonce: message.nonce });
+        // Sweep here rather than on a timer: a Durable Object Alarm is already spoken for by host
+        // migration (one alarm per object), and a room with no live peer pinging has nobody left
+        // to see a ghost anyway.
+        await this.dropSilentPeers(ws);
+        break;
+      case 'status-changed':
+        await this.handleStatusChanged(ws, message.status);
         break;
       case 'device-switched':
         await this.handleDeviceSwitched(ws, message.kind);
@@ -219,16 +237,36 @@ export class RoomDurableObject extends DurableObject<Env> {
     // por definição, mais antiga que a que está entrando agora — derrubada aqui antes de montar o
     // roster que vai pra esse peer novo, reaproveitando handleDisconnect (broadcast de peer-left +
     // migração de host se o peer derrubado era o host) pra não duplicar essa lógica.
-    for (const duplicate of this.livePeers().filter((p) => p.userId === userId)) {
-      const duplicateWs = this.ctx
-        .getWebSockets()
-        .find((s) => (s.deserializeAttachment() as PeerAttachment | null)?.peerId === duplicate.peerId);
+    //
+    // [Refinado, 2026-09-30, pedido do Mozar] Derrubar + recriar ainda deixava a reconexão visível
+    // como peer-left + peer-joined (duas entradas por um instante, sons de sair/entrar, e migração
+    // de host se o peer antigo era o host). Agora o PRIMEIRO peer existente com esse userId é
+    // reaproveitado: mesmo peerId, mesmo joinedAt (mantém o papel de host e a ordem de migração),
+    // só a conexão e o displayName passam a ser os da nova — os outros recebem `peer-rejoined` em
+    // vez de peer-left/peer-joined. Qualquer duplicata além da primeira (não deveria existir) cai
+    // no caminho antigo de derrubar.
+    const [reused, ...stale] = this.livePeers().filter((p) => p.userId === userId);
+    for (const duplicate of stale) {
+      const duplicateWs = this.findSocketByPeerId(duplicate.peerId);
       if (!duplicateWs) continue;
       await this.handleDisconnect(duplicateWs);
       try {
         duplicateWs.close(1000, 'Reconectado em outra sessão');
       } catch {
         // já fechando/fechado por conta própria — sem problema, handleDisconnect já rodou
+      }
+    }
+    if (reused) {
+      const oldWs = this.findSocketByPeerId(reused.peerId);
+      if (oldWs) {
+        // Attachment limpo ANTES do close: webSocketClose -> handleDisconnect vê null e não faz
+        // broadcast de peer-left nem migra o host para um peer que continua na sala.
+        oldWs.serializeAttachment(null);
+        try {
+          oldWs.close(1000, 'Reconectado em outra sessão');
+        } catch {
+          // já fechando/fechado — o attachment já foi limpo, nada mais a fazer
+        }
       }
     }
 
@@ -244,10 +282,12 @@ export class RoomDurableObject extends DurableObject<Env> {
     const safeDisplayName = (verifiedDisplayName ?? message.displayName).trim().slice(0, 60) || 'Peer';
     const safeUserId = userId.trim().slice(0, 100) || crypto.randomUUID();
     const peer: PeerAttachment = {
-      peerId: crypto.randomUUID(),
+      peerId: reused?.peerId ?? crypto.randomUUID(),
       userId: safeUserId,
       displayName: safeDisplayName,
-      joinedAt: Date.now()
+      joinedAt: reused?.joinedAt ?? Date.now(),
+      lastSeenAt: Date.now(),
+      status: message.status ?? 'online'
     };
     ws.serializeAttachment(peer);
 
@@ -264,17 +304,69 @@ export class RoomDurableObject extends DurableObject<Env> {
       peerId: peer.peerId,
       hostPeerId,
       epoch,
-      peers: existingPeers.map((p) => ({ peerId: p.peerId, displayName: p.displayName, userId: p.userId }))
+      peers: existingPeers.map((p) => ({
+        peerId: p.peerId,
+        displayName: p.displayName,
+        userId: p.userId,
+        status: p.status ?? 'online'
+      }))
     });
 
     this.broadcast(
-      { type: 'peer-joined', roomId: message.roomId, peerId: peer.peerId, displayName: safeDisplayName, userId: safeUserId },
+      {
+        type: reused ? 'peer-rejoined' : 'peer-joined',
+        roomId: message.roomId,
+        peerId: peer.peerId,
+        displayName: safeDisplayName,
+        userId: safeUserId,
+        status: peer.status ?? 'online'
+      },
       peer.peerId
     );
   }
 
-  private async handleDisconnect(ws: WebSocket): Promise<void> {
+  private async handleStatusChanged(ws: WebSocket, status: PresenceStatus): Promise<void> {
     const peer = ws.deserializeAttachment() as PeerAttachment | null;
+    if (!peer) return;
+    ws.serializeAttachment({ ...peer, status });
+    const roomId = await this.getRoomId();
+    this.broadcast({ type: 'peer-status-changed', roomId, peerId: peer.peerId, status }, peer.peerId);
+  }
+
+  private touch(ws: WebSocket): void {
+    const peer = ws.deserializeAttachment() as PeerAttachment | null;
+    if (peer) ws.serializeAttachment({ ...peer, lastSeenAt: Date.now() });
+  }
+
+  /** Removes every peer (except `except`, the one that just pinged) that has been silent longer
+   * than PEER_TIMEOUT_MS — same peer-left broadcast + host migration as a real disconnect. The
+   * attachment is cleared BEFORE the first await so two pings interleaving at an await can't both
+   * drop the same peer, and so the late webSocketClose/Error for it (if the runtime ever
+   * delivers one) finds nothing left to announce. */
+  private async dropSilentPeers(except: WebSocket): Promise<void> {
+    const cutoff = Date.now() - PEER_TIMEOUT_MS;
+    for (const ws of this.ctx.getWebSockets()) {
+      if (ws === except) continue;
+      const peer = ws.deserializeAttachment() as PeerAttachment | null;
+      if (!peer || (peer.lastSeenAt ?? peer.joinedAt) > cutoff) continue;
+      ws.serializeAttachment(null);
+      await this.handleDisconnect(ws, peer);
+      try {
+        ws.close(1001, 'Sem resposta');
+      } catch {
+        // already closing/closed — the peer was already announced as left above
+      }
+    }
+  }
+
+  private findSocketByPeerId(peerId: string): WebSocket | undefined {
+    return this.ctx
+      .getWebSockets()
+      .find((s) => (s.deserializeAttachment() as PeerAttachment | null)?.peerId === peerId);
+  }
+
+  private async handleDisconnect(ws: WebSocket, known?: PeerAttachment): Promise<void> {
+    const peer = known ?? (ws.deserializeAttachment() as PeerAttachment | null);
     if (!peer) return;
 
     const roomId = await this.getRoomId();
@@ -402,7 +494,7 @@ export class RoomDurableObject extends DurableObject<Env> {
     return this.ctx
       .getWebSockets()
       .map((s) => s.deserializeAttachment() as PeerAttachment | null)
-      .filter((p): p is PeerAttachment => p !== null);
+      .filter((p): p is PeerAttachment => Boolean(p)); // null/undefined: not joined yet, or cleared on rejoin
   }
 
   private send(ws: WebSocket, message: ServerToClientMessage): void {

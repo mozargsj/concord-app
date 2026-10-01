@@ -6,6 +6,9 @@ import { loginWithGoogle } from './googleAuth';
 import { checkForUpdatesOnDemand, checkForUpdatesOnStartup, isInstallingUpdate } from './autoUpdate';
 import './processLoopbackAudio';
 import './smartAppControl';
+import { attachRemoteControlWindow } from './remoteControl';
+// After remoteControl on purpose: it registers cleanup through remoteControl's onSessionEnd.
+import './fileTransfer';
 
 const isDev = !app.isPackaged;
 
@@ -137,9 +140,15 @@ function createMainWindow(): void {
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.js'),
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      // The room's liveness ping (useRoomConnection.ts, every 4s) is a renderer timer — a
+      // minimized/hidden window gets its timers throttled (down to once a minute), which the
+      // server's heartbeat watchdog (room.ts PEER_TIMEOUT_MS) would read as a dead peer.
+      backgroundThrottling: false
     }
   });
+
+  attachRemoteControlWindow(window);
 
   let isCloseConfirmed = false;
   window.on('close', (event) => {
@@ -480,6 +489,9 @@ ipcMain.handle('screen:get-sources', async () => {
   return sources.map((source) => ({
     id: source.id,
     name: source.name,
+    // Whole-screen sources carry the display they capture; remote control maps the controller's
+    // pointer onto exactly that display (remoteControl.ts), window sources have none.
+    displayId: source.display_id || null,
     thumbnailDataUrl: source.thumbnail.toDataURL()
   }));
 });

@@ -16,10 +16,15 @@ files:
   # x64 only; missing on any other platform/arch, which the loader already treats as "native
   # path unavailable" and falls back to the plain getUserMedia capture.
   - native/process-loopback/build/Release/*.node
+  # Native addon (packages/client/native/input-control) — remote-control input injection
+  # (SendInput) and the low-level keyboard hook, see main/inputInjector.ts. Missing/blocked =
+  # remote control simply unavailable on that machine.
+  - native/input-control/build/Release/*.node
 asarUnpack:
   # Native modules can't be dlopen'd from inside app.asar — Electron transparently redirects
   # any read of this path to the matching file under app.asar.unpacked instead.
   - native/process-loopback/build/Release/*.node
+  - native/input-control/build/Release/*.node
 # Packaged main process reads GOOGLE_OAUTH_CLIENT_ID/SECRET from a .env sitting next to the
 # installed .exe (main/index.ts) — process.cwd()-based dotenv resolution silently found nothing
 # there, since cwd is wherever the user launched the .exe from, never the install directory.
@@ -31,6 +36,14 @@ extraFiles:
 win:
   target: nsis
   icon: build/icon.ico
+  # [2026-10-01, pedido do Mozar] Concord inicia SEMPRE como administrador (UAC a cada abertura).
+  # Motivo: o SendInput de um processo elevado alcança janelas elevadas (Gerenciador de Tarefas,
+  # apps "executar como administrador") — sem isso o controle remoto não consegue agir nelas (UIPI).
+  # Continua NÃO alcançando o UAC/Secure Desktop nem disparando Ctrl+Alt+Del (isso o Windows bloqueia
+  # mesmo para admin). Contraria o princípio "UI sem privilégio" da spec (seções 21 e 22): quando o
+  # serviço do Virtual HID existir, voltar para `asInvoker` e deixar o service fazer o trabalho
+  # privilegiado. Build de teste sem elevar: --config.win.requestedExecutionLevel=asInvoker
+  requestedExecutionLevel: requireAdministrator
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true

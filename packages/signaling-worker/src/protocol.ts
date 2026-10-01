@@ -7,6 +7,10 @@ function isStr(value: unknown, maxLen: number): value is string {
   return typeof value === 'string' && value.length > 0 && value.length <= maxLen;
 }
 
+function isStatus(value: unknown): boolean {
+  return value === 'online' || value === 'busy' || value === 'unavailable' || value === 'offline';
+}
+
 export function validateClientMessage(raw: unknown): ClientToServerMessage | null {
   if (!raw || typeof raw !== 'object') return null;
   const m = raw as Record<string, unknown>;
@@ -17,9 +21,12 @@ export function validateClientMessage(raw: unknown): ClientToServerMessage | nul
         isStr(m.serverId, 200) &&
         isStr(m.displayName, 200) &&
         isStr(m.userId, 200) &&
-        isStr(m.sessionToken, 4000)
+        isStr(m.sessionToken, 4000) &&
+        (m.status === undefined || isStatus(m.status))
         ? (m as unknown as ClientToServerMessage)
         : null;
+    case 'status-changed':
+      return isStatus(m.status) ? (m as unknown as ClientToServerMessage) : null;
     case 'sdp-offer':
     case 'sdp-answer':
       return isStr(m.targetPeerId, 200) && isStr(m.sdp, 65536) ? (m as unknown as ClientToServerMessage) : null;

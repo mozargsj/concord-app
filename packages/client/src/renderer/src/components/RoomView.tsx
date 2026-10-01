@@ -5,6 +5,7 @@ import { Eye, EarOff, HeadphoneOff, MicOff, VolumeX, X } from 'lucide-react';
 import CallControls from './CallControls';
 import MediaStreamVideo from './MediaStreamVideo';
 import ScreenShareTile from './ScreenShareTile';
+import type { RemoteControlApi } from '../hooks/useRemoteControl';
 import HostStarBadge from './HostStarBadge';
 import LiveBadge from './LiveBadge';
 import NoInternetScreen from './NoInternetScreen';
@@ -53,6 +54,10 @@ interface RoomViewProps {
   // peer's, so it replaces the whole grid instead of a per-tile badge (that's what
   // isReconnecting on each participant tile is for, driven by peer.connectionStatus instead).
   connectivityStatus: 'online' | 'offline' | 'reconnecting';
+  /** Remote control state + actions (hooks/useRemoteControl.ts) — omitted = feature off. */
+  remoteControl?: RemoteControlApi;
+  /** I am sharing a whole screen right now (control only exists for that, never for a window). */
+  sharingFullScreen?: boolean;
 }
 
 type Tile =
@@ -109,7 +114,9 @@ export default function RoomView({
   activeVolumeMenuUserId,
   isPeerMutedByMe,
   onViewProfile,
-  connectivityStatus
+  connectivityStatus,
+  remoteControl,
+  sharingFullScreen = false
 }: RoomViewProps) {
   const [focusedTileKey, setFocusedTileKey] = useState<string | null>(null);
   const [isScreenFullscreen, setIsScreenFullscreen] = useState(false);
@@ -118,10 +125,23 @@ export default function RoomView({
   // 16:9 travado. null até o <video> carregar metadata pela primeira vez (novo alvo de foco);
   // volta a 16/9 nesse meio-tempo (CSS var(--focus-ratio, 1.7778)) pra não piscar 0.
   const [focusedAspectRatio, setFocusedAspectRatio] = useState<number | null>(null);
+  // A control session just started and I'm the controller: bring that PC's screen up in focus and
+  // fullscreen without an extra click. Fullscreen is carried through this ref because the reset
+  // effect below runs on every focus change and would otherwise undo it.
+  const wantFullscreenRef = useRef(false);
   useEffect(() => {
     setFocusedAspectRatio(null);
-    setIsScreenFullscreen(false);
+    setIsScreenFullscreen(wantFullscreenRef.current);
+    wantFullscreenRef.current = false;
   }, [focusedTileKey]);
+  const focusRequest = remoteControl?.focusRequest ?? null;
+  useEffect(() => {
+    if (!focusRequest) return;
+    wantFullscreenRef.current = true;
+    setFocusedTileKey(`${focusRequest.peerId}-screen`);
+    // A tile that is already focused doesn't re-run the reset effect above — apply it directly.
+    setIsScreenFullscreen(true);
+  }, [focusRequest]);
   // A remote peer's camera stays blurred/gated (same "clique para visualizar" idea as a screen
   // share, decision from the Mozar) until clicked at least once — keyed by tile.key, same
   // identifier focusedTileKey already uses. Never applies to the local user's own camera preview
@@ -314,6 +334,16 @@ export default function RoomView({
                 onCloseFocus={() => setFocusedTileKey(null)}
                 isOwnPreview={tile.key === 'self-screen'}
                 onDimensionsChange={handleFocusedDimensions}
+                remoteControl={
+                  !remoteControl
+                    ? undefined
+                    : tile.key === 'self-screen'
+                      ? { mode: 'own', rc: remoteControl, peers, sharingFullScreen }
+                      : (() => {
+                          const owner = peers.find((p) => `${p.peerId}-screen` === tile.key);
+                          return owner ? ({ mode: 'peer', rc: remoteControl, peer: owner } as const) : undefined;
+                        })()
+                }
               />
             ) : showCamera ? (
               <MediaStreamVideo stream={cameraStream} mirrored fit="cover" onDimensionsChange={handleFocusedDimensions} />

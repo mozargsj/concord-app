@@ -28,7 +28,11 @@ import {
   reorderRooms,
   reportClientError
 } from '../lib/api';
+import type { PresenceStatus } from '@concord/shared';
+import RemoteControlLayer from '../components/RemoteControlLayer';
 import { useRoomConnection } from '../hooks/useRoomConnection';
+import { useRemoteControl } from '../hooks/useRemoteControl';
+import { getPresenceStatus, onPresenceStatusChange } from '../lib/presenceStatus';
 import { usePeerVolumeControl } from '../hooks/usePeerVolumeControl';
 import { getPreferredDeviceId } from '../lib/devicePreferences';
 import { loadCachedImage } from '../lib/imageCache';
@@ -166,6 +170,16 @@ export default function ServerListPage({
   // already resets per room (useRoomConnection).
   const [isChatOpen, setIsChatOpen] = useState(false);
 
+  // Profile presence status (online/ocupado/indisponível/offline) — changed in ProfilePage, kept
+  // here so it goes to the room (signaling) and to the main process's remote-control gate.
+  const [presenceStatus, setPresenceStatusState] = useState<PresenceStatus>(getPresenceStatus);
+  useEffect(() => onPresenceStatusChange(setPresenceStatusState), []);
+  useEffect(() => {
+    void window.concord.remoteControl.setStatus(presenceStatus);
+  }, [presenceStatus]);
+  // True only while THIS user shares a whole screen — the one case remote control exists for.
+  const [sharingFullScreen, setSharingFullScreen] = useState(false);
+
   const {
     connectionStatus,
     selfPeerId,
@@ -186,7 +200,12 @@ export default function ServerListPage({
     requestPeerSound,
     chatMessages,
     sendChatMessage,
-    rerollChatMessage
+    rerollChatMessage,
+    controlHandlersRef,
+    sendControlFrame,
+    sendMoveFrame,
+    sendFileFrame,
+    sendFileChunk
   } = useRoomConnection(
     selectedRoomId,
     currentUser.displayName,
@@ -196,8 +215,20 @@ export default function ServerListPage({
     currentUser.avatarUrl,
     roomServerInfo,
     handleServerIconReceived,
-    () => setSoundDownloadTick((tick) => tick + 1)
+    () => setSoundDownloadTick((tick) => tick + 1),
+    presenceStatus
   );
+
+  const remoteControl = useRemoteControl({
+    peers,
+    selfPeerId,
+    controlHandlersRef,
+    sendControlFrame,
+    sendMoveFrame,
+    sendFileFrame,
+    sendFileChunk,
+    sharingFullScreen
+  });
 
   const cameraStreamRef = useRef<MediaStream | null>(null);
   const screenStreamRef = useRef<MediaStream | null>(null);
@@ -217,6 +248,10 @@ export default function ServerListPage({
     screenStreamRef.current = null;
     loopbackAudioSessionRef.current?.stop();
     loopbackAudioSessionRef.current = null;
+    // Whole-screen sharing is what remote control hangs on — ending the capture (for any reason)
+    // ends any control session and cancels pending requests (main/remoteControl.ts).
+    setSharingFullScreen(false);
+    void window.concord.remoteControl.setShare(null);
   }
 
   useEffect(() => {
@@ -523,6 +558,10 @@ export default function ServerListPage({
       }
       screenStreamRef.current = stream;
       setScreenStream(stream);
+      // A whole-screen source knows which display it captures; a window source doesn't, and gets
+      // no remote control at all.
+      setSharingFullScreen(!!source.displayId);
+      void window.concord.remoteControl.setShare(source.displayId);
       setMediaError(null);
       setLocalScreenTrack(stream, qualityMode);
       playTransmissionEnter();
@@ -856,6 +895,8 @@ export default function ServerListPage({
             isPeerMutedByMe={(volumeKey) => peerVolume.getEffectivePeerSettings(volumeKey).muted}
             onViewProfile={(userId, name, avatarUrl) => setViewingProfile({ userId, name, avatarUrl })}
             connectivityStatus={connectivityStatus}
+            remoteControl={remoteControl}
+            sharingFullScreen={sharingFullScreen}
           />
           {selectedRoom && isChatOpen && (
             <RoomChat
@@ -877,6 +918,8 @@ export default function ServerListPage({
           onLogout={onLogout}
         />
       )}
+
+      <RemoteControlLayer rc={remoteControl} peers={peers} />
 
       {serverActionsMode && (
         <ServerActionsModal

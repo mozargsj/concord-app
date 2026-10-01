@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import { Eye, Maximize2, Minimize2, Volume2, VolumeX, WifiOff, X } from 'lucide-react';
 import MediaStreamVideo from './MediaStreamVideo';
+import RemoteControlTileControls, { type TileRemoteControl } from './RemoteControlTileControls';
+import { useControllerCapture } from '../hooks/useControllerCapture';
 import searchingArt from '../assets/images/investigando.png';
 import '../styles/ScreenShareTile.css';
 
@@ -28,6 +30,8 @@ interface ScreenShareTileProps {
    * MediaStreamVideo.tsx. Só importa pro RoomView.tsx quando esse tile está em foco (a letterbox
    * 16:9-travada virou dinâmica, segue a proporção de verdade da transmissão). */
   onDimensionsChange?: (width: number, height: number) => void;
+  /** Remote control overlays/capture for this tile (undefined = feature off, e.g. test profile). */
+  remoteControl?: TileRemoteControl;
 }
 
 /**
@@ -62,7 +66,8 @@ export default function ScreenShareTile({
   onToggleFullscreen,
   onCloseFocus,
   isOwnPreview = false,
-  onDimensionsChange
+  onDimensionsChange,
+  remoteControl
 }: ScreenShareTileProps) {
   const [hasStartedViewing, setHasStartedViewing] = useState(isOwnPreview);
   const [isLive, setIsLive] = useState(isOwnPreview);
@@ -81,6 +86,27 @@ export default function ScreenShareTile({
   const [retryTick, setRetryTick] = useState(0);
   const visibleVideoRef = useRef<HTMLVideoElement>(null);
   const audioVideoRef = useRef<HTMLVideoElement>(null);
+
+  // I am controlling the PC behind THIS tile: open the picture on its own when the session starts
+  // (no click-to-view gate in the way), and capture mouse/keyboard while it is the focused view.
+  const controlSession =
+    remoteControl?.mode === 'peer' && remoteControl.rc.session?.role === 'controller' && remoteControl.rc.session.peerId === remoteControl.peer.peerId
+      ? remoteControl.rc.session
+      : null;
+  useEffect(() => {
+    if (controlSession && !isLive) {
+      setFrozenFrameUrl(null);
+      setIsLive(true);
+      setHasStartedViewing(true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only a NEW session should auto-open the view
+  }, [controlSession?.sid]);
+  useControllerCapture(
+    visibleVideoRef,
+    remoteControl?.rc ?? null,
+    !!controlSession && isFocused && isLive && hasReceivedFrame,
+    controlSession?.keyHook ?? false
+  );
 
   // Own-preview never needs this — it's the local capture, frames are never in question. For a
   // peer's tile, every time it goes live (first click, or a retry) this waits for a real 'playing'
@@ -262,6 +288,8 @@ export default function ScreenShareTile({
           </div>
         </button>
       )}
+
+      {remoteControl && <RemoteControlTileControls control={remoteControl} isFocused={isFocused} />}
 
       {isFocused && (
         <button type="button" className="screen-share-tile__fullscreen" title={isFullscreen ? 'Sair da tela cheia' : 'Tela cheia'} onClick={(event) => { event.stopPropagation(); onToggleFullscreen(); }}>

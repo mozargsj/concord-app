@@ -1,6 +1,11 @@
 import type { ClientToServerMessage } from '@concord/shared';
 import type { ImageCacheKind } from './imageCache';
 import type { DiceRollResult } from './diceRoller';
+import type { ControlFrame, FileFrame, MoveFrame } from '../../../common/remoteControl';
+
+// A clipboard frame is the biggest legitimate control frame (RC_TIMING.clipboardMaxChars of text,
+// JSON-escaped) — anything beyond this is garbage or hostile.
+const CONTROL_FRAME_MAX_CHARS = 400_000;
 
 // STUN only, no TURN — explicit project decision (decisions.md §1), revisited only
 // with real ICE-failure data from the alpha phase.
@@ -273,6 +278,16 @@ interface PeerConnectionEntry {
   // (a reroll only ever targets a message that already made it across, so the channel's almost
   // certainly open by then), kept anyway for consistency with every other send path here.
   pendingChatEdits: ChatEditFrame[];
+  // Remote control (spec 8): 'control' is reliable+ordered (requests, responses, key/button
+  // transitions, heartbeat), 'input-move' is unordered/no-retransmit (a stale pointer position is
+  // worthless) — both separate from the video/audio tracks so a congested video never delays input.
+  controlChannel: RTCDataChannel | null;
+  moveChannel: RTCDataChannel | null;
+  // Solicitation frames ('req'/'share'/'cancel') sent before the control channel opened — flushed
+  // in order on open. Input frames are never queued: a late key press is worse than a lost one.
+  pendingControlFrames: ControlFrame[];
+  // File transfer during a control session (main/fileTransfer.ts owns the bytes on disk).
+  filesChannel: RTCDataChannel | null;
   // Serializes every SDP-touching operation on this connection — outgoing renegotiate(), and
   // incoming handleOffer()/handleAnswer() — onto one chain, same shape as imageSendQueue/
   // soundSendQueue above. Before this existed, nothing stopped e.g. a local track-change
@@ -356,6 +371,17 @@ interface MeshManagerOptions {
   /** A peer re-rolled one of their own (or anyone's) dice messages ("Re-rolar") — caller replaces
    * that message's `roll` in place by id, never appends a new message for it. */
   onChatEdit: (peerId: string, id: string, roll: ChatMessage['roll']) => void;
+  /** A remote-control frame arrived on the 'control' channel from this peer. Frames are
+   * untrusted: the receiver (main/remoteControl.ts) validates session/seq/permissions. */
+  onControlFrame: (peerId: string, frame: ControlFrame) => void;
+  /** Same, for the unordered 'input-move' channel. */
+  onMoveFrame: (peerId: string, frame: MoveFrame) => void;
+  /** The control channel to this peer opened (send our own share info) / closed (connection gone). */
+  onControlChannelOpen: (peerId: string) => void;
+  onControlChannelClose: (peerId: string) => void;
+  /** File-transfer traffic from this peer: JSON frames, and binary chunks (xid-prefixed). */
+  onFileFrame: (peerId: string, frame: FileFrame) => void;
+  onFileChunk: (peerId: string, chunk: ArrayBuffer) => void;
   /** A peer connection actually failed (ICE or overall), got stuck disconnected, or an ICE
    * candidate errored out — the CGNAT/symmetric-NAT scenario decisions.md §1 already flags as the
    * reason TURN might be needed. Optional: MeshManager works the same with or without a listener,
@@ -519,7 +545,20 @@ export class MeshManager {
     if (!entry.imagesChannel) this.setupImagesChannel(entry, entry.pc.createDataChannel('images'));
     if (!entry.soundsChannel) this.setupSoundsChannel(entry, entry.pc.createDataChannel('sounds'));
     if (!entry.chatChannel) this.setupChatChannel(entry, entry.pc.createDataChannel('chat'));
+    if (!entry.controlChannel) this.setupControlChannel(entry, entry.pc.createDataChannel('control'));
+    if (!entry.filesChannel) this.setupFilesChannel(entry, entry.pc.createDataChannel('files'));
+    if (!entry.moveChannel) {
+      this.setupMoveChannel(entry, entry.pc.createDataChannel('input-move', { ordered: false, maxRetransmits: 0 }));
+    }
     void this.renegotiate(entry);
+  }
+
+  /** Drops every peer connection (local tracks/mic pipeline stay) — used when the signaling
+   * socket was re-established and the server re-announced us: the other side already discards its
+   * old RTCPeerConnection for us on 'peer-rejoined', so ours has to be rebuilt from scratch too
+   * (a fresh offer against a dead transport fails on the changed DTLS fingerprint). */
+  resetPeerConnections(): void {
+    for (const peerId of [...this.connections.keys()]) this.removePeer(peerId);
   }
 
   /** Sets which peerId is "us" for this room — needed only to deterministically pick a polite/
@@ -1142,6 +1181,10 @@ export class MeshManager {
       pendingChatMessages: [],
       pendingChatHistoryRequest: false,
       pendingChatEdits: [],
+      controlChannel: null,
+      moveChannel: null,
+      pendingControlFrames: [],
+      filesChannel: null,
       negotiationQueue: Promise.resolve(),
       renegotiateNeeded: false,
       // See PeerConnectionEntry.isPolite — deterministic as long as both sides compare the same
@@ -1167,6 +1210,15 @@ export class MeshManager {
       }
       if (event.channel.label === 'chat' && !entry.chatChannel) {
         this.setupChatChannel(entry, event.channel);
+      }
+      if (event.channel.label === 'control' && !entry.controlChannel) {
+        this.setupControlChannel(entry, event.channel);
+      }
+      if (event.channel.label === 'files' && !entry.filesChannel) {
+        this.setupFilesChannel(entry, event.channel);
+      }
+      if (event.channel.label === 'input-move' && !entry.moveChannel) {
+        this.setupMoveChannel(entry, event.channel);
       }
     };
 
@@ -1598,6 +1650,109 @@ export class MeshManager {
   private sendChatFrame(channel: RTCDataChannel, frame: ChatFrame): void {
     if (channel.readyState !== 'open') return;
     channel.send(JSON.stringify(frame));
+  }
+
+  private setupControlChannel(entry: PeerConnectionEntry, channel: RTCDataChannel): void {
+    entry.controlChannel = channel;
+
+    channel.onopen = () => {
+      const queued = entry.pendingControlFrames;
+      entry.pendingControlFrames = [];
+      for (const frame of queued) this.sendControlFrame(entry.peerId, frame);
+      this.opts.onControlChannelOpen(entry.peerId);
+    };
+    channel.onclose = () => this.opts.onControlChannelClose(entry.peerId);
+
+    channel.onmessage = (event) => {
+      if (typeof event.data !== 'string' || event.data.length > CONTROL_FRAME_MAX_CHARS) return;
+      // Same malformed-frame guard as the other channels — a bad JSON.parse() must never throw
+      // out of the handler.
+      let frame: ControlFrame;
+      try {
+        frame = JSON.parse(event.data) as ControlFrame;
+      } catch {
+        return;
+      }
+      if (frame && typeof frame === 'object' && typeof frame.t === 'string') this.opts.onControlFrame(entry.peerId, frame);
+    };
+  }
+
+  private setupFilesChannel(entry: PeerConnectionEntry, channel: RTCDataChannel): void {
+    channel.binaryType = 'arraybuffer';
+    entry.filesChannel = channel;
+    channel.onmessage = (event) => {
+      if (typeof event.data === 'string') {
+        if (event.data.length > 4096) return; // a frame never carries more than a name + numbers
+        try {
+          const frame = JSON.parse(event.data) as FileFrame;
+          if (frame && typeof frame.t === 'string') this.opts.onFileFrame(entry.peerId, frame);
+        } catch {
+          // malformed frame — drop
+        }
+        return;
+      }
+      this.opts.onFileChunk(entry.peerId, event.data as ArrayBuffer);
+    };
+  }
+
+  sendFileFrame(peerId: string, frame: FileFrame): boolean {
+    const channel = this.connections.get(peerId)?.filesChannel;
+    if (channel?.readyState !== 'open') return false;
+    channel.send(JSON.stringify(frame));
+    return true;
+  }
+
+  /** Sends one binary chunk, waiting while the channel's send buffer is full (same backpressure
+   * rule as the image/sound transfers). False when the channel is gone. */
+  async sendFileChunk(peerId: string, chunk: ArrayBuffer): Promise<boolean> {
+    const channel = this.connections.get(peerId)?.filesChannel;
+    if (!channel || channel.readyState !== 'open') return false;
+    channel.bufferedAmountLowThreshold = IMAGE_CHUNK_HIGH_WATER / 2;
+    if (channel.bufferedAmount > IMAGE_CHUNK_HIGH_WATER) {
+      await new Promise<void>((resolve) => {
+        const done = () => resolve();
+        channel.addEventListener('bufferedamountlow', done, { once: true });
+        channel.addEventListener('close', done, { once: true });
+      });
+    }
+    if (channel.readyState !== 'open') return false;
+    channel.send(chunk);
+    return true;
+  }
+
+  private setupMoveChannel(entry: PeerConnectionEntry, channel: RTCDataChannel): void {
+    entry.moveChannel = channel;
+    channel.onmessage = (event) => {
+      if (typeof event.data !== 'string' || event.data.length > 512) return;
+      try {
+        const frame = JSON.parse(event.data) as MoveFrame;
+        if (frame && frame.t === 'mv') this.opts.onMoveFrame(entry.peerId, frame);
+      } catch {
+        // malformed pointer frame — drop
+      }
+    };
+  }
+
+  /** Sends a remote-control frame to one peer. Solicitation frames are queued until the channel
+   * opens; input frames are dropped if it isn't open. Returns whether it was sent or queued. */
+  sendControlFrame(peerId: string, frame: ControlFrame): boolean {
+    const entry = this.connections.get(peerId);
+    if (!entry) return false;
+    const channel = entry.controlChannel;
+    if (channel?.readyState === 'open') {
+      channel.send(JSON.stringify(frame));
+      return true;
+    }
+    if (frame.t === 'req' || frame.t === 'share' || frame.t === 'cancel') {
+      entry.pendingControlFrames.push(frame);
+      return true;
+    }
+    return false;
+  }
+
+  sendMoveFrame(peerId: string, frame: MoveFrame): void {
+    const channel = this.connections.get(peerId)?.moveChannel;
+    if (channel?.readyState === 'open') channel.send(JSON.stringify(frame));
   }
 
   private async answerSoundListRequest(channel: RTCDataChannel): Promise<void> {

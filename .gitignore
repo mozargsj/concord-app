@@ -14,6 +14,8 @@ tools/
 # path, not a blanket `build/` rule — see the packages/client/build/ note above for why that bit
 # us once already.
 packages/client/native/process-loopback/build/
+# Same for the input-control addon (remote-control SendInput + keyboard hook).
+packages/client/native/input-control/build/
 packages/server/updates/
 .claude/
 *.log

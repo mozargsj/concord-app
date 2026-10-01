@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import type { DeviceKind, ServerToClientMessage } from '@concord/shared';
+import type { DeviceKind, PresenceStatus, ServerToClientMessage } from '@concord/shared';
+import type { ControlFrame, FileFrame, MoveFrame } from '../../../common/remoteControl';
 import { SignalingClient, type SignalingStatus } from '../lib/signalingClient';
 import { MeshManager, setTurnIceServers, type ChatMessage, type SoundListEntry } from '../lib/webrtcMesh';
 import { parseAndRollDiceCommand } from '../lib/diceRoller';
@@ -107,10 +108,25 @@ async function acquireMicPipeline(preferredDeviceId: string | null): Promise<Mic
 
 const PING_INTERVAL_MS = 4000;
 
+/** Hooks the remote-control layer (useRemoteControl) installs on the room's data channels. */
+export interface ControlHandlers {
+  onFrame: (peerId: string, frame: ControlFrame) => void;
+  onMove: (peerId: string, frame: MoveFrame) => void;
+  onOpen: (peerId: string) => void;
+  onClose: (peerId: string) => void;
+  onFileFrame: (peerId: string, frame: FileFrame) => void;
+  onFileChunk: (peerId: string, chunk: ArrayBuffer) => void;
+}
+
+const NO_CONTROL_HANDLERS: ControlHandlers = { onFrame: () => {}, onMove: () => {}, onOpen: () => {}, onClose: () => {}, onFileFrame: () => {}, onFileChunk: () => {} };
+
 export interface RoomPeer {
   peerId: string;
   userId: string;
   displayName: string;
+  /** Profile presence (online/ocupado/indisponível/offline) — only 'online' can receive remote-
+   * control requests or offers. */
+  status: PresenceStatus;
   personalStream: MediaStream | null;
   screenStream: MediaStream | null;
   /** [2026-08-30, pedido do Mozar] "Compartilhar áudio" — só áudio, nunca vídeo, sempre exibido
@@ -186,11 +202,17 @@ export function useRoomConnection(
   myAvatarUrl: string | null,
   server: RoomServerInfo | null,
   onServerIconReceived: (serverId: string, url: string) => void,
-  onSoundDownloaded?: (tempSoundId: string) => void
+  onSoundDownloaded?: (tempSoundId: string) => void,
+  presenceStatus: PresenceStatus = 'online'
 ) {
   const [state, setState] = useState<RoomConnectionState>(initialState);
   const meshRef = useRef<MeshManager | null>(null);
   const signalingRef = useRef<SignalingClient | null>(null);
+  // Latest presence status, readable from the room effect without re-running it on every change.
+  const presenceStatusRef = useRef(presenceStatus);
+  presenceStatusRef.current = presenceStatus;
+  // Set by useRemoteControl — the mesh callbacks below only forward to whatever it installed.
+  const controlHandlersRef = useRef<ControlHandlers>(NO_CONTROL_HANDLERS);
   // Tears down whatever the current mic pipeline set up (RNNoise graph + raw stream, or just the
   // raw stream) — replaces a plain MediaStream ref since RNNoise being in the loop means there's
   // more than just tracks to stop now (see acquireMicPipeline).
@@ -478,6 +500,12 @@ export function useRoomConnection(
       onChatHistoryRequest,
       onChatHistoryReceived,
       onChatEdit,
+      onControlFrame: (peerId, frame) => controlHandlersRef.current.onFrame(peerId, frame),
+      onMoveFrame: (peerId, frame) => controlHandlersRef.current.onMove(peerId, frame),
+      onControlChannelOpen: (peerId) => controlHandlersRef.current.onOpen(peerId),
+      onControlChannelClose: (peerId) => controlHandlersRef.current.onClose(peerId),
+      onFileFrame: (peerId, frame) => controlHandlersRef.current.onFileFrame(peerId, frame),
+      onFileChunk: (peerId, chunk) => controlHandlersRef.current.onFileChunk(peerId, chunk),
       // [Bug corrigido] Nunca era passado aqui — toda falha real de ICE/conexão em produção era
       // descartada em silêncio (onConnectionError é
       // opcional em MeshManagerOptions, então o `?.()` interno virava no-op sem avisar ninguém).
@@ -520,6 +548,9 @@ export function useRoomConnection(
           // na sala" only had sound in TEST_MODE (a click-triggered stand-in, ServerListPage.tsx)
           // since production had no real event to hang it on — this is that real event.
           playRoomJoin();
+          // No-op on the first join; after an automatic signaling reconnect (SignalingClient) the
+          // old peer connections are dead weight — see MeshManager.resetPeerConnections.
+          mesh.resetPeerConnections();
           mesh.setSelfPeerId(message.peerId);
           setState((prev) => ({
             ...prev,
@@ -529,6 +560,7 @@ export function useRoomConnection(
               peerId: peer.peerId,
               userId: peer.userId,
               displayName: peer.displayName,
+              status: peer.status ?? 'online',
               personalStream: null,
               screenStream: null,
               musicStream: null,
@@ -551,29 +583,59 @@ export function useRoomConnection(
           }
           break;
         case 'peer-joined':
+        case 'peer-rejoined': {
           playRoomJoin();
+          // 'peer-rejoined' keeps the same peerId: the old RTCPeerConnection died with the old
+          // socket, so it's dropped here and the rejoiner's fresh offer builds a new one (reusing
+          // the stale entry would choke on the changed DTLS fingerprint).
+          if (message.type === 'peer-rejoined') mesh.removePeer(message.peerId);
+          const freshPeer: RoomPeer = {
+            peerId: message.peerId,
+            userId: message.userId,
+            displayName: message.displayName,
+            status: message.status ?? 'online',
+            personalStream: null,
+            screenStream: null,
+            musicStream: null,
+            isSpeaking: false,
+            isMicMuted: false,
+            isDeafened: false,
+            mutedMe: false,
+            avatarUrl: null,
+            connectionStatus: 'connecting',
+            hasConnectedOnce: false
+          };
+          setState((prev) => {
+            // Never two entries for one participant, whatever order events arrive in (a server
+            // that still announces peer-left/peer-joined, a lost peer-left, a duplicate delivery):
+            // an entry with the same peerId OR the same userId is replaced in place, keeping its
+            // position. removePeer is idempotent, so calling it from the updater is harmless.
+            const isSame = (p: RoomPeer) => p.peerId === message.peerId || p.userId === message.userId;
+            for (const stale of prev.peers) {
+              if (isSame(stale) && stale.peerId !== message.peerId) mesh.removePeer(stale.peerId);
+            }
+            const firstMatch = prev.peers.findIndex(isSame);
+            const peers =
+              firstMatch === -1
+                ? [...prev.peers, freshPeer]
+                : prev.peers.flatMap((p, i) => (i === firstMatch ? [freshPeer] : isSame(p) ? [] : [p]));
+            const staleIds = new Set(prev.peers.filter(isSame).map((p) => p.peerId));
+            return {
+              ...prev,
+              peers,
+              peerSoundLists: Object.fromEntries(
+                Object.entries(prev.peerSoundLists).filter(([peerId]) => !staleIds.has(peerId))
+              )
+            };
+          });
+          requestPeerImages(mesh, message.peerId, message.userId);
+          break;
+        }
+        case 'peer-status-changed':
           setState((prev) => ({
             ...prev,
-            peers: [
-              ...prev.peers,
-              {
-                peerId: message.peerId,
-                userId: message.userId,
-                displayName: message.displayName,
-                personalStream: null,
-                screenStream: null,
-                musicStream: null,
-                isSpeaking: false,
-                isMicMuted: false,
-                isDeafened: false,
-                mutedMe: false,
-                avatarUrl: null,
-                connectionStatus: 'connecting',
-                hasConnectedOnce: false
-              }
-            ]
+            peers: prev.peers.map((peer) => (peer.peerId === message.peerId ? { ...peer, status: message.status } : peer))
           }));
-          requestPeerImages(mesh, message.peerId, message.userId);
           break;
         case 'peer-left':
           playRoomLeave();
@@ -611,6 +673,7 @@ export function useRoomConnection(
           break;
         case 'room-closed':
         case 'join-rejected':
+          signaling.close(); // also stops SignalingClient's automatic reconnect — nothing to rejoin
           mesh.closeAll();
           setState((prev) => ({ ...prev, connectionStatus: 'disconnected' }));
           break;
@@ -730,7 +793,8 @@ export function useRoomConnection(
         server.id,
         displayName,
         userId,
-        getSessionToken() ?? ''
+        getSessionToken() ?? '',
+        presenceStatusRef.current
       );
 
       pingInterval = setInterval(() => {
@@ -769,6 +833,11 @@ export function useRoomConnection(
   useEffect(() => {
     signalingRef.current?.send({ type: 'mic-state', isMicMuted, isDeafened });
   }, [isMicMuted, isDeafened]);
+
+  // Fires on mount too, harmlessly (the join-room already carried the same status).
+  useEffect(() => {
+    signalingRef.current?.send({ type: 'status-changed', status: presenceStatus });
+  }, [presenceStatus]);
 
   // Fires on mount too (like mic-state above) — harmless, whoever's already in the room just
   // re-asks and gets 'unchanged' back if nothing really changed. Without this, changing your
@@ -938,6 +1007,11 @@ export function useRoomConnection(
     requestPeerSoundList,
     requestPeerSound,
     sendChatMessage,
-    rerollChatMessage
+    rerollChatMessage,
+    controlHandlersRef,
+    sendControlFrame: (peerId: string, frame: ControlFrame): boolean => meshRef.current?.sendControlFrame(peerId, frame) ?? false,
+    sendMoveFrame: (peerId: string, frame: MoveFrame): void => meshRef.current?.sendMoveFrame(peerId, frame),
+    sendFileFrame: (peerId: string, frame: FileFrame): boolean => meshRef.current?.sendFileFrame(peerId, frame) ?? false,
+    sendFileChunk: (peerId: string, chunk: ArrayBuffer): Promise<boolean> => meshRef.current?.sendFileChunk(peerId, chunk) ?? Promise.resolve(false)
   };
 }

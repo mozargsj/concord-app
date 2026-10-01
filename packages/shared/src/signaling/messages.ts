@@ -1,3 +1,7 @@
+/** Profile presence status (remote-control spec 13.5): only 'online' can receive control requests
+ * or offers; 'offline' just means "not reachable" — the user is still in the room. */
+export type PresenceStatus = 'online' | 'busy' | 'unavailable' | 'offline';
+
 export interface JoinRoomMessage {
   type: 'join-room';
   roomId: string;
@@ -15,6 +19,8 @@ export interface JoinRoomMessage {
    * every HTTP call. Before this, join-room had no session check at all: anyone who knew/guessed
    * a roomId could join and claim any userId. */
   sessionToken: string;
+  /** Last status the user picked (persisted client-side); the server defaults to 'online'. */
+  status?: PresenceStatus;
 }
 
 export interface SdpOfferMessage {
@@ -128,8 +134,14 @@ export interface ServerIconChangedMessage {
   serverId: string;
 }
 
+export interface StatusChangedMessage {
+  type: 'status-changed';
+  status: PresenceStatus;
+}
+
 export type ClientToServerMessage =
   | JoinRoomMessage
+  | StatusChangedMessage
   | SdpOfferMessage
   | SdpAnswerMessage
   | IceCandidateMessage
@@ -164,7 +176,7 @@ export interface RoomJoinedMessage {
   peerId: string;
   hostPeerId: string;
   epoch: number;
-  peers: { peerId: string; displayName: string; userId: string }[];
+  peers: { peerId: string; displayName: string; userId: string; status: PresenceStatus }[];
 }
 
 export interface JoinRejectedMessage {
@@ -179,6 +191,28 @@ export interface PeerJoinedMessage {
   peerId: string;
   displayName: string;
   userId: string;
+  status: PresenceStatus;
+}
+
+/** A user already in the room joined again (new connection, same userId) — the server keeps their
+ * existing peerId/host role and just swaps in the new connection's data, instead of announcing a
+ * peer-left + a brand-new peer-joined (which duplicated the participant and forced a host
+ * migration when it was the host). Receivers must drop the old RTCPeerConnection for this peerId
+ * (its transport died with the old socket) and keep the participant's entry in place. */
+export interface PeerRejoinedMessage {
+  type: 'peer-rejoined';
+  roomId: string;
+  peerId: string;
+  displayName: string;
+  userId: string;
+  status: PresenceStatus;
+}
+
+export interface PeerStatusChangedMessage {
+  type: 'peer-status-changed';
+  roomId: string;
+  peerId: string;
+  status: PresenceStatus;
 }
 
 export interface PeerLeftMessage {
@@ -261,6 +295,8 @@ export type ServerToClientMessage =
   | SdpAnswerRelayMessage
   | IceCandidateRelayMessage
   | PeerJoinedMessage
+  | PeerRejoinedMessage
+  | PeerStatusChangedMessage
   | PeerLeftMessage
   | HostCandidateNotifyMessage
   | HostChangedMessage

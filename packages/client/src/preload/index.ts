@@ -47,6 +47,43 @@ contextBridge.exposeInMainWorld('concord', {
   smartAppControl: {
     isActive: (): Promise<boolean> => ipcRenderer.invoke('smart-app-control:is-active')
   },
+  // Remote control (main/remoteControl.ts is the authority — the renderer only relays data-channel
+  // frames and draws UI). Payload types live in src/common/remoteControl.ts.
+  remoteControl: {
+    getState: () => ipcRenderer.invoke('rc:state'),
+    setStatus: (status: string) => ipcRenderer.invoke('rc:set-status', status),
+    setShare: (displayId: string | null) => ipcRenderer.invoke('rc:set-share', displayId),
+    beginOutgoing: (kind: string, peer: unknown, perms: unknown) => ipcRenderer.invoke('rc:begin-outgoing', kind, peer, perms),
+    incoming: (kind: string, peer: unknown, perms: unknown, sid?: string) =>
+      ipcRenderer.invoke('rc:incoming', kind, peer, perms, sid),
+    respond: (id: string, accept: boolean) => ipcRenderer.invoke('rc:respond', id, accept),
+    outgoingResult: (id: string, result: string, sid?: string) => ipcRenderer.invoke('rc:outgoing-result', id, result, sid),
+    cancelPending: (id: string) => ipcRenderer.invoke('rc:cancel-pending', id),
+    end: (reason: string) => ipcRenderer.invoke('rc:end', reason),
+    peerEnded: (sid: string) => ipcRenderer.invoke('rc:peer-ended', sid),
+    setCapture: (active: boolean) => ipcRenderer.invoke('rc:capture', active),
+    getLocalCaps: () => ipcRenderer.invoke('rc:local-caps'),
+    sendInput: (peerId: string, frame: unknown) => ipcRenderer.send('rc:input', peerId, frame),
+    sendMove: (peerId: string, frame: unknown) => ipcRenderer.send('rc:move', peerId, frame),
+    clipboardRemote: (peerId: string, sid: string, text: string) => ipcRenderer.send('rc:clipboard-remote', peerId, sid, text),
+    files: {
+      pick: () => ipcRenderer.invoke('rc:files-pick'),
+      incoming: (peerId: string, frame: unknown) => ipcRenderer.invoke('rc:files-incoming', peerId, frame),
+      accept: (xid: number, accept: boolean) => ipcRenderer.invoke('rc:files-accept', xid, accept),
+      read: (xid: number) => ipcRenderer.invoke('rc:files-read', xid),
+      write: (peerId: string, xid: number, data: Uint8Array) => ipcRenderer.send('rc:files-write', peerId, xid, data),
+      finish: (peerId: string, xid: number) => ipcRenderer.invoke('rc:files-finish', peerId, xid),
+      abort: (xid: number) => ipcRenderer.invoke('rc:files-abort', xid)
+    },
+    listBlocked: () => ipcRenderer.invoke('rc:list-blocked'),
+    unblock: (userId: string) => ipcRenderer.invoke('rc:unblock', userId),
+    on: (event: 'ended' | 'pending-expired' | 'pending-cancelled' | 'hook-key' | 'clipboard-local' | 'files-expired' | 'caps-result', callback: (payload: unknown) => void) => {
+      const channel = `rc:${event}`;
+      const listener = (_event: unknown, payload: unknown) => callback(payload);
+      ipcRenderer.on(channel, listener);
+      return () => ipcRenderer.removeListener(channel, listener);
+    }
+  },
   imageCache: {
     save: (key: string, data: ArrayBuffer, mimeType: string) =>
       ipcRenderer.invoke('image-cache:save', key, data, mimeType),

@@ -1,0 +1,163 @@
+/* Bottom-left stack: the discreet green request/offer notification, waiting + result notices. */
+.rc-stack {
+  position: fixed;
+  left: 16px;
+  bottom: 16px;
+  z-index: 300;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 340px;
+  pointer-events: none;
+}
+
+.rc-toast {
+  position: relative;
+  overflow: hidden;
+  pointer-events: auto;
+  padding: 12px 14px 14px;
+  border-radius: var(--radius-lg);
+  color: #fff;
+  font-size: 13px;
+  line-height: 1.4;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+  animation: rc-toast-in 160ms ease-out;
+}
+
+.rc-toast--incoming {
+  background: #1f7a45;
+  border: 1px solid #3ba55d;
+}
+
+.rc-toast--neutral {
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-bg-elevated-hover);
+}
+
+.rc-toast__text {
+  margin: 0;
+  font-weight: 600;
+}
+
+.rc-toast__sub {
+  margin: 4px 0 0;
+  font-size: 12px;
+  opacity: 0.85;
+}
+
+.rc-toast__actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.rc-toast__btn {
+  flex: 1;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.28);
+  color: #fff;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.rc-toast__btn:hover {
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.rc-toast__btn--accept {
+  background: #fff;
+  color: #14532d;
+}
+
+.rc-toast__btn--accept:hover {
+  background: #e6f4ea;
+}
+
+/* Shrinks over the solicitation's lifetime (RC_TIMING.solicitationTimeoutMs = 15s). */
+.rc-toast__timer {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 3px;
+  width: 100%;
+  background: rgba(255, 255, 255, 0.7);
+  transform-origin: left;
+  animation: rc-toast-timer 15s linear forwards;
+}
+
+@keyframes rc-toast-timer {
+  to {
+    transform: scaleX(0);
+  }
+}
+
+@keyframes rc-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+.rc-dialog__backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 250;
+}
+
+.rc-dialog {
+  width: 400px;
+  max-width: calc(100vw - 32px);
+  background: var(--color-bg-elevated);
+  border-radius: var(--radius-lg);
+  padding: 20px 24px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.rc-dialog h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.rc-dialog__hint {
+  margin: 0;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+}
+
+.rc-dialog__perms {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.rc-dialog__perm {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.rc-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.rc-toast__progress {
+  display: block;
+  width: 100%;
+  height: 6px;
+  margin-top: 8px;
+  accent-color: #3ba55d;
+}

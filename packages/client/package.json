@@ -1,7 +1,7 @@
 {
   "name": "@concord/client",
   "private": true,
-  "version": "0.0.94",
+  "version": "0.0.95",
   "description": "Concord — app P2P de áudio ao vivo e transmissão de tela, estilo Discord",
   "author": "Mozar",
   "main": "out/electron/main/index.js",
@@ -24,7 +24,7 @@
     "package:test-dev": "npm run build:test-dev && electron-builder --config.productName=ConcordTest --config.appId=com.concord.app.test",
     "package:test-real": "npm run build:test-real && electron-builder --config.productName=ConcordTestReal --config.appId=com.concord.app.test-real --config.publish.url=https://test-local.undersoft.tec.br/updates/",
     "typecheck": "tsc -p tsconfig.renderer.json --noEmit && tsc -p tsconfig.electron.json --noEmit",
-    "build:native": "node native/process-loopback/build.js"
+    "build:native": "node native/process-loopback/build.js && node native/input-control/build.js"
   },
   "dependencies": {
     "@sapphi-red/web-noise-suppressor": "^0.4.0",

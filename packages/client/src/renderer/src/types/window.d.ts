@@ -1,10 +1,43 @@
-export {};
+import type { ControllerCaps } from '../../../common/deviceCaps';
+import type {
+  ControlFrame,
+  FileFrame,
+  MoveFrame,
+  PresenceStatus,
+  RcBlockedUser,
+  RcEndReason,
+  RcIncomingVerdict,
+  RcPermissions,
+  RcSessionInfo,
+  RejectReason,
+  SolicitationKind
+} from '../../../common/remoteControl';
 
 export interface ScreenSource {
   id: string;
   name: string;
+  /** Display captured by a whole-screen source (desktopCapturer display_id); null for windows. */
+  displayId: string | null;
   thumbnailDataUrl: string;
 }
+
+export interface RcPeerRef {
+  peerId: string;
+  userId: string;
+  name: string;
+}
+
+export interface RcState {
+  session: RcSessionInfo | null;
+  /** The native input addon loaded — without it this PC can't be controlled at all. */
+  available: boolean;
+  status: PresenceStatus;
+  sharingFullScreen: boolean;
+  /** Concord runs as administrator — only then can SendInput reach elevated windows. */
+  elevated: boolean;
+}
+
+export type RcOutgoingVerdict = { ok: true; id: string; sid: string | null } | { ok: false; reason: RejectReason };
 
 export interface PickedImage {
   fileName: string;
@@ -126,6 +159,49 @@ declare global {
       };
       smartAppControl: {
         isActive: () => Promise<boolean>;
+      };
+      remoteControl: {
+        getState: () => Promise<RcState>;
+        setStatus: (status: PresenceStatus) => Promise<void>;
+        setShare: (displayId: string | null) => Promise<void>;
+        beginOutgoing: (kind: SolicitationKind, peer: RcPeerRef, perms: RcPermissions) => Promise<RcOutgoingVerdict>;
+        incoming: (kind: SolicitationKind, peer: RcPeerRef, perms: RcPermissions, sid?: string) => Promise<RcIncomingVerdict>;
+        respond: (id: string, accept: boolean) => Promise<{ ok: boolean; session?: RcSessionInfo }>;
+        outgoingResult: (
+          id: string,
+          result: 'accepted' | 'refused' | 'rejected' | 'cancelled',
+          sid?: string
+        ) => Promise<{ ok: boolean; session?: RcSessionInfo }>;
+        cancelPending: (id: string) => Promise<void>;
+        end: (reason: RcEndReason) => Promise<void>;
+        peerEnded: (sid: string) => Promise<void>;
+        setCapture: (active: boolean) => Promise<void>;
+        getLocalCaps: () => Promise<ControllerCaps | null>;
+        sendInput: (peerId: string, frame: ControlFrame) => void;
+        sendMove: (peerId: string, frame: MoveFrame) => void;
+        clipboardRemote: (peerId: string, sid: string, text: string) => void;
+        files: {
+          pick: () => Promise<{ xid: number; name: string; size: number } | { error: string } | null>;
+          incoming: (
+            peerId: string,
+            frame: FileFrame
+          ) => Promise<{ ok: true; name: string; size: number; risky: boolean } | { ok: false; reason: string }>;
+          accept: (xid: number, accept: boolean) => Promise<{ ok: boolean }>;
+          read: (xid: number) => Promise<Uint8Array | null>;
+          write: (peerId: string, xid: number, data: Uint8Array) => void;
+          finish: (peerId: string, xid: number) => Promise<{ ok: boolean; name?: string; folder?: string }>;
+          abort: (xid: number) => Promise<void>;
+        };
+        listBlocked: () => Promise<RcBlockedUser[]>;
+        unblock: (userId: string) => Promise<boolean>;
+        on: {
+          (event: 'ended', callback: (payload: { sid: string; role: 'controller' | 'controlled'; reason: RcEndReason; notifyPeer: boolean }) => void): () => void;
+          (event: 'pending-expired' | 'pending-cancelled', callback: (payload: { id: string }) => void): () => void;
+          (event: 'hook-key', callback: (payload: { keyId: number; down: boolean }) => void): () => void;
+          (event: 'clipboard-local', callback: (payload: { sid: string; text: string }) => void): () => void;
+          (event: 'files-expired', callback: (payload: { xid: number }) => void): () => void;
+          (event: 'caps-result', callback: (payload: { warnings: string[] }) => void): () => void;
+        };
       };
       imageCache: {
         save: (key: string, data: ArrayBuffer, mimeType: string) => Promise<boolean>;
