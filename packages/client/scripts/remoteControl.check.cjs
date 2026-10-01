@@ -18,7 +18,13 @@ const fakeElectron = {
   powerMonitor: { on() {} }
 };
 const fakeInjector = new Proxy(
-  { isInputAvailable: () => true, startKeyHook: () => true },
+  {
+    isInputAvailable: () => true,
+    startKeyHook: () => true,
+    // Delete (0x153) plays the part of a key the Ctrl+Alt+Del guard refuses; everything else is accepted.
+    injectKey: (k, d) => (calls.push(['injectKey', k, d]), k === 0x153 ? 'guard' : 'ok'),
+    injectStats: { injected: 0, failed: 0 }
+  },
   { get: (target, key) => target[key] ?? ((...args) => calls.push([key, ...args])) }
 );
 const fakeIndicator = { showControlIndicator: (...a) => calls.push(['indicator-show', a[0]]), hideControlIndicator: () => calls.push(['indicator-hide']) };
@@ -105,6 +111,28 @@ const lastEnded = () => sent.filter((s) => s[0] === 'rc:ended').at(-1)?.[1];
   fire('rc:input', alice.peerId, { t: 'wheel', sid: s4, seq: 1, dx: 300, dy: 100 });
   assert.deepEqual(called('injectWheel').at(-1), ['injectWheel', 0, 100]); // horizontal part dropped
   assert.equal(called('configureBackend').length, 1);
+  await invoke('rc:end', 'revoked');
+
+  // Input diagnostics: off by default (nothing recorded), on = every event with what happened to it.
+  const v5 = await invoke('rc:incoming', 'request', alice, all);
+  const s5 = (await invoke('rc:respond', v5.id, true)).session.sid;
+  fire('rc:input', alice.peerId, { t: 'key', sid: s5, seq: 1, k: 0x1e, down: true });
+  assert.deepEqual(await invoke('rc:diag-items', 0), [], 'nothing is recorded while diagnostics are off');
+  await invoke('rc:diag-enable', true);
+  fire('rc:input', alice.peerId, { t: 'key', sid: s5, seq: 2, k: 0x1e, down: false }); // applied
+  fire('rc:input', alice.peerId, { t: 'key', sid: s5, seq: 2, k: 0x1e, down: false }); // replay
+  fire('rc:input', alice.peerId, { t: 'key', sid: s5, seq: 3, k: 0x153, down: true }); // refused by the guard
+  fire('rc:input', alice.peerId, { t: 'btn', sid: s5, seq: 1, b: 0, down: true });
+  fire('rc:move', alice.peerId, { t: 'mv', sid: s5, seq: 1, x: 0.25, y: 0.75 });
+  const items = await invoke('rc:diag-items', 0);
+  assert.deepEqual(
+    items.map((i) => [i.kind, i.seq, i.value, i.down, i.outcome]),
+    [['key', 2, 0x1e, false, 'ok'], ['key', 2, 0x1e, false, 'seq'], ['key', 3, 0x153, true, 'guard'], ['btn', 1, 0, true, 'ok'], ['mv', 1, 0, false, 'ok']]
+  );
+  assert.deepEqual([items.at(-1).x, items.at(-1).y], [0.25, 0.75]);
+  assert.equal((await invoke('rc:diag-items', items[2].id)).length, 2, 'only newer events after the given id');
+  await invoke('rc:diag-enable', false);
+  assert.deepEqual(await invoke('rc:diag-items', 0), [], 'turning it off clears everything');
   await invoke('rc:end', 'revoked');
 
   // Heartbeat watchdog: no frame for heartbeatTimeoutMs -> Input Reset + end.

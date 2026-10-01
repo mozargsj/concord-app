@@ -93,6 +93,16 @@ function OwnControls({ control }: { control: Extract<TileRemoteControl, { mode: 
               .filter(Boolean)
               .join(', ')}
           </p>
+          {controlledSession.perms.keyboard && rc.diag && (
+            <p className="rc-popover__row">
+              Teclado: {rc.diag.keyFramesIn} recebidas, {rc.diag.injected} aplicadas
+              {rc.diag.injectFailed > 0 && `, ${rc.diag.injectFailed} recusadas pelo Windows (janela elevada?)`}
+              {rc.diag.keyDropped > 0 && `, ${rc.diag.keyDropped} descartadas`}
+            </p>
+          )}
+          <button type="button" className="rc-popover__peer" onClick={() => rc.toggleDiag(!rc.diagOn)}>
+            {rc.diagOn ? 'Ocultar diagnóstico de entrada' : 'Diagnóstico de entrada'}
+          </button>
           {controlledSession.perms.files && (
             <button type="button" className="rc-popover__peer" onClick={() => void rc.files.send()}>
               Enviar arquivo
@@ -155,7 +165,17 @@ function PeerControls({ control, isFocused }: { control: Extract<TileRemoteContr
         <span className="rc-banner__text">
           Controlando {peer.displayName}
           {!rc.session.keyHook && ' (sem teclas de sistema)'} · Ctrl+Shift+Pause para sair
+          {rc.session.perms.keyboard && rc.diag && (
+            <small className="rc-banner__diag">
+              {rc.diag.swallowing || !rc.session.keyHook
+                ? `Teclado capturado · ${rc.diag.hookEvents} teclas enviadas`
+                : `Teclado NÃO capturado: ${rc.diag.captureWhy}`}
+            </small>
+          )}
         </span>
+        <button type="button" className="rc-banner__stop" onClick={() => rc.toggleDiag(!rc.diagOn)} title="Mostra o que foi enviado e o que chegou no outro PC">
+          {rc.diagOn ? 'Ocultar diagnóstico' : 'Diagnóstico'}
+        </button>
         {rc.session.perms.files && (
           <button type="button" className="rc-banner__stop" onClick={() => void rc.files.send()}>
             Enviar arquivo

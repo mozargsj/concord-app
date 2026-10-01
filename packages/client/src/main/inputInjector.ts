@@ -107,6 +107,14 @@ const DOM_WHEEL_PIXELS_PER_NOTCH = 100;
 
 /** Keys/buttons currently held by injected input — exactly what Input Reset has to let go of. */
 const pressedKeys = new Set<number>();
+
+/** Per-session counters for diagnostics: how many keys Windows accepted vs refused (SendInput
+ * returns false when the target is beyond reach, e.g. an elevated window from a non-elevated Concord). */
+export const injectStats = { injected: 0, failed: 0 };
+export function resetInjectStats(): void {
+  injectStats.injected = 0;
+  injectStats.failed = 0;
+}
 const pressedButtons = new Set<number>();
 
 // Remote input must never complete Ctrl+Alt+Del (spec 20). SendInput can't trigger it anyway, but a
@@ -114,42 +122,46 @@ const pressedButtons = new Set<number>();
 // backend (and again by the privileged service, README of native/virtual-hid).
 const guard = new InputGuard();
 
-export function injectKey(keyId: number, down: boolean): void {
-  if (!VALID_KEY_IDS.has(keyId)) return;
-  if (!guard.allow(keyId, down)) return;
+export function injectKey(keyId: number, down: boolean): 'ok' | 'fail' | 'guard' {
+  if (!VALID_KEY_IDS.has(keyId)) return 'fail';
+  if (!guard.allow(keyId, down)) return 'guard';
   const vhid = virtualHid;
   const addon = vhid ? null : loadNative();
-  if (!vhid && !addon) return;
+  if (!vhid && !addon) return 'fail';
   if (down) pressedKeys.add(keyId);
   else pressedKeys.delete(keyId);
   if (vhid) {
     if (down) vhid.keyboard.press(keyId);
     else vhid.keyboard.release(keyId);
     vhid.sendKeyboard();
-    return;
+    injectStats.injected++;
+    return 'ok';
   }
-  addon!.sendKey(keyId & 0xff, (keyId & 0x100) !== 0, down);
+  const accepted = addon!.sendKey(keyId & 0xff, (keyId & 0x100) !== 0, down);
+  if (accepted) injectStats.injected++;
+  else injectStats.failed++;
+  return accepted ? 'ok' : 'fail';
 }
 
-export function injectButton(button: number, down: boolean): void {
-  if (!Number.isInteger(button) || button < 0 || button > 4) return;
+export function injectButton(button: number, down: boolean): 'ok' | 'fail' {
+  if (!Number.isInteger(button) || button < 0 || button > 4) return 'fail';
   const vhid = virtualHid;
   const addon = vhid ? null : loadNative();
-  if (!vhid && !addon) return;
+  if (!vhid && !addon) return 'fail';
   if (down) pressedButtons.add(button);
   else pressedButtons.delete(button);
   if (vhid) {
     vhid.mouse.setButton(button, down);
     vhid.sendMouse();
-    return;
+    return 'ok';
   }
-  addon!.sendMouseButton(button, down);
+  return addon!.sendMouseButton(button, down) ? 'ok' : 'fail';
 }
 
-export function injectWheel(dxPixels: number, dyPixels: number): void {
+export function injectWheel(dxPixels: number, dyPixels: number): 'ok' | 'fail' {
   const vhid = virtualHid;
   const addon = vhid ? null : loadNative();
-  if (!vhid && !addon) return;
+  if (!vhid && !addon) return 'fail';
   // DOM deltaY is positive scrolling down, Windows wheel delta is positive scrolling up; deltaX
   // is positive to the right on both.
   const toDelta = (pixels: number) => Math.max(-1200, Math.min(1200, Math.round((pixels / DOM_WHEEL_PIXELS_PER_NOTCH) * WHEEL_DELTA)));
@@ -161,23 +173,25 @@ export function injectWheel(dxPixels: number, dyPixels: number): void {
       vhid.mouse.scroll(vertical / WHEEL_DELTA, horizontal / WHEEL_DELTA);
       vhid.sendMouse();
     }
-    return;
+    return 'ok';
   }
-  if (vertical) addon!.sendWheel(vertical, false);
-  if (horizontal) addon!.sendWheel(horizontal, true);
+  let accepted = true;
+  if (vertical) accepted = addon!.sendWheel(vertical, false) && accepted;
+  if (horizontal) accepted = addon!.sendWheel(horizontal, true) && accepted;
+  return accepted ? 'ok' : 'fail';
 }
 
 /** Moves the pointer to (x, y) in 0..1 of the shared display. SendInput's absolute space is the
  * whole virtual desktop (0..65535 over its physical-pixel bounds), so the display's rectangle is
  * converted with dipToScreenRect — correct for any DPI scale or monitor arrangement. */
-export function injectMoveNormalized(displayId: string, x: number, y: number): void {
+export function injectMoveNormalized(displayId: string, x: number, y: number): 'ok' | 'fail' {
   const vhid = virtualHid;
   const addon = vhid ? null : loadNative();
-  if (!vhid && !addon) return;
-  if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+  if (!vhid && !addon) return 'fail';
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return 'fail';
   const displays = screen.getAllDisplays();
   const target = displays.find((d) => String(d.id) === displayId);
-  if (!target) return;
+  if (!target) return 'fail';
   const rects = displays.map((d) => screen.dipToScreenRect(null, d.bounds));
   const left = Math.min(...rects.map((r) => r.x));
   const top = Math.min(...rects.map((r) => r.y));
@@ -193,9 +207,9 @@ export function injectMoveNormalized(displayId: string, x: number, y: number): v
     // The virtual pointer's logical range is 0..32767 (MOUSE_DESCRIPTOR), SendInput's is 0..65535.
     vhid.mouse.moveAbs((absX * MOUSE_ABS_MAX) / 65535, (absY * MOUSE_ABS_MAX) / 65535);
     vhid.sendMouse();
-    return;
+    return 'ok';
   }
-  addon!.sendMouseAbs(Math.round(absX), Math.round(absY));
+  return addon!.sendMouseAbs(Math.round(absX), Math.round(absY)) ? 'ok' : 'fail';
 }
 
 /** Lets go of every key/button whose state is not in the given sets (the controller's periodic

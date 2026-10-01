@@ -12,6 +12,9 @@ import {
   type MoveFrame,
   type PresenceStatus,
   type RcBlockedUser,
+  type DiagItem,
+  type DiagOutcome,
+  type RcDiag,
   type RcEndReason,
   type RcIncomingVerdict,
   type RcPermissions,
@@ -59,6 +62,17 @@ interface Session {
    * the controller's `caps` frame arrives. */
   negotiated: NegotiatedCaps;
   capsSeen: boolean;
+  hookEvents: number;
+  keyFramesIn: number;
+  keyDropped: number;
+  /** Opt-in input diagnostics: per-event outcomes kept in memory only while this is on. */
+  diagOn: boolean;
+  diagItems: DiagItem[];
+  diagNext: number;
+  diagLastMove: number;
+  lastSwallow: boolean;
+  captureLog: Array<{ at: number; swallowing: boolean; why: string }>;
+  hookRearms: number;
 }
 
 let mainWindow: BrowserWindow | null = null;
@@ -159,9 +173,46 @@ function startPending(
 
 // ---- session lifecycle ---------------------------------------------------------------------------
 
+/** Why keyboard capture is on or off right now (controller). */
+function captureWhy(s: Session): string {
+  if (s.role !== 'controller') return 'n/a';
+  if (!s.perms.keyboard) return 'sem permissão de teclado';
+  if (!captureActive) return 'a tela transmitida não está em foco/visível';
+  if (!mainWindow?.isFocused()) return 'o Concord perdeu o foco do Windows';
+  return 'capturando';
+}
+
+/** One hook handler per session, shared by the first start and every re-arm. */
+function makeHookHandler(s: Session): Parameters<typeof injector.startKeyHook>[0] {
+  return (event) => {
+    if (session !== s) return;
+    if (event.exitRequested) {
+      endSession('user-exit');
+      return;
+    }
+    if (s.role === 'controller' && captureActive) {
+      s.hookEvents++;
+      emit('rc:hook-key', { keyId: event.keyId, down: event.down });
+    }
+  };
+}
+
 function applySwallow(): void {
   const s = session;
   const shouldSwallow = !!s && s.role === 'controller' && s.perms.keyboard && captureActive && !!mainWindow?.isFocused();
+  if (s && shouldSwallow !== s.lastSwallow) {
+    s.lastSwallow = shouldSwallow;
+    s.captureLog.push({ at: Date.now(), swallowing: shouldSwallow, why: captureWhy(s) });
+    if (s.captureLog.length > 20) s.captureLog.shift();
+    // Windows silently drops a low-level hook whose callback ever ran too slowly (heavy CPU while
+    // capturing the screen and encoding video is exactly that). Re-arming it every time capture
+    // starts means a hook that died since the last time can't leave typing broken until the session ends.
+    if (shouldSwallow && s.keyHook) {
+      injector.stopKeyHook();
+      s.keyHook = injector.startKeyHook(makeHookHandler(s), false);
+      s.hookRearms++;
+    }
+  }
   injector.setKeyHookSwallow(shouldSwallow);
 }
 
@@ -179,20 +230,24 @@ function startSession(role: Session['role'], peer: PeerInfo, perms: RcPermission
     clipboardTimer: null,
     lastClipboard: '',
     negotiated: negotiateCaps(undefined),
-    capsSeen: false
+    capsSeen: false,
+    hookEvents: 0,
+    keyFramesIn: 0,
+    keyDropped: 0,
+    diagOn: false,
+    diagItems: [],
+    diagNext: 1,
+    diagLastMove: 0,
+    lastSwallow: false,
+    captureLog: [],
+    hookRearms: 0
   };
+  injector.resetInjectStats();
   session = s;
 
   // The hook serves both roles: swallowing keys on the controller, and watching for the
   // Ctrl+Shift+Pause emergency stop on either side.
-  s.keyHook = injector.startKeyHook((event) => {
-    if (session !== s) return;
-    if (event.exitRequested) {
-      endSession('user-exit');
-      return;
-    }
-    if (s.role === 'controller' && captureActive) emit('rc:hook-key', { keyId: event.keyId, down: event.down });
-  }, false);
+  s.keyHook = injector.startKeyHook(makeHookHandler(s), false);
 
   if (role === 'controlled') {
     s.watchdog = setInterval(() => {
@@ -236,6 +291,21 @@ function endSession(reason: RcEndReason, notifyPeer = true): void {
 
 // ---- incoming frames (controlled side) -----------------------------------------------------------
 
+/** Remembers one input event's outcome for the diagnostics panel — only while diagnostics are on
+ * (opt-in, in memory, dropped with the session, never logged or persisted). Mouse moves are sampled. */
+function record(s: Session, item: Omit<DiagItem, 'id'>): void {
+  if (!s.diagOn) return;
+  if (item.kind === 'mv') {
+    const now = Date.now();
+    if (now - s.diagLastMove < 100) return;
+    s.diagLastMove = now;
+  }
+  s.diagItems.push({ ...item, id: s.diagNext++ });
+  if (s.diagItems.length > 200) s.diagItems.shift();
+}
+
+const outcomeOf = (result: string): DiagOutcome => (result === 'guard' ? 'guard' : result === 'fail' ? 'fail' : 'ok');
+
 function acceptSeq(s: Session, kind: keyof Session['lastSeq'], seq: unknown): boolean {
   if (typeof seq !== 'number' || !Number.isFinite(seq) || seq <= s.lastSeq[kind]) return false; // replay / duplicate / stale
   s.lastSeq[kind] = seq;
@@ -251,18 +321,36 @@ function handleInput(peerId: string, frame: ControlFrame): void {
     case 'hb':
       if (Array.isArray(frame.keys) && Array.isArray(frame.buttons)) injector.reconcilePressed(frame.keys, frame.buttons);
       break;
-    case 'key':
-      if (s.perms.keyboard && acceptSeq(s, 'key', frame.seq)) injector.injectKey(frame.k, !!frame.down);
-      break;
-    case 'btn':
-      // Only buttons the controller's real mouse can produce (and the virtual one has) are injected.
-      if (s.perms.mouse && acceptSeq(s, 'btn', frame.seq) && frame.b < s.negotiated.buttons) injector.injectButton(frame.b, !!frame.down);
-      break;
-    case 'wheel':
-      if (s.perms.mouse && acceptSeq(s, 'wheel', frame.seq) && Number.isFinite(frame.dx) && Number.isFinite(frame.dy)) {
-        injector.injectWheel(s.negotiated.horizontalWheel ? frame.dx : 0, frame.dy);
+    case 'key': {
+      s.keyFramesIn++;
+      const base = { kind: 'key' as const, seq: frame.seq, value: frame.k, down: !!frame.down };
+      if (!s.perms.keyboard) {
+        s.keyDropped++;
+        record(s, { ...base, outcome: 'perm' });
+      } else if (!acceptSeq(s, 'key', frame.seq)) {
+        s.keyDropped++;
+        record(s, { ...base, outcome: 'seq' });
+      } else {
+        record(s, { ...base, outcome: outcomeOf(injector.injectKey(frame.k, !!frame.down)) });
       }
       break;
+    }
+    case 'btn': {
+      const base = { kind: 'btn' as const, seq: frame.seq, value: frame.b, down: !!frame.down };
+      if (!s.perms.mouse) record(s, { ...base, outcome: 'perm' });
+      else if (!acceptSeq(s, 'btn', frame.seq)) record(s, { ...base, outcome: 'seq' });
+      // Only buttons the controller's real mouse can produce (and the virtual one has) are injected.
+      else if (frame.b >= s.negotiated.buttons) record(s, { ...base, outcome: 'perm' });
+      else record(s, { ...base, outcome: outcomeOf(injector.injectButton(frame.b, !!frame.down)) });
+      break;
+    }
+    case 'wheel': {
+      const base = { kind: 'wheel' as const, seq: frame.seq, value: 0, down: false, dx: frame.dx, dy: frame.dy };
+      if (!s.perms.mouse) record(s, { ...base, outcome: 'perm' });
+      else if (!acceptSeq(s, 'wheel', frame.seq) || !Number.isFinite(frame.dx) || !Number.isFinite(frame.dy)) record(s, { ...base, outcome: 'seq' });
+      else record(s, { ...base, outcome: outcomeOf(injector.injectWheel(s.negotiated.horizontalWheel ? frame.dx : 0, frame.dy)) });
+      break;
+    }
     case 'caps':
       // Once per session: the controller's real-hardware capabilities, validated here against what
       // this PC's virtual devices can reproduce. Anonymous facts only (common/deviceCaps.ts).
@@ -279,9 +367,12 @@ function handleInput(peerId: string, frame: ControlFrame): void {
 function handleMove(peerId: string, frame: MoveFrame): void {
   const s = session;
   if (!s || s.role !== 'controlled' || peerId !== s.peer.peerId || !shareDisplayId) return;
-  if (!frame || frame.sid !== s.sid || !s.perms.mouse || !acceptSeq(s, 'mv', frame.seq)) return;
+  if (!frame || frame.sid !== s.sid) return;
+  const base = { kind: 'mv' as const, seq: frame.seq, value: 0, down: false, x: frame.x, y: frame.y };
+  if (!s.perms.mouse) return record(s, { ...base, outcome: 'perm' });
+  if (!acceptSeq(s, 'mv', frame.seq)) return record(s, { ...base, outcome: 'seq' });
   s.lastFrameAt = Date.now();
-  injector.injectMoveNormalized(shareDisplayId, frame.x, frame.y);
+  record(s, { ...base, outcome: outcomeOf(injector.injectMoveNormalized(shareDisplayId, frame.x, frame.y)) });
 }
 
 // ---- IPC -------------------------------------------------------------------------------------------
@@ -406,6 +497,41 @@ ipcMain.handle('rc:cancel-pending', (_event, id: string) => {
 ipcMain.handle('rc:end', (_event, reason: RcEndReason) => endSession(reason));
 ipcMain.handle('rc:peer-ended', (_event, sid: string) => {
   if (session?.sid === sid) endSession('revoked', false);
+});
+
+/** Turns the per-event diagnostics on/off for this session (off = nothing is recorded, ring cleared). */
+ipcMain.handle('rc:diag-enable', (_event, on: boolean) => {
+  if (!session) return;
+  session.diagOn = !!on;
+  if (!on) session.diagItems = [];
+});
+
+/** Events recorded after `afterId` (controlled side): what actually arrived and what Windows did. */
+ipcMain.handle('rc:diag-items', (_event, afterId: number): DiagItem[] => {
+  if (!session || !session.diagOn) return [];
+  return session.diagItems.filter((item) => item.id > afterId).slice(-100);
+});
+
+/** Where a typed key currently stops (counters only, never contents) — see RcDiag. */
+ipcMain.handle('rc:diag', async (): Promise<RcDiag | null> => {
+  const s = session;
+  if (!s) return null;
+  return {
+    role: s.role,
+    keyHook: s.keyHook,
+    swallowing: s.role === 'controller' && s.perms.keyboard && captureActive && !!mainWindow?.isFocused(),
+    captureActive,
+    windowFocused: !!mainWindow?.isFocused(),
+    captureWhy: captureWhy(s),
+    captureLog: s.captureLog,
+    hookRearms: s.hookRearms,
+    hookEvents: s.hookEvents,
+    keyFramesIn: s.keyFramesIn,
+    keyDropped: s.keyDropped,
+    injected: injector.injectStats.injected,
+    injectFailed: injector.injectStats.failed,
+    elevated: await isElevated()
+  };
 });
 
 /** This PC's own keyboard/mouse capabilities, for the controller to send at session start. */

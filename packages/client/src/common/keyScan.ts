@@ -25,6 +25,22 @@ export const CODE_TO_KEY: Record<string, number> = {
   MetaRight: 0x5c | EXT, ContextMenu: 0x5d | EXT
 };
 
+const NAME_BY_ID: Record<number, string> = Object.fromEntries(Object.entries(CODE_TO_KEY).map(([code, id]) => [id, code]));
+const ASCII_BY_NAME: Record<string, number> = { Space: 32, Enter: 13, Tab: 9, Backspace: 8, Escape: 27, Delete: 127, NumpadEnter: 13 };
+
+/** Human-readable description of a wire key id for the input diagnostics panel: the key's name,
+ * its scan code in hex and, where the key has one, its ASCII code (letters report the uppercase
+ * letter, as a keyboard key has no case of its own). */
+export function describeKey(keyId: number): { name: string; hex: string; ascii: number | null } {
+  const name = NAME_BY_ID[keyId] ?? 'desconhecida';
+  let ascii: number | null = ASCII_BY_NAME[name] ?? null;
+  const letter = /^Key([A-Z])$/.exec(name);
+  const digit = /^Digit([0-9])$/.exec(name);
+  if (letter) ascii = letter[1].charCodeAt(0);
+  else if (digit) ascii = digit[1].charCodeAt(0);
+  return { name, hex: `0x${keyId.toString(16).toUpperCase().padStart(2, '0')}`, ascii };
+}
+
 /** Every valid key id the controlled side accepts — anything else on the wire is dropped. */
 export const VALID_KEY_IDS = new Set(Object.values(CODE_TO_KEY));
 

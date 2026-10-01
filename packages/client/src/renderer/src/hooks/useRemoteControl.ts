@@ -3,8 +3,12 @@ import {
   RC_TIMING,
   normalizePerms,
   type ControlFrame,
+  type DiagItem,
+  type DiagKind,
+  type DiagOutcome,
   type FileFrame,
   type MoveFrame,
+  type RcDiag,
   type RcEndReason,
   type RcPermissions,
   type RcSessionInfo,
@@ -38,6 +42,21 @@ interface Outgoing {
   name: string;
   kind: SolicitationKind;
   perms: RcPermissions;
+}
+
+/** One input event as the CONTROLLER sent it, joined with the controlled PC's confirmation. */
+export interface DiagRow {
+  kind: DiagKind;
+  seq: number;
+  value: number;
+  down: boolean;
+  x?: number;
+  y?: number;
+  dx?: number;
+  dy?: number;
+  sentAt: number;
+  /** 'pending' until the controlled PC reports back. */
+  outcome: DiagOutcome | 'pending';
 }
 
 export interface RcDialog {
@@ -111,6 +130,14 @@ export function useRemoteControl({
   // userId -> end of the refusal cooldown that peer told us about (UI hint only — the recipient's
   // main process is the real gate).
   const [cooldownUntil, setCooldownUntil] = useState<Record<string, number>>({});
+  // Counters showing where a typed key stops (captured/sent/received/applied) — polled while a session lives.
+  const [diag, setDiag] = useState<RcDiag | null>(null);
+  // Opt-in input diagnostics (off by default, memory only, never logged): what the controller sent
+  // vs what the controlled PC received and did with it. See RemoteControlDiagPanel.
+  const [diagOn, setDiagOn] = useState(false);
+  const [diagSent, setDiagSent] = useState<DiagRow[]>([]);
+  const [diagRecv, setDiagRecv] = useState<DiagItem[]>([]);
+  const [ackFlag, setAckFlag] = useState(false);
   const [focusRequest, setFocusRequest] = useState<{ peerId: string; nonce: number } | null>(null);
 
   // Everything the long-lived IPC/channel callbacks need, always current.
@@ -124,6 +151,9 @@ export function useRemoteControl({
   // controlled PC acknowledges every heartbeat), since the controller has no other way to notice
   // the other side vanished while its keyboard is being swallowed.
   const lastPeerFrameAt = useRef(0);
+  const diagOnRef = useRef(false);
+  const ackWanted = useRef(false);
+  const lastMoveLogged = useRef(0);
 
   const showNotice = useCallback((text: string) => setNotice({ text, nonce: Date.now() }), []);
   const files = useFileTransfer({ session, sendFileFrame, sendFileChunk, showNotice });
@@ -144,6 +174,12 @@ export function useRemoteControl({
     pressedButtons.current.clear();
     lastPeerFrameAt.current = Date.now();
     setSession(info);
+    diagOnRef.current = false;
+    ackWanted.current = false;
+    setDiagOn(false);
+    setAckFlag(false);
+    setDiagSent([]);
+    setDiagRecv([]);
     if (info.role === 'controlled') {
       void window.concord.remoteControl.getState().then((state) => {
         if (!state.elevated) {
@@ -180,6 +216,27 @@ export function useRemoteControl({
       const send = (f: ControlFrame) => live.current.sendControlFrame(peerId, f);
       const activeSession = live.current.session;
       if (activeSession && activeSession.peerId === peerId) lastPeerFrameAt.current = Date.now();
+
+      // Diagnostics frames never reach the main process.
+      if (frame.t === 'diag') {
+        if (activeSession?.role === 'controlled' && frame.sid === activeSession.sid) {
+          ackWanted.current = !!frame.on;
+          setAckFlag(!!frame.on);
+          void api.diagEnable(!!frame.on || diagOnRef.current);
+        }
+        return;
+      }
+      if (frame.t === 'dack') {
+        if (activeSession?.role === 'controller' && frame.sid === activeSession.sid && Array.isArray(frame.items)) {
+          setDiagSent((prev) =>
+            prev.map((row) => {
+              const ack = frame.items.find((item) => item.kind === row.kind && item.seq === row.seq);
+              return ack && row.outcome === 'pending' ? { ...row, outcome: ack.outcome } : row;
+            })
+          );
+        }
+        return;
+      }
 
       if (frame.t === 'hb' && activeSession) {
         // Controlled: acknowledge so the controller can tell this PC is still there, then let the
@@ -286,6 +343,12 @@ export function useRemoteControl({
       pressedKeys.current.clear();
       pressedButtons.current.clear();
       setSession(null);
+      diagOnRef.current = false;
+      ackWanted.current = false;
+      setDiagOn(false);
+      setAckFlag(false);
+      setDiagSent([]);
+      setDiagRecv([]);
       void api.setCapture(false);
       showNotice(endText(reason, s.peerName, notifyPeer));
     });
@@ -348,6 +411,51 @@ export function useRemoteControl({
     if (selfPeerId === null && live.current.session) void window.concord.remoteControl.end('peer-left');
   }, [selfPeerId]);
 
+  const hasSession = !!session;
+  useEffect(() => {
+    if (!hasSession) {
+      setDiag(null);
+      return;
+    }
+    let cancelled = false;
+    const poll = () =>
+      void window.concord.remoteControl.getDiag().then((value) => {
+        if (!cancelled) setDiag(value);
+      });
+    poll();
+    const timer = setInterval(poll, 1000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [hasSession]);
+
+  // Controlled side, diagnostics on (locally, or because the controller asked): read what main
+  // recorded (what arrived + what Windows did with it), show it, and answer the controller.
+  const controlledSid = session?.role === 'controlled' ? session.sid : null;
+  const controlledPeer = session?.role === 'controlled' ? session.peerId : null;
+  useEffect(() => {
+    if (!controlledSid || !controlledPeer || !(diagOn || ackFlag)) return;
+    let last = 0;
+    let busy = false;
+    const timer = setInterval(() => {
+      if (busy) return;
+      busy = true;
+      void window.concord.remoteControl
+        .diagItems(last)
+        .then((items) => {
+          if (items.length === 0) return;
+          last = items[items.length - 1].id;
+          setDiagRecv((prev) => [...prev, ...items].slice(-60));
+          if (ackWanted.current) live.current.sendControlFrame(controlledPeer, { t: 'dack', sid: controlledSid, items: items.slice(-40) });
+        })
+        .finally(() => {
+          busy = false;
+        });
+    }, 300);
+    return () => clearInterval(timer);
+  }, [controlledSid, controlledPeer, diagOn, ackFlag]);
+
   // ---- controller: heartbeat + input ---------------------------------------------------------
 
   const sid = session?.sid;
@@ -379,12 +487,25 @@ export function useRemoteControl({
     return s && s.role === 'controller' ? s : null;
   }
 
+  /** Records what the controller just sent (diagnostics only; moves are sampled). */
+  function logSent(row: Omit<DiagRow, 'sentAt' | 'outcome'>): void {
+    if (!diagOnRef.current) return;
+    if (row.kind === 'mv') {
+      const now = Date.now();
+      if (now - lastMoveLogged.current < 100) return;
+      lastMoveLogged.current = now;
+    }
+    setDiagSent((prev) => [...prev.slice(-59), { ...row, sentAt: Date.now(), outcome: 'pending' }]);
+  }
+
   function controllerKey(keyId: number, down: boolean): void {
     const s = activeController();
     if (!s || !s.perms.keyboard) return;
     if (down) pressedKeys.current.add(keyId);
     else pressedKeys.current.delete(keyId);
-    live.current.sendControlFrame(s.peerId, { t: 'key', sid: s.sid, seq: ++seq.current.key, k: keyId, down });
+    const n = ++seq.current.key;
+    logSent({ kind: 'key', seq: n, value: keyId, down });
+    live.current.sendControlFrame(s.peerId, { t: 'key', sid: s.sid, seq: n, k: keyId, down });
   }
 
   const controller = {
@@ -394,12 +515,16 @@ export function useRemoteControl({
       if (!s || !s.perms.mouse) return;
       if (down) pressedButtons.current.add(button);
       else pressedButtons.current.delete(button);
-      live.current.sendControlFrame(s.peerId, { t: 'btn', sid: s.sid, seq: ++seq.current.btn, b: button, down });
+      const n = ++seq.current.btn;
+      logSent({ kind: 'btn', seq: n, value: button, down });
+      live.current.sendControlFrame(s.peerId, { t: 'btn', sid: s.sid, seq: n, b: button, down });
     },
     sendWheel(dx: number, dy: number): void {
       const s = activeController();
       if (!s || !s.perms.mouse) return;
-      live.current.sendControlFrame(s.peerId, { t: 'wheel', sid: s.sid, seq: ++seq.current.wheel, dx, dy });
+      const n = ++seq.current.wheel;
+      logSent({ kind: 'wheel', seq: n, value: 0, down: false, dx, dy });
+      live.current.sendControlFrame(s.peerId, { t: 'wheel', sid: s.sid, seq: n, dx, dy });
     },
     /** Sends "up" for everything currently held (focus left the view, window blur...). */
     releaseAll(): void {
@@ -409,7 +534,9 @@ export function useRemoteControl({
     sendMove(x: number, y: number): void {
       const s = activeController();
       if (!s || !s.perms.mouse) return;
-      live.current.sendMoveFrame(s.peerId, { t: 'mv', sid: s.sid, seq: ++seq.current.mv, x, y });
+      const n = ++seq.current.mv;
+      logSent({ kind: 'mv', seq: n, value: 0, down: false, x, y });
+      live.current.sendMoveFrame(s.peerId, { t: 'mv', sid: s.sid, seq: n, x, y });
     }
   };
 
@@ -442,6 +569,24 @@ export function useRemoteControl({
     peerFullScreen,
     cooldownUntil,
     focusRequest,
+    diag,
+    diagOn,
+    diagSent,
+    diagRecv,
+    /** Turns the opt-in input diagnostics on/off for this side of the session. */
+    toggleDiag(on: boolean): void {
+      diagOnRef.current = on;
+      setDiagOn(on);
+      const s = live.current.session;
+      if (!s) return;
+      if (s.role === 'controller') {
+        live.current.sendControlFrame(s.peerId, { t: 'diag', sid: s.sid, on });
+        if (!on) setDiagSent([]);
+      } else {
+        void window.concord.remoteControl.diagEnable(on || ackWanted.current);
+        if (!on) setDiagRecv([]);
+      }
+    },
     files,
     controller,
     openDialog: (kind: SolicitationKind, peerId: string) => setDialog({ kind, peerId }),

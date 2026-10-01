@@ -1,4 +1,5 @@
 import type { ControllerCaps } from '../../../common/deviceCaps';
+import type { DiagItem, RcDiag } from '../../../common/remoteControl';
 import type {
   ControlFrame,
   FileFrame,
@@ -177,6 +178,9 @@ declare global {
         peerEnded: (sid: string) => Promise<void>;
         setCapture: (active: boolean) => Promise<void>;
         getLocalCaps: () => Promise<ControllerCaps | null>;
+        getDiag: () => Promise<RcDiag | null>;
+        diagEnable: (on: boolean) => Promise<void>;
+        diagItems: (afterId: number) => Promise<DiagItem[]>;
         sendInput: (peerId: string, frame: ControlFrame) => void;
         sendMove: (peerId: string, frame: MoveFrame) => void;
         clipboardRemote: (peerId: string, sid: string, text: string) => void;

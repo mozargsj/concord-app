@@ -75,7 +75,11 @@ export type ControlFrame =
   | { t: 'clip'; sid: string; text: string }
   /** Controller -> controlled, once at session start: functional capabilities of the controller's
    * real keyboard/mouse (deviceCaps.ts). Anonymous by construction. */
-  | { t: 'caps'; sid: string; caps: unknown };
+  | { t: 'caps'; sid: string; caps: unknown }
+  /** Input diagnostics (opt-in, in-memory only): the controller asks the controlled PC to report what
+   * arrived, and the controlled PC answers with batches of per-event outcomes. */
+  | { t: 'diag'; sid: string; on: boolean }
+  | { t: 'dack'; sid: string; items: DiagItem[] };
 
 /** Frames on the unordered, no-retransmit 'input-move' channel — stale positions are useless. */
 export interface MoveFrame {
@@ -99,6 +103,52 @@ export interface RcSessionInfo {
    * work). False = degraded: the controller falls back to DOM key events and the controlled PC
    * has no global emergency shortcut, only the indicator button. */
   keyHook: boolean;
+}
+
+export type DiagKind = 'key' | 'btn' | 'wheel' | 'mv';
+/** What the controlled PC did with one input event: applied, refused by Windows, no permission,
+ * replay/stale sequence, or blocked by the Ctrl+Alt+Del guard. */
+export type DiagOutcome = 'ok' | 'fail' | 'perm' | 'seq' | 'guard';
+
+/** One input event as seen on the controlled PC, for the diagnostics panel. */
+export interface DiagItem {
+  id: number;
+  kind: DiagKind;
+  /** Sequence number from the wire — the join key between "sent" (controller) and "arrived". */
+  seq: number;
+  /** key id (scan code, +0x100 extended) for keys, wire button id for buttons, 0 otherwise. */
+  value: number;
+  down: boolean;
+  x?: number;
+  y?: number;
+  dx?: number;
+  dy?: number;
+  outcome: DiagOutcome;
+}
+
+/** Counters (never key contents) that show where a typed key stops: captured -> sent -> received ->
+ * applied. Polled by the UI while a session is active. */
+export interface RcDiag {
+  role: 'controller' | 'controlled';
+  /** Controller: the native keyboard hook runs / is currently swallowing keys for this session. */
+  keyHook: boolean;
+  swallowing: boolean;
+  captureActive: boolean;
+  windowFocused: boolean;
+  /** Controller: key events the hook captured and handed to the renderer. */
+  hookEvents: number;
+  /** Controlled: key frames received, rejected (permission / replay) and applied or refused by Windows. */
+  keyFramesIn: number;
+  keyDropped: number;
+  injected: number;
+  injectFailed: number;
+  elevated: boolean;
+  /** Controller: why keyboard capture is on/off right now, and its last transitions (no key contents) —
+   * the first thing to read when typing works "sometimes". */
+  captureWhy: string;
+  captureLog: Array<{ at: number; swallowing: boolean; why: string }>;
+  /** Times the native hook was re-armed on a capture start (Windows can drop a slow low-level hook silently). */
+  hookRearms: number;
 }
 
 export type RcEndReason = 'revoked' | 'share-stopped' | 'heartbeat' | 'peer-left' | 'user-exit' | 'error';

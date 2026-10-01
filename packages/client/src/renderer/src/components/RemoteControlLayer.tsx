@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import Button from './Button';
+import RemoteControlDiagPanel from './RemoteControlDiagPanel';
 import type { RemoteControlApi } from '../hooks/useRemoteControl';
 import type { RoomPeer } from '../hooks/useRoomConnection';
 import type { RcPermissions } from '../../../common/remoteControl';
@@ -37,6 +38,7 @@ export default function RemoteControlLayer({ rc, peers }: Props) {
 
   return (
     <>
+      <RemoteControlDiagPanel rc={rc} />
       {dialog && dialogPeer && (
         <PermissionDialog
           kind={dialog.kind}
