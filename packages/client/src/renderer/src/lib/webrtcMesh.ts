@@ -42,6 +42,9 @@ const ICE_DISCONNECTED_REPORT_DELAY_MS = 8000;
 // getStats() poll for the "está falando" indicator — RFC 6464 audioLevel, per decisions.md.
 const SPEAKING_POLL_INTERVAL_MS = 200;
 const SPEAKING_THRESHOLD = 0.05;
+// Muted, the local analyser hears the bare capture (no AGC/RNNoise/gain lifting speech to the level
+// SPEAKING_THRESHOLD was calibrated on), so it needs a lower bar. Starting value, tune on a real mic.
+const MUTED_SPEAKING_THRESHOLD = 0.02;
 const SPEAKING_DEBOUNCE_TICKS = 2; // consecutive ticks required before flipping state, avoids flicker
 
 // [Teste, pedido do Mozar] O anel de "está falando" do próprio usuário sempre usou o mesmo poll
@@ -456,10 +459,10 @@ export class MeshManager {
   private audioContext: AudioContext | null = null;
   private micAnalyser: AnalyserNode | null = null;
   private micAnalyserSource: MediaStreamAudioSourceNode | null = null;
-  // Mute never touches micTrack.enabled (that silences it for every consumer, including this
-  // class's own analyser — which is exactly what "detect speech while muted" needs to survive).
-  // Instead it's enforced per-connection via RTCRtpSender.replaceTrack(null), same mechanism
-  // already used for device swaps, so it needs no renegotiation either.
+  // Mute is enforced per-connection via RTCRtpSender.replaceTrack(null), same mechanism already
+  // used for device swaps, so it needs no renegotiation. While muted micTrack is null: the
+  // processed pipeline is gone (releaseLocalMicTrack) and the analyser listens to a bare monitor
+  // capture instead (setLocalMicMonitorTrack) that is never attached to a connection.
   private micMuted = false;
   // User-configurable (SettingsModal.tsx, lib/hardwareEncodePreference.ts), default on — set once
   // at mesh creation via setHardwareEncodePreference(), read at track-add time by
@@ -927,6 +930,22 @@ export class MeshManager {
         void entry.senders.mic?.replaceTrack(null);
       }
     }
+    this.rewireMicAnalyser(track);
+  }
+
+  /** Forgets the sendable mic track while the user is muted (setMicMuted already nulled every
+   * sender), so a connection created meanwhile never receives the stopped track. Unlike
+   * setLocalMicTrack(null) it leaves the senders alone — removing them would renegotiate on every
+   * mute/unmute. */
+  releaseLocalMicTrack(): void {
+    if (this.micTrack) this.personalStream.removeTrack(this.micTrack);
+    this.micTrack = null;
+    this.rewireMicAnalyser(null);
+  }
+
+  /** Muted: points the speaking-level analyser at a bare capture of the mic ("falando mas
+   * mutado"). It is only listened to locally — never added to personalStream or any connection. */
+  setLocalMicMonitorTrack(track: MediaStreamTrack): void {
     this.rewireMicAnalyser(track);
   }
 
@@ -2098,7 +2117,7 @@ export class MeshManager {
     // naturally the way it already is on every remote peer's own copy of getStats().
     if (this.soundboardLocalPlaybackCount > 0) level = Math.max(level, 1);
 
-    const aboveThreshold = level > SPEAKING_THRESHOLD;
+    const aboveThreshold = level > (this.micMuted ? MUTED_SPEAKING_THRESHOLD : SPEAKING_THRESHOLD);
     if (aboveThreshold) {
       // Fast attack: any single sample above threshold turns it on right away, and cancels a
       // pending "turn off" from a moment ago — still speaking through a brief dip/pause.

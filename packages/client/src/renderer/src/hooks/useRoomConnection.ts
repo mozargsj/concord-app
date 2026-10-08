@@ -37,6 +37,16 @@ const MIC_CONSTRAINTS = (preferredDeviceId: string | null, rnnoiseEnabled: boole
   ...(preferredDeviceId ? { deviceId: { exact: preferredDeviceId } } : {})
 });
 
+// Muted: the mic stays open only so the app can notice the user talking ("falando mas mutado").
+// Nothing around it runs — no browser echo cancellation/AGC/noise suppression here, no RNNoise,
+// no gate, no gain (see acquireMicPipeline's monitorOnly) — and the track is never sent.
+const MONITOR_MIC_CONSTRAINTS = (preferredDeviceId: string | null): MediaTrackConstraints => ({
+  echoCancellation: false,
+  noiseSuppression: false,
+  autoGainControl: false,
+  ...(preferredDeviceId ? { deviceId: { exact: preferredDeviceId } } : {})
+});
+
 interface MicPipeline {
   track: MediaStreamTrack;
   /** Tears down everything this pipeline created (the RNNoise graph, if any, and the raw
@@ -51,12 +61,15 @@ interface MicPipeline {
  * track if RNNoise itself fails to load/initialize (e.g. AudioWorklet unsupported) rather than
  * losing mic input entirely; returns null only if there's no mic at all (denied/unavailable). The
  * gate applies either way (raw or denoised) — it's cutting by *level*, not doing RNNoise's
- * spectral denoising, so the two are complementary, not redundant. */
-async function acquireMicPipeline(preferredDeviceId: string | null): Promise<MicPipeline | null> {
+ * spectral denoising, so the two are complementary, not redundant. With `monitorOnly` (the user
+ * is muted) it returns the bare capture — no processing constraints, no RNNoise, no gate/gain. */
+async function acquireMicPipeline(preferredDeviceId: string | null, monitorOnly: boolean): Promise<MicPipeline | null> {
   let stream: MediaStream;
   try {
     stream = await navigator.mediaDevices.getUserMedia({
-      audio: MIC_CONSTRAINTS(preferredDeviceId, getRnnoiseEnabled())
+      audio: monitorOnly
+        ? MONITOR_MIC_CONSTRAINTS(preferredDeviceId)
+        : MIC_CONSTRAINTS(preferredDeviceId, getRnnoiseEnabled())
     });
   } catch {
     return null; // no mic available/denied — proceed without local audio (video-only participation)
@@ -69,6 +82,7 @@ async function acquireMicPipeline(preferredDeviceId: string | null): Promise<Mic
   }
 
   const stopRawStream = () => stream.getTracks().forEach((track) => track.stop());
+  if (monitorOnly) return { track: rawTrack, cleanup: stopRawStream };
 
   let preGateTrack = rawTrack;
   let stopPreGate = stopRawStream;
@@ -217,6 +231,14 @@ export function useRoomConnection(
   // raw stream) — replaces a plain MediaStream ref since RNNoise being in the loop means there's
   // more than just tracks to stop now (see acquireMicPipeline).
   const micCleanupRef = useRef<(() => void) | null>(null);
+  // Two kinds of mic pipeline, picked by mute state: unmuted = the full one (browser processing,
+  // RNNoise, gate, gain, sent to peers); muted = the bare capture, kept open only for the local
+  // "speaking while muted" detector and never sent. Muting/unmuting swaps one for the other. The
+  // ref lets async acquisitions and the room effect see the latest mute state; the counter lets a
+  // newer acquisition invalidate one still loading.
+  const isMicMutedRef = useRef(isMicMuted);
+  isMicMutedRef.current = isMicMuted;
+  const micAcquireIdRef = useRef(0);
   // Read inside the onImageRequest/requestPeerImages callbacks (created once per room
   // connection) — refs keep them seeing the latest value without needing to recreate the mesh
   // every time one changes, same trick as every other prop this hook watches via a side effect.
@@ -232,6 +254,27 @@ export function useRoomConnection(
   // Same synchronous-read trick, for onChatHistoryRequest below — answering a peer's "what do you
   // have" can't wait on a setState round-trip either.
   const chatMessagesRef = useRef<ChatMessage[]>([]);
+
+  /** Opens the mic pipeline matching the current mute state and hands it to the mesh, replacing
+   * the previous one. A pipeline that finishes loading after the mute state changed, after a newer
+   * acquisition started, or after the room was left is torn down instead of installed. Returns
+   * whether it was installed. */
+  async function startMic(mesh: MeshManager, deviceId: string | null): Promise<boolean> {
+    const acquireId = ++micAcquireIdRef.current;
+    const monitorOnly = isMicMutedRef.current;
+    const pipeline = await acquireMicPipeline(deviceId, monitorOnly);
+    if (!pipeline) return false;
+    if (acquireId !== micAcquireIdRef.current || isMicMutedRef.current !== monitorOnly || meshRef.current !== mesh) {
+      pipeline.cleanup();
+      return false;
+    }
+    const oldCleanup = micCleanupRef.current;
+    micCleanupRef.current = pipeline.cleanup;
+    if (monitorOnly) mesh.setLocalMicMonitorTrack(pipeline.track);
+    else mesh.setLocalMicTrack(pipeline.track);
+    oldCleanup?.();
+    return true;
+  }
 
   useEffect(() => {
     myAvatarUrlRef.current = myAvatarUrl;
@@ -751,16 +794,10 @@ export function useRoomConnection(
       }
     });
 
-    const preferredMic = getPreferredDeviceId('audioinput');
-    void acquireMicPipeline(preferredMic).then((pipeline) => {
-      if (!pipeline) return;
-      if (cancelled) {
-        pipeline.cleanup();
-        return;
-      }
-      micCleanupRef.current = pipeline.cleanup;
-      mesh.setLocalMicTrack(pipeline.track);
-    });
+    // A new mesh starts unmuted, so a user who joins while muted must be muted here (the mute
+    // effect below only fires on a change); startMic then opens the bare monitor capture for them.
+    mesh.setMicMuted(isMicMutedRef.current);
+    void startMic(mesh, getPreferredDeviceId('audioinput'));
 
     let pingInterval: ReturnType<typeof setInterval> | null = null;
 
@@ -824,7 +861,19 @@ export function useRoomConnection(
   }, [roomId]);
 
   useEffect(() => {
-    meshRef.current?.setMicMuted(isMicMuted);
+    const mesh = meshRef.current;
+    if (!mesh) return;
+    mesh.setMicMuted(isMicMuted);
+    if (isMicMuted) {
+      // Muted by choice: drop the processed pipeline right away (browser processing, RNNoise, gate,
+      // gain all stop with it) before the bare monitor capture opens below.
+      mesh.releaseLocalMicTrack();
+      micCleanupRef.current?.();
+      micCleanupRef.current = null;
+    }
+    // Unmuting needs no teardown first: startMic swaps the monitor capture out once the full
+    // pipeline is ready, so the speaking ring keeps working through the gap.
+    void startMic(mesh, getPreferredDeviceId('audioinput'));
   }, [isMicMuted]);
 
   // Lets every other client show a "not listening/speaking" indicator next to this peer's
@@ -963,13 +1012,9 @@ export function useRoomConnection(
   async function switchMicDevice(deviceId: string | null): Promise<void> {
     const mesh = meshRef.current;
     if (!mesh) return;
-    const pipeline = await acquireMicPipeline(deviceId);
-    if (!pipeline) return; // swap failed — keep using the previous mic track
-    const oldCleanup = micCleanupRef.current;
-    micCleanupRef.current = pipeline.cleanup;
-    mesh.setLocalMicTrack(pipeline.track);
-    oldCleanup?.();
-    sendDeviceSwitched('mic');
+    // A failed swap keeps using the previous mic track. Muted, only the local monitor capture
+    // moves to the new device — nothing changed for peers, so there is no "device switched" cue.
+    if ((await startMic(mesh, deviceId)) && !isMicMutedRef.current) sendDeviceSwitched('mic');
   }
 
   /** Re-acquires the current device through the mic pipeline from scratch — the only way to pick
@@ -978,13 +1023,9 @@ export function useRoomConnection(
    * picker, so it doesn't announce a "device switched" sound — nothing actually changed hardware-wise. */
   async function refreshMicPipeline(): Promise<void> {
     const mesh = meshRef.current;
-    if (!mesh) return;
-    const pipeline = await acquireMicPipeline(getPreferredDeviceId('audioinput'));
-    if (!pipeline) return;
-    const oldCleanup = micCleanupRef.current;
-    micCleanupRef.current = pipeline.cleanup;
-    mesh.setLocalMicTrack(pipeline.track);
-    oldCleanup?.();
+    // Muted: the monitor capture has no RNNoise, and unmuting reads the setting fresh.
+    if (!mesh || isMicMutedRef.current) return;
+    await startMic(mesh, getPreferredDeviceId('audioinput'));
   }
 
   return {

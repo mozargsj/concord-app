@@ -95,6 +95,12 @@ const EXTENSION_BY_MIME_TYPE: Record<string, string> = {
   'image/webp': '.webp'
 };
 
+// Keeps the mic's auto gain control inside the app. By default Chromium's WebRTC AGC also moves
+// the Windows capture-device volume (the slider in Sound settings, shared with every other app and,
+// on some headsets, with the output volume). Disabled, the AGC only adjusts the signal digitally.
+// Must run before app 'ready'.
+app.commandLine.appendSwitch('disable-features', 'WebRtcAllowInputVolumeAdjustment');
+
 // Single-instance lock — only enforced for the packaged app. Dev mode deliberately allows
 // multiple windows/processes: that's how two peers are tested locally (npm run dev:electron
 // run twice). Packaged Concord should never run as two processes; launching it again just
