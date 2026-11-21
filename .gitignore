@@ -32,3 +32,6 @@ packages/server/updates/
 Thumbs.db
 .vscode/*
 !.vscode/extensions.json
+
+# Documentação interna: nenhum .md vai para o repositório (pedido do Mozar, 2026-11-21).
+*.md
