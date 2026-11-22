@@ -1,7 +1,7 @@
 {
   "name": "@concord/client",
   "private": true,
-  "version": "0.0.99",
+  "version": "0.0.100",
   "description": "Concord — app P2P de áudio ao vivo e transmissão de tela, estilo Discord",
   "author": "Mozar",
   "main": "out/electron/main/index.js",
@@ -10,7 +10,7 @@
     "dev:renderer:test-dev": "vite --mode test-dev",
     "dev:renderer:test-real": "vite --mode test-real",
     "dev:electron": "tsc -p tsconfig.electron.json && electron out/electron/main/index.js",
-    "dev": "concurrently -k -n renderer,electron -c blue,green \"npm:dev:renderer\" \"wait-on tcp:5192 && npm run dev:electron\"",
+    "dev": "concurrently -k -n renderer,electron -c blue,green \"npm:dev:renderer\" \"wait-on tcp:5192 && npm run dev:electron:admin\"",
     "dev:test-dev": "concurrently -k -n renderer,electron -c blue,green \"npm:dev:renderer:test-dev\" \"wait-on tcp:5192 && npm run dev:electron\"",
     "dev:test-real": "concurrently -k -n renderer,electron -c blue,green \"npm:dev:renderer:test-real\" \"wait-on tcp:5192 && npm run dev:electron\"",
     "build:renderer": "vite build",
@@ -24,7 +24,9 @@
     "package:test-dev": "npm run build:test-dev && electron-builder --config.productName=ConcordTest --config.appId=com.concord.app.test",
     "package:test-real": "npm run build:test-real && electron-builder --config.productName=ConcordTestReal --config.appId=com.concord.app.test-real --config.publish.url=https://test-local.undersoft.tec.br/updates/",
     "typecheck": "tsc -p tsconfig.renderer.json --noEmit && tsc -p tsconfig.electron.json --noEmit",
-    "build:native": "node native/process-loopback/build.js && node native/input-control/build.js"
+    "build:native": "node native/process-loopback/build.js && node native/input-control/build.js",
+    "dev:electron:admin": "tsc -p tsconfig.electron.json && powershell -NoProfile -ExecutionPolicy Bypass -File scripts/dev-electron-admin.ps1",
+    "dev:no-admin": "concurrently -k -n renderer,electron -c blue,green \"npm:dev:renderer\" \"wait-on tcp:5192 && npm run dev:electron\""
   },
   "dependencies": {
     "@sapphi-red/web-noise-suppressor": "^0.4.0",

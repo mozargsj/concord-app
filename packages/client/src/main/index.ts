@@ -95,11 +95,18 @@ const EXTENSION_BY_MIME_TYPE: Record<string, string> = {
   'image/webp': '.webp'
 };
 
-// Keeps the mic's auto gain control inside the app. By default Chromium's WebRTC AGC also moves
-// the Windows capture-device volume (the slider in Sound settings, shared with every other app and,
-// on some headsets, with the output volume). Disabled, the AGC only adjusts the signal digitally.
-// Must run before app 'ready'.
-app.commandLine.appendSwitch('disable-features', 'WebRtcAllowInputVolumeAdjustment');
+// One --disable-features switch, so both stay in this one list. Must run before app 'ready'.
+// - WebRtcAllowInputVolumeAdjustment: keeps the mic's auto gain control inside the app. By default
+//   Chromium's WebRTC AGC also moves the Windows capture-device volume (the slider in Sound
+//   settings, shared with every other app and, on some headsets, with the output volume). Disabled,
+//   the AGC only adjusts the signal digitally.
+// - AllowWgcWindowCapturer: [Bug corrigido, 2026-11-22] with Concord elevated (requireAdministrator,
+//   since 0.0.95), the Windows Graphics Capture window capturer is created but never delivers a
+//   first frame, so sharing an app window failed with "Could not start video source" (reproduced
+//   with the same build elevated vs. not). Disabled, window capture uses Chromium's previous capturer
+//   (screen crop / GDI). Revisit if Concord stops running elevated (Virtual HID service, see
+//   decisions.md §10).
+app.commandLine.appendSwitch('disable-features', 'WebRtcAllowInputVolumeAdjustment,AllowWgcWindowCapturer');
 
 // Single-instance lock — only enforced for the packaged app. Dev mode deliberately allows
 // multiple windows/processes: that's how two peers are tested locally (npm run dev:electron

@@ -23,8 +23,10 @@ RUN_ID=$(gh run list --workflow=release.yml --json databaseId,headBranch,status,
   --jq "[.[] | select(.event == \"push\")] | .[0].databaseId")
 # gh run list não filtra por tag diretamente — confirma que a tag do run mais recente bate,
 # em vez de assumir. Evita publicar artefato errado se o release mais recente não for este.
-RUN_TAG=$(gh run view "$RUN_ID" --json displayTitle --jq '.displayTitle')
-if [[ "$RUN_TAG" != *"$VERSION"* ]]; then
+# [Corrigido, 2026-11-22] Compara a tag do run (headBranch), não o título: o GitHub corta o
+# displayTitle em ~70 caracteres, e a versão no fim da mensagem do commit some ("... 0…").
+RUN_TAG=$(gh run view "$RUN_ID" --json headBranch --jq '.headBranch')
+if [[ "$RUN_TAG" != "$TAG" ]]; then
   echo "ERRO: o run de CI mais recente ($RUN_ID, \"$RUN_TAG\") não parece ser da versão $VERSION." >&2
   echo "Rode 'gh run list --workflow=release.yml' e confirme antes de tentar de novo." >&2
   exit 1
@@ -47,9 +49,11 @@ fi
 
 echo "==> Subindo pro R2 (concord-media/updates/)..."
 cd "$WORKER_DIR"
-npx wrangler r2 object put concord-media/updates/latest.yml --file="$TMP_DIR/latest.yml" --remote --content-type="application/x-yaml"
+# [Corrigido, 2026-11-22] latest.yml por último: é ele que anuncia a versão. Subido antes, uma
+# falha no meio deixava os apps vendo a versão nova com o instalador antigo (hash não bate).
 npx wrangler r2 object put concord-media/updates/Concord-Setup.exe --file="$TMP_DIR/Concord-Setup.exe" --remote --content-type="application/octet-stream"
 npx wrangler r2 object put concord-media/updates/Concord-Setup.exe.blockmap --file="$TMP_DIR/Concord-Setup.exe.blockmap" --remote --content-type="application/octet-stream"
+npx wrangler r2 object put concord-media/updates/latest.yml --file="$TMP_DIR/latest.yml" --remote --content-type="application/x-yaml"
 
 echo "==> Confirmando que está servindo..."
 SERVED_VERSION=$(curl -s https://signaling.undersoft.tec.br/updates/latest.yml | grep -m1 '^version:' | awk '{print $2}')
