@@ -83,7 +83,16 @@ export class SignalingClient {
       if (this.ws !== ws) return;
       this.reconnectAttempt = 0;
       this.setStatus('connected');
-      this.send({ type: 'join-room', roomId, serverId, displayName, userId, sessionToken, status: this.presenceStatus });
+      this.send({
+        type: 'join-room',
+        roomId,
+        serverId,
+        displayName,
+        userId,
+        sessionToken,
+        status: this.presenceStatus,
+        sfuCapable: true
+      });
       if (isReconnect && this.lastMicState) this.send(this.lastMicState);
       const queued = this.pendingSends;
       this.pendingSends = [];
@@ -132,8 +141,12 @@ export class SignalingClient {
     // CONNECTING (not yet OPEN) — queue for onopen's flush, above. CLOSING/CLOSED/no socket at
     // all — genuinely gone (or between reconnect attempts), drop it rather than queue forever.
     // A ping is worthless once stale, so it's never queued either (a burst of them right after
-    // reconnecting would just be noise for the server's liveness check).
-    if (this.ws?.readyState === WebSocket.CONNECTING && message.type !== 'ping') this.pendingSends.push(message);
+    // reconnecting would just be noise for the server's liveness check). SFU requests aren't either:
+    // after a reconnect the 'room-joined' that follows starts a new SfuMedia with fresh sessions, so
+    // a queued one would only open an orphan session at the SFU.
+    if (this.ws?.readyState === WebSocket.CONNECTING && message.type !== 'ping' && !message.type.startsWith('sfu-')) {
+      this.pendingSends.push(message);
+    }
   }
 
   onMessage(handler: (message: ServerToClientMessage) => void): () => void {

@@ -595,6 +595,8 @@ export function useRoomConnection(
           // old peer connections are dead weight — see MeshManager.resetPeerConnections.
           mesh.resetPeerConnections();
           mesh.setSelfPeerId(message.peerId);
+          // Before addExistingPeer below: in an SFU room the new P2P connections must be data-only.
+          mesh.setMediaMode(message.mediaMode ?? 'mesh');
           setState((prev) => ({
             ...prev,
             selfPeerId: message.peerId,
@@ -693,6 +695,12 @@ export function useRoomConnection(
               peerSoundLists: remainingSoundLists
             };
           });
+          break;
+        case 'sfu-result':
+          mesh.handleSfuResult(message);
+          break;
+        case 'peer-sfu-tracks':
+          mesh.handlePeerSfuTracks(message.peerId, message.tracks);
           break;
         case 'sdp-offer':
           void mesh.handleOffer(message.fromPeerId, message.sdp);
@@ -911,15 +919,15 @@ export function useRoomConnection(
     void meshRef.current?.setLocalCameraTrack(track);
   }
 
-  // qualityMode only matters when starting a share (ScreenSharePicker.tsx passes the choice made
+  // frameRate only matters when starting a share (ScreenSharePicker.tsx passes the choice made
   // there) — set before setLocalScreenTrack so it's already in place when the sender gets created.
   // [Bug corrigido] setHardwareEncodePreference used to only be read once, at mesh creation (room
   // join) — toggling it in Settings mid-room had zero effect until leaving and rejoining, which
   // isn't what "vale a partir da próxima transmissão" (SettingsModal.tsx's own hint text) promises.
   // Re-reading it fresh here, right as a share actually starts, makes that promise true.
-  function setLocalScreenTrack(stream: MediaStream | null, qualityMode?: 'quality' | 'smoothness'): void {
+  function setLocalScreenTrack(stream: MediaStream | null, frameRate?: 30 | 60): void {
     if (stream) meshRef.current?.setHardwareEncodePreference(getHardwareEncodePreference());
-    if (qualityMode) meshRef.current?.setScreenQualityMode(qualityMode);
+    if (frameRate) meshRef.current?.setScreenFrameRate(frameRate);
     void meshRef.current?.setLocalScreenTrack(stream);
     // Explicit signal (see messages.ts) — the WebRTC-level "track ended" alone was unreliable for
     // this transition, leaving viewers stuck on the last frame when sharing stopped.

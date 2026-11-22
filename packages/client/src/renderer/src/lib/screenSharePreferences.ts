@@ -15,21 +15,19 @@ export function setIncludeAudioPreference(value: boolean): void {
   localStorage.setItem(STORAGE_KEY, String(value));
 }
 
-// Same storage pattern — remembers the last "priorizar qualidade vs. fluidez" choice for screen
-// share, so it's a real user decision (pedido do Mozar) instead of a fixed app default. Maps to
-// RTCRtpSendParameters.degradationPreference in webrtcMesh.ts: 'quality' -> 'maintain-resolution'
-// (keep resolution under bad bandwidth — best for static/text content), 'smoothness' ->
-// 'maintain-framerate' (keep fps under bad bandwidth — best for games/interactive content).
-export type ScreenQualityMode = 'quality' | 'smoothness';
-const QUALITY_MODE_STORAGE_KEY = 'concord.screenShare.qualityMode';
+// Same storage pattern — the last frame-rate choice for screen share. Pedido do Mozar (2026-11-22):
+// the capture is always capped at 1080p and the only choice left is 30 or 60 fps (replaced the old
+// "Qualidade"/"Fluidez" pair). It also picks RTCRtpSendParameters.degradationPreference in
+// webrtcMesh.ts: 60 -> 'maintain-framerate' (keeps the fps when bandwidth drops), 30 ->
+// 'maintain-resolution' (keeps the sharpness).
+export type ScreenFrameRate = 30 | 60;
+const FRAME_RATE_STORAGE_KEY = 'concord.screenShare.frameRate';
 
-// Default 'quality' — matches the app's original fixed behavior before this became a choice, so
-// nobody's experience changes just from this feature shipping.
-export function getScreenQualityMode(): ScreenQualityMode {
-  const raw = localStorage.getItem(QUALITY_MODE_STORAGE_KEY);
-  return raw === 'smoothness' ? 'smoothness' : 'quality';
+// Default 60 ("fixe em 1080p60"); 30 is the lighter option for a PC whose game loses fps.
+export function getScreenFrameRate(): ScreenFrameRate {
+  return localStorage.getItem(FRAME_RATE_STORAGE_KEY) === '30' ? 30 : 60;
 }
 
-export function setScreenQualityMode(mode: ScreenQualityMode): void {
-  localStorage.setItem(QUALITY_MODE_STORAGE_KEY, mode);
+export function setScreenFrameRate(frameRate: ScreenFrameRate): void {
+  localStorage.setItem(FRAME_RATE_STORAGE_KEY, String(frameRate));
 }

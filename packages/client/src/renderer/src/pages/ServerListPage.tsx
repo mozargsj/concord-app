@@ -32,6 +32,7 @@ import type { PresenceStatus } from '@concord/shared';
 import RemoteControlLayer from '../components/RemoteControlLayer';
 import { useRoomConnection } from '../hooks/useRoomConnection';
 import { useRemoteControl } from '../hooks/useRemoteControl';
+import { useServerPresence } from '../hooks/useServerPresence';
 import { getPresenceStatus, onPresenceStatusChange } from '../lib/presenceStatus';
 import { usePeerVolumeControl } from '../hooks/usePeerVolumeControl';
 import { getPreferredDeviceId } from '../lib/devicePreferences';
@@ -41,7 +42,7 @@ import {
   startProcessLoopbackAudio,
   type LoopbackAudioSession
 } from '../lib/processLoopbackAudio';
-import type { ScreenQualityMode } from '../lib/screenSharePreferences';
+import type { ScreenFrameRate } from '../lib/screenSharePreferences';
 import {
   playCameraStart,
   playCameraStop,
@@ -79,6 +80,8 @@ const RECONNECT_RETRY_INTERVAL_MS = 3000;
 // out on its own), short enough that a genuine outage is still noticed quickly.
 const OFFLINE_DEBOUNCE_MS = 5000;
 
+const MIC_MUTED_STORAGE_KEY = 'concord.audio.micMuted';
+
 export default function ServerListPage({
   currentUser,
   onCurrentUserChange,
@@ -91,7 +94,10 @@ export default function ServerListPage({
   const [myRole, setMyRole] = useState<number>(4);
   const [rooms, setRooms] = useState<RoomSummary[]>([]);
   const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
-  const [isMicMuted, setIsMicMuted] = useState(false);
+  // Pedido do Mozar (2026-11-22): the mute choice survives closing the app (local only, like the
+  // other audio preferences). Deafen mutes too, so leaving deafened comes back muted, not deafened.
+  const [isMicMuted, setIsMicMuted] = useState(() => localStorage.getItem(MIC_MUTED_STORAGE_KEY) === 'true');
+  useEffect(() => localStorage.setItem(MIC_MUTED_STORAGE_KEY, String(isMicMuted)), [isMicMuted]);
   const [isDeafened, setIsDeafened] = useState(false);
   const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
   const [screenStream, setScreenStream] = useState<MediaStream | null>(null);
@@ -218,6 +224,9 @@ export default function ServerListPage({
     () => setSoundDownloadTick((tick) => tick + 1),
     presenceStatus
   );
+
+  // Who is in each room of the open server, for the rooms I'm not in (RoomSidebar).
+  const serverPresence = useServerPresence(selectedServerId);
 
   const remoteControl = useRemoteControl({
     peers,
@@ -439,7 +448,14 @@ export default function ServerListPage({
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: false,
-        video: preferred ? { deviceId: { exact: preferred } } : true
+        // Pedido do Mozar (2026-11-22): the best the camera offers up to 1080p at 60 fps, in mesh and
+        // SFU alike (before: the Chromium default, 640x480 at 30 fps).
+        video: {
+          ...(preferred && { deviceId: { exact: preferred } }),
+          width: { ideal: 1920, max: 1920 },
+          height: { ideal: 1080, max: 1080 },
+          frameRate: { ideal: 60, max: 60 }
+        }
       });
       cameraStreamRef.current = stream;
       setCameraStream(stream);
@@ -504,7 +520,7 @@ export default function ServerListPage({
     setIsScreenPickerOpen(true);
   }
 
-  async function handlePickScreenSource(source: ScreenSource, includeAudio: boolean, qualityMode: ScreenQualityMode) {
+  async function handlePickScreenSource(source: ScreenSource, includeAudio: boolean, frameRate: ScreenFrameRate) {
     setIsScreenPickerOpen(false);
     // Excludes Concord's own audio from the loopback (processLoopbackAudio.ts) — fixes viewers
     // hearing their own voice echoed back during a transmission with system audio (only reported
@@ -548,7 +564,14 @@ export default function ServerListPage({
         video: {
           mandatory: {
             chromeMediaSource: 'desktop',
-            chromeMediaSourceId: source.id
+            chromeMediaSourceId: source.id,
+            // [Jogos, 2026-10-17] Sem teto o Chromium captura na resolução nativa do monitor e o
+            // encoder trabalha nesse tamanho, disputando a GPU com o jogo (relato: 240 -> 120 fps).
+            // [Pedido do Mozar, 2026-11-22] Sempre até 1080p (o Chromium reduz mantendo a
+            // proporção), em mesh e SFU; quem transmite só escolhe 30 ou 60 fps no seletor.
+            maxWidth: 1920,
+            maxHeight: 1080,
+            maxFrameRate: frameRate
           }
         } as MediaTrackConstraints
       });
@@ -563,7 +586,7 @@ export default function ServerListPage({
       setSharingFullScreen(!!source.displayId);
       void window.concord.remoteControl.setShare(source.displayId);
       setMediaError(null);
-      setLocalScreenTrack(stream, qualityMode);
+      setLocalScreenTrack(stream, frameRate);
       playTransmissionEnter();
 
       // Fires when the captured source itself disappears (the shared window/app/game was closed,
@@ -858,6 +881,8 @@ export default function ServerListPage({
         onViewProfile={(userId, name, avatarUrl) => setViewingProfile({ userId, name, avatarUrl })}
         onToggleMusicMute={(volumeKey) => peerVolume.handleTogglePeerMute(volumeKey)}
         connectivityStatus={connectivityStatus}
+        roomPresence={serverPresence.rooms}
+        presenceAvatars={serverPresence.avatars}
       />
 
       <div className="server-list-page__main">

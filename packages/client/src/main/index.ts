@@ -193,7 +193,7 @@ function createMainWindow(): void {
   ipcMain.handle('app:start-update', () => checkForUpdatesOnDemand(window, isDev));
 
   if (isDev) {
-    window.loadURL('http://localhost:5173');
+    window.loadURL('http://localhost:5192'); // vite.config.ts server.port
   } else {
     window.loadFile(path.join(__dirname, '../../renderer/index.html'));
   }

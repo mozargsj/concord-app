@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react';
-import type { RoomSummary, ServerSummary, UserProfile } from '@concord/shared';
+import type { PresencePeer, RoomSummary, ServerSummary, UserProfile } from '@concord/shared';
 import UserPanel from './UserPanel';
 import VoiceConnectionStatus from './VoiceConnectionStatus';
 import HostStarBadge from './HostStarBadge';
@@ -117,6 +117,10 @@ interface RoomSidebarProps {
   // Own connectivity (ServerListPage, NoInternetScreen's source of truth) — drives the
   // "Reconectando" overlay on my own row, same badge peers get from their own connectionStatus.
   connectivityStatus: 'online' | 'offline' | 'reconnecting';
+  /** Who is in each room, from the server (useServerPresence) — used for every room except the
+   * joined one, whose richer roster comes from the room connection itself. */
+  roomPresence: Record<string, PresencePeer[]>;
+  presenceAvatars: Record<string, string>;
 }
 
 export default function RoomSidebar({
@@ -162,7 +166,9 @@ export default function RoomSidebar({
   isPeerMutedByMe,
   onViewProfile,
   onToggleMusicMute,
-  connectivityStatus
+  connectivityStatus,
+  roomPresence,
+  presenceAvatars
 }: RoomSidebarProps) {
   // [2026-08-30, pedido do Mozar] Seta ao lado de "Canais de Voz" nunca tinha sido ligada a nada —
   // agora alterna entre a lista de participantes normal (nome + status, padrão) e uma versão
@@ -530,9 +536,9 @@ export default function RoomSidebar({
 
         {displayRooms.map((room) => {
           const isJoined = room.id === selectedRoomId;
-          // Real roster for the joined room, driven by signaling. Rooms the user hasn't
-          // joined have no presence protocol yet (server only tracks membership for the
-          // connected socket's own room), so they show no participant preview.
+          // Joined room: the full live roster from the room connection (speaking, mic, streams).
+          // Every other room: who is in it, from the server's presence channel — names and cached
+          // pictures only (pedido do Mozar, 2026-11-22).
           const participants: {
             key: string;
             name: string;
@@ -567,6 +573,9 @@ export default function RoomSidebar({
             // (mic mutado/host — ver render abaixo, filtra por isMusicRow).
             isMusicRow: boolean;
             volumeKey: string;
+            // Someone in a room I'm not in: click shows the profile, but no volume menu (nothing of
+            // theirs is playing here).
+            isPresenceOnly: boolean;
           }[] = isJoined
             ? [
                 {
@@ -589,7 +598,8 @@ export default function RoomSidebar({
                   connectionStatus: null,
                   connectionOverlayLabel: connectivityStatus !== 'online' ? 'Reconectando' : null,
                   isMusicRow: false,
-                  volumeKey: ''
+                  volumeKey: '',
+                  isPresenceOnly: false
                 },
                 ...(selfSharingMusic
                   ? [
@@ -609,7 +619,8 @@ export default function RoomSidebar({
                         connectionStatus: null,
                         connectionOverlayLabel: null,
                         isMusicRow: true,
-                        volumeKey: ''
+                        volumeKey: '',
+                        isPresenceOnly: false
                       }
                     ]
                   : []),
@@ -635,7 +646,8 @@ export default function RoomSidebar({
                     connectionStatus: peer.connectionStatus,
                     connectionOverlayLabel: getConnectionOverlayLabel(peer.connectionStatus, peer.hasConnectedOnce),
                     isMusicRow: false,
-                    volumeKey: peer.userId
+                    volumeKey: peer.userId,
+                    isPresenceOnly: false
                   };
                   if (!peer.musicStream) return [voiceRow];
                   const musicVolumeKey = `${peer.userId}:music`;
@@ -657,12 +669,34 @@ export default function RoomSidebar({
                       connectionStatus: null,
                       connectionOverlayLabel: null,
                       isMusicRow: true,
-                      volumeKey: musicVolumeKey
+                      volumeKey: musicVolumeKey,
+                      isPresenceOnly: false
                     }
                   ];
                 })
               ]
-            : [];
+            : (roomPresence[room.id] ?? []).map((person) => ({
+                key: `presence-${person.userId}`,
+                name: person.displayName,
+                avatarUrl: (person.userId === currentUser.id ? currentUser.avatarUrl : presenceAvatars[person.userId]) ?? null,
+                isSelf: person.userId === currentUser.id,
+                isHost: false,
+                isSpeaking: false,
+                isBroadcasting: false,
+                isMicMuted: false,
+                isDeafened: false,
+                mutedMe: false,
+                mutedByMe: false,
+                userId: person.userId,
+                connectionStatus: null,
+                connectionOverlayLabel: null,
+                isMusicRow: false,
+                volumeKey: '',
+                isPresenceOnly: true
+              }));
+          // memberCount from the REST list is always 0 — count the live roster instead (music
+          // rows are the same person, not an extra member).
+          const memberCount = participants.filter((participant) => !participant.isMusicRow).length;
 
           const isEditing = editingRoomId === room.id;
 
@@ -698,7 +732,7 @@ export default function RoomSidebar({
                     <Volume2 size={16} className="room-sidebar__room-icon" />
                     <span className="room-sidebar__room-name">{room.name}</span>
                     <span className="room-sidebar__room-count">
-                      {room.memberCount}/{room.maxMembers}
+                      {memberCount}/{room.maxMembers}
                     </span>
                   </button>
                   {!isReordering && (canRenameRooms || canCreateOrDeleteRooms) && (
@@ -730,7 +764,8 @@ export default function RoomSidebar({
                   }
                 >
                   {participants.map((participant) => {
-                    const isVolumeTarget = !participant.isSelf && !!participant.userId;
+                    const canViewProfile = !participant.isSelf && !!participant.userId;
+                    const isVolumeTarget = canViewProfile && !participant.isPresenceOnly;
                     const isVolumeMenuActive = isVolumeTarget && participant.volumeKey === activeVolumeMenuUserId;
                     return (
                     <div
@@ -738,12 +773,13 @@ export default function RoomSidebar({
                       className={
                         'room-sidebar__participant' +
                         (isParticipantsCompact ? ' room-sidebar__participant--compact' : '') +
-                        (isVolumeTarget ? ' room-sidebar__participant--volume-target' : '') +
+                        // Pointer + hover for any clickable row (profile), not only volume targets.
+                        (canViewProfile ? ' room-sidebar__participant--volume-target' : '') +
                         (isVolumeMenuActive ? ' room-sidebar__participant--volume-active' : '')
                       }
                       title={isParticipantsCompact ? participant.name : undefined}
                       onClick={
-                        isVolumeTarget
+                        canViewProfile
                           ? () => onViewProfile(participant.userId!, participant.name, participant.avatarUrl)
                           : undefined
                       }

@@ -25,7 +25,9 @@ export default defineConfig(({ mode }) => ({
   },
   plugins: [react()],
   server: {
-    port: 5173,
+    // Concord's own port in the machine-wide port registry (~/.claude/CLAUDE.md) — 5173 belongs to
+    // another project. Keep in sync with package.json's `wait-on` and src/main/index.ts.
+    port: 5192,
     strictPort: true
   },
   build: {

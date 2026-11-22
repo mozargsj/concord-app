@@ -1,5 +1,6 @@
-import type { ClientToServerMessage } from '@concord/shared';
+import type { ClientToServerMessage, MediaMode, SfuResultMessage, SfuTrackRole } from '@concord/shared';
 import type { ImageCacheKind } from './imageCache';
+import { SfuMedia, preferH264 } from './sfuMedia';
 import type { DiceRollResult } from './diceRoller';
 import type { ControlFrame, FileFrame, MoveFrame } from '../../../common/remoteControl';
 
@@ -100,6 +101,11 @@ type TrackRole = 'mic' | 'camera' | 'screenVideo' | 'screenAudio' | 'musicAudio'
 // munging (not exposed via setParameters), a fragile per-payload-type string edit that's a bigger
 // step than this one; left for later, see decisions.md.
 const SCREEN_AUDIO_MAX_BITRATE_BPS = 128_000;
+
+// Encoder diagnostics after a screen share starts (decisions.md, "jogo perde fps"): which encoder
+// really runs (hardware or software fallback), what limits it, capture vs. encoded fps. Two samples:
+// the second catches a fallback after more viewers joined.
+const SCREEN_ENCODER_REPORT_DELAYS_MS = [15_000, 120_000];
 
 type ImageAnswer =
   | { status: 'unchanged' }
@@ -410,7 +416,11 @@ interface MeshManagerOptions {
       | 'connection-state-change'
       | 'signaling-state-change'
       | 'ice-gathering-state-change'
-      | 'ice-gathering-complete',
+      | 'ice-gathering-complete'
+      // SFU mode (sfuMedia.ts), peerId 'sfu': failures, rebuilds, gave-up subscriptions.
+      | 'sfu'
+      // peerId 'local': see SCREEN_ENCODER_REPORT_DELAYS_MS.
+      | 'screen-encoder-stats',
     detail: string
   ) => void;
   /** Simplified per-peer status for a visual indicator (green/yellow/red dot on the avatar,
@@ -425,7 +435,8 @@ interface MeshManagerOptions {
 }
 
 /**
- * One RTCPeerConnection per remote peer, pure mesh (no SFU). Offerer/answerer role is
+ * One RTCPeerConnection per remote peer. In a mesh room it carries audio/video and data channels;
+ * in an SFU room (setMediaMode) only the data channels, and media goes through SfuMedia. Offerer/answerer role is
  * deterministic to avoid glare: whoever just joined offers to everyone already in the
  * room (addExistingPeer); everyone else waits for that offer to arrive (handleOffer
  * lazily creates the connection). Later track changes (camera/screen on/off) always
@@ -433,6 +444,10 @@ interface MeshManagerOptions {
  */
 export class MeshManager {
   private connections = new Map<string, PeerConnectionEntry>();
+  // Set in an SFU room (setMediaMode): audio/video go through it and the P2P connections carry
+  // only the data channels. Null in a mesh room.
+  private sfu: SfuMedia | null = null;
+  private screenReportTimers: ReturnType<typeof setTimeout>[] = [];
   // Own peerId for this room — only used to pick a deterministic polite/impolite role per
   // connection (see setSelfPeerId). Null until 'room-joined' arrives; every real connection is
   // only ever created after that, so it's always set by the time it's needed.
@@ -470,10 +485,10 @@ export class MeshManager {
   // effect on the next offer/answer, so changing it while already sharing would need an explicit
   // renegotiation to do anything — simpler to just have it apply the next time sharing starts.
   private hardwareEncodePreferenceEnabled = true;
-  // Content-dependent, user-picked per share (ScreenSharePicker.tsx) — see setScreenQualityMode
+  // Follows the frame rate picked per share (ScreenSharePicker.tsx) — see setScreenFrameRate
   // and applyScreenVideoDegradationPreference below. Default matches the app's original fixed
   // behavior (screen content favored resolution over framerate before this was a choice).
-  private screenDegradationPreference: RTCDegradationPreference = 'maintain-resolution';
+  private screenDegradationPreference: RTCDegradationPreference = 'maintain-framerate';
   // Soundboard mix (see playSoundboardClip) — a MediaStreamDestination shared by every
   // concurrently-playing clip, reference-counted so the sender only reverts to the plain mic
   // track once the last overlapping clip finishes.
@@ -571,6 +586,38 @@ export class MeshManager {
    * the first addExistingPeer calls). */
   setSelfPeerId(peerId: string): void {
     this.selfPeerId = peerId;
+  }
+
+  /** On every 'room-joined', after resetPeerConnections and before addExistingPeer: the server
+   * decides how this room carries media. 'sfu' always starts a new SfuMedia (the server dropped our
+   * old SFU sessions with the old socket) and moves every current local track onto it. */
+  setMediaMode(mode: MediaMode): void {
+    this.sfu?.close();
+    this.sfu = null;
+    if (mode !== 'sfu') return;
+    this.sfu = new SfuMedia({
+      send: this.opts.send,
+      iceServers: [...ICE_SERVERS, ...turnIceServers],
+      onRemoteStreamsChange: this.opts.onRemoteStreamsChange,
+      onError: (detail) => this.opts.onConnectionError?.('sfu', 'sfu', detail),
+      preferH264: () => this.hardwareEncodePreferenceEnabled,
+      screenDegradation: () => this.screenDegradationPreference
+    });
+    void this.sfu.setTracks({
+      mic: this.currentMicSendTrack(),
+      camera: this.cameraTrack,
+      screenVideo: this.screenVideoTrack,
+      screenAudio: this.screenAudioTrack,
+      musicAudio: this.musicAudioTrack
+    });
+  }
+
+  handleSfuResult(message: SfuResultMessage): void {
+    this.sfu?.handleResult(message);
+  }
+
+  handlePeerSfuTracks(peerId: string, tracks: { role: SfuTrackRole; trackName: string }[]): void {
+    this.sfu?.handlePeerTracks(peerId, tracks);
   }
 
   handleOffer(fromPeerId: string, sdp: string): Promise<void> {
@@ -804,6 +851,8 @@ export class MeshManager {
   }
 
   removePeer(peerId: string): void {
+    // Before the early return: in an SFU room the media may flow even if the P2P link never formed.
+    this.sfu?.removePeer(peerId);
     const entry = this.connections.get(peerId);
     if (!entry) return;
     entry.pc.close();
@@ -930,6 +979,7 @@ export class MeshManager {
         void entry.senders.mic?.replaceTrack(null);
       }
     }
+    void this.sfu?.setTracks({ mic: this.currentMicSendTrack() });
     this.rewireMicAnalyser(track);
   }
 
@@ -985,6 +1035,7 @@ export class MeshManager {
     for (const entry of this.connections.values()) {
       void entry.senders.mic?.replaceTrack(sendTrack);
     }
+    void this.sfu?.setTracks({ mic: sendTrack });
   }
 
   /** What should actually be riding the 'mic' sender right now — the soundboard mix while a
@@ -1044,6 +1095,7 @@ export class MeshManager {
         for (const entry of this.connections.values()) {
           void entry.senders.mic?.replaceTrack(mixedTrack);
         }
+        void this.sfu?.setTracks({ mic: mixedTrack });
       }
       this.soundboardActiveCount += 1;
     }
@@ -1064,6 +1116,7 @@ export class MeshManager {
       for (const entry of this.connections.values()) {
         void entry.senders.mic?.replaceTrack(restoreTrack);
       }
+      void this.sfu?.setTracks({ mic: restoreTrack });
     };
     source.start();
     return {
@@ -1086,7 +1139,7 @@ export class MeshManager {
     for (const entry of this.connections.values()) {
       if (this.applyTrack(entry, 'camera', track, this.personalStream)) toRenegotiate.push(entry);
     }
-    await Promise.all(toRenegotiate.map((entry) => this.renegotiate(entry)));
+    await Promise.all([...toRenegotiate.map((entry) => this.renegotiate(entry)), this.sfu?.setTracks({ camera: track })]);
   }
 
   /** Authoritative "this peer stopped sharing" — called from the explicit screen-share-changed
@@ -1096,6 +1149,7 @@ export class MeshManager {
    * bookkeeping too, so a later unrelated emitRemoteStreams call (e.g. from a personal-stream
    * update) can't resurrect the stale reference. */
   forceClearScreenStream(peerId: string): void {
+    this.sfu?.forceClear(peerId, 'screen');
     const entry = this.connections.get(peerId);
     if (!entry) return;
     entry.screenStream = null;
@@ -1124,12 +1178,17 @@ export class MeshManager {
       if (this.applyTrack(entry, 'screenVideo', videoTrack, this.screenStream)) toRenegotiate.add(entry);
       if (this.applyTrack(entry, 'screenAudio', audioTrack, this.screenStream)) toRenegotiate.add(entry);
     }
-    await Promise.all([...toRenegotiate].map((entry) => this.renegotiate(entry)));
+    this.scheduleScreenEncoderReport();
+    await Promise.all([
+      ...[...toRenegotiate].map((entry) => this.renegotiate(entry)),
+      this.sfu?.setTracks({ screenVideo: videoTrack, screenAudio: audioTrack })
+    ]);
   }
 
   /** Mirrors forceClearScreenStream above — "this peer stopped sharing music" is authoritative
    * from the explicit music-share-changed signal, not from track lifecycle events. */
   forceClearMusicStream(peerId: string): void {
+    this.sfu?.forceClear(peerId, 'music');
     const entry = this.connections.get(peerId);
     if (!entry) return;
     entry.musicStream = null;
@@ -1151,13 +1210,17 @@ export class MeshManager {
     for (const entry of this.connections.values()) {
       if (this.applyTrack(entry, 'musicAudio', track, this.musicStream)) toRenegotiate.add(entry);
     }
-    await Promise.all([...toRenegotiate].map((entry) => this.renegotiate(entry)));
+    await Promise.all([...[...toRenegotiate].map((entry) => this.renegotiate(entry)), this.sfu?.setTracks({ musicAudio: track })]);
   }
 
   closeAll(): void {
     clearInterval(this.speakingPollHandle);
     clearInterval(this.localSpeakingPollHandle);
     if (this.localSpeakingReleaseTimer) clearTimeout(this.localSpeakingReleaseTimer);
+    for (const timer of this.screenReportTimers) clearTimeout(timer);
+    this.screenReportTimers = [];
+    this.sfu?.close();
+    this.sfu = null;
     for (const peerId of [...this.connections.keys()]) this.removePeer(peerId);
     this.micAnalyserSource?.disconnect();
     this.micAnalyserSource = null;
@@ -1442,6 +1505,7 @@ export class MeshManager {
   }
 
   private addLocalTracksTo(entry: PeerConnectionEntry): void {
+    if (this.sfu) return; // SFU room: media goes through the SFU, this connection is data-only
     if (this.micTrack) {
       entry.senders.mic = entry.pc.addTrack(this.micTrack, this.personalStream);
       // addTrack can't take null directly — add the real track then immediately silence it,
@@ -1873,11 +1937,10 @@ export class MeshManager {
     void sender.setParameters(params).catch(() => {});
   }
 
-  /** Content-dependent choice (text/slides want resolution kept under bad bandwidth, a shared
-   * game wants framerate kept — see setScreenQualityMode below) exposed to applyScreenVideo-
-   * DegradationPreference. */
-  setScreenQualityMode(mode: 'quality' | 'smoothness'): void {
-    this.screenDegradationPreference = mode === 'smoothness' ? 'maintain-framerate' : 'maintain-resolution';
+  /** The share's frame rate (ScreenSharePicker.tsx, always 1080p) also decides what bad bandwidth
+   * costs: at 60 fps keep the fps (drop resolution), at 30 fps keep the sharpness (drop fps). */
+  setScreenFrameRate(frameRate: 30 | 60): void {
+    this.screenDegradationPreference = frameRate === 60 ? 'maintain-framerate' : 'maintain-resolution';
   }
 
   private applyScreenVideoDegradationPreference(sender: RTCRtpSender): void {
@@ -1902,20 +1965,7 @@ export class MeshManager {
     if (!this.hardwareEncodePreferenceEnabled) return; // user turned it off — leave Chromium's default order
 
     const transceiver = pc.getTransceivers().find((candidate) => candidate.sender === sender);
-    if (!transceiver?.setCodecPreferences) return;
-
-    const capabilities = RTCRtpSender.getCapabilities?.('video');
-    if (!capabilities) return;
-
-    const h264Codecs = capabilities.codecs.filter((codec) => codec.mimeType.toLowerCase() === 'video/h264');
-    if (h264Codecs.length === 0) return; // this build's Chromium doesn't offer H.264 at all
-
-    const otherCodecs = capabilities.codecs.filter((codec) => codec.mimeType.toLowerCase() !== 'video/h264');
-    try {
-      transceiver.setCodecPreferences([...h264Codecs, ...otherCodecs]);
-    } catch {
-      // invalid combination for this transceiver's current state — leave the default order
-    }
+    if (transceiver) preferH264(transceiver); // shared with the SFU path (sfuMedia.ts)
   }
 
   private applyTrack(
@@ -1924,6 +1974,7 @@ export class MeshManager {
     track: MediaStreamTrack | null,
     groupStream: MediaStream
   ): boolean {
+    if (this.sfu) return false; // SFU room: see addLocalTracksTo
     const existing = entry.senders[role];
     if (track && existing) {
       void existing.replaceTrack(track); // device swap — no SDP round-trip needed
@@ -2068,6 +2119,15 @@ export class MeshManager {
   }
 
   private async pollRemoteSpeaking(): Promise<void> {
+    if (this.sfu) {
+      // SFU room: the P2P connections carry no audio; one getStats() on the subscriber connection.
+      try {
+        for (const [peerId, level] of await this.sfu.audioLevels()) this.applyPeerSpeaking(peerId, level);
+      } catch {
+        // transient stats failure — skip this tick
+      }
+      return;
+    }
     for (const entry of this.connections.values()) {
       try {
         const stats = await entry.pc.getStats();
@@ -2077,18 +2137,63 @@ export class MeshManager {
             level = Math.max(level, report.audioLevel);
           }
         });
-        let state = this.speakingStateByPeer.get(entry.peerId);
-        if (!state) {
-          state = { isSpeaking: false, consecutive: 0 };
-          this.speakingStateByPeer.set(entry.peerId, state);
-        }
-        this.applySpeakingLevel(state, level, SPEAKING_DEBOUNCE_TICKS, (isSpeaking) =>
-          this.opts.onSpeakingChange(entry.peerId, isSpeaking)
-        );
+        this.applyPeerSpeaking(entry.peerId, level);
       } catch {
         // transient stats failure — skip this tick
       }
     }
+  }
+
+  private applyPeerSpeaking(peerId: string, level: number): void {
+    let state = this.speakingStateByPeer.get(peerId);
+    if (!state) {
+      state = { isSpeaking: false, consecutive: 0 };
+      this.speakingStateByPeer.set(peerId, state);
+    }
+    this.applySpeakingLevel(state, level, SPEAKING_DEBOUNCE_TICKS, (isSpeaking) => this.opts.onSpeakingChange(peerId, isSpeaking));
+  }
+
+  private scheduleScreenEncoderReport(): void {
+    for (const timer of this.screenReportTimers) clearTimeout(timer);
+    this.screenReportTimers = [];
+    if (!this.screenVideoTrack) return;
+    this.screenReportTimers = SCREEN_ENCODER_REPORT_DELAYS_MS.map((delayMs) =>
+      setTimeout(() => void this.reportScreenEncoder(delayMs), delayMs)
+    );
+  }
+
+  /** One line per screen-video encoder (mesh: one per viewer; SFU: one) into the remote log. */
+  private async reportScreenEncoder(delayMs: number): Promise<void> {
+    const sfuSender = this.sfu?.screenVideoSender();
+    const senders = sfuSender
+      ? [sfuSender]
+      : [...this.connections.values()].map((entry) => entry.senders.screenVideo).filter((s): s is RTCRtpSender => Boolean(s));
+    if (senders.length === 0) return;
+    const lines: string[] = [];
+    for (const sender of senders) {
+      try {
+        const stats = await sender.getStats();
+        let out: Record<string, unknown> | undefined;
+        let source: Record<string, unknown> | undefined;
+        stats.forEach((report: RTCStats & Record<string, unknown>) => {
+          if (report.type === 'outbound-rtp' && report.kind === 'video') out = report;
+          if (report.type === 'media-source' && report.kind === 'video') source = report;
+        });
+        lines.push(
+          `${out?.encoderImplementation ?? '?'} hw=${out?.powerEfficientEncoder ?? '?'} limite=${out?.qualityLimitationReason ?? '?'} ` +
+            `envio=${out?.frameWidth ?? '?'}x${out?.frameHeight ?? '?'}@${out?.framesPerSecond ?? '?'}fps ` +
+            `captura=${source?.width ?? '?'}x${source?.height ?? '?'}@${source?.framesPerSecond ?? '?'}fps ` +
+            `alvo=${Math.round(Number(out?.targetBitrate ?? 0) / 1000)}kbps`
+        );
+      } catch {
+        lines.push('getStats falhou');
+      }
+    }
+    this.opts.onConnectionError?.(
+      'local',
+      'screen-encoder-stats',
+      `t+${delayMs / 1000}s modo=${this.sfu ? 'sfu' : 'mesh'} codificadores=${senders.length}: ${lines.join(' | ')}`
+    );
   }
 
   // Synchronous (no getStats() round-trip) and on its own much faster timer — see

@@ -1,8 +1,19 @@
 import { DurableObject } from 'cloudflare:workers';
-import type { ClientToServerMessage, DeviceKind, PresenceStatus, ServerToClientMessage } from '@concord/shared';
+import type {
+  ClientToServerMessage,
+  DeviceKind,
+  MediaMode,
+  PresencePeer,
+  PresenceStatus,
+  ServerToClientMessage,
+  SfuResultMessage,
+  SfuTrackRole
+} from '@concord/shared';
 import type { Env } from './env';
 import { validateClientMessage } from './protocol';
 import { verifySessionToken } from './auth';
+import { logError } from './errorLog';
+import * as sfu from './sfu';
 import * as usersRepo from './db/users';
 import * as serversRepo from './db/servers';
 import * as roomsRepo from './db/rooms';
@@ -31,6 +42,30 @@ interface PeerAttachment {
   lastSeenAt?: number;
   /** Optional for the same reason as lastSeenAt: attachments persisted before it existed. */
   status?: PresenceStatus;
+  /** SFU rooms only. Lives in the attachment (2 KiB cap; this stays well under it) so it survives
+   * hibernation and dies with the socket — a rejoin starts with fresh SFU sessions. */
+  sfu?: SfuPeerState;
+}
+
+interface SfuPeerState {
+  /** Publisher and subscriber session ids at the SFU. */
+  pub?: string;
+  sub?: string;
+  /** Published tracks: role, SFU track name, mid on the publisher connection. */
+  tracks?: { role: SfuTrackRole; name: string; mid: string }[];
+}
+
+type SfuClientMessage = Extract<
+  ClientToServerMessage,
+  { type: 'sfu-publish' | 'sfu-unpublish' | 'sfu-subscribe' | 'sfu-renegotiate' | 'sfu-unsubscribe' }
+>;
+type SfuReply = (result: Omit<SfuResultMessage, 'type' | 'requestId'>) => void;
+
+// A client runs at most two SFU calls at once (its publisher and subscriber queues).
+const SFU_MAX_IN_FLIGHT = 2;
+
+function sfuTrackList(peer: PeerAttachment): { role: SfuTrackRole; trackName: string }[] {
+  return (peer.sfu?.tracks ?? []).map((t) => ({ role: t.role, trackName: t.name }));
 }
 
 interface PendingMigration {
@@ -84,6 +119,28 @@ export class RoomDurableObject extends DurableObject<Env> {
     const [client, server] = Object.values(pair);
     this.ctx.acceptWebSocket(server);
     return new Response(null, { status: 101, webSocket: client });
+  }
+
+  /** RPC for ServerPresence (presence.ts): who is in this room right now. Live sockets only, so a
+   * room whose connections died with a deploy reads empty. `excludePeerId`: a peer whose socket is
+   * closing but still listed. */
+  async presence(excludePeerId?: string): Promise<PresencePeer[]> {
+    return this.livePeers()
+      .filter((p) => p.peerId !== excludePeerId)
+      .map((p) => ({ userId: p.userId, displayName: p.displayName }));
+  }
+
+  /** Pushes this room's current list to its server's ServerPresence. Best-effort: presence is a
+   * convenience, a failure here must never affect the call itself. */
+  private async notifyPresence(excludePeerId?: string): Promise<void> {
+    try {
+      const serverId = await this.ctx.storage.get<string>('serverId');
+      if (!serverId) return;
+      const presence = this.env.PRESENCE.get(this.env.PRESENCE.idFromName(serverId));
+      await presence.roomChanged(await this.getRoomId(), await this.presence(excludePeerId));
+    } catch (error) {
+      console.error('signaling: presence notify failed', error);
+    }
   }
 
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
@@ -171,6 +228,13 @@ export class RoomDurableObject extends DurableObject<Env> {
       case 'server-icon-changed':
         await this.handleServerIconChanged(ws, message.serverId);
         break;
+      case 'sfu-publish':
+      case 'sfu-unpublish':
+      case 'sfu-subscribe':
+      case 'sfu-renegotiate':
+      case 'sfu-unsubscribe':
+        await this.handleSfu(ws, message);
+        break;
     }
   }
 
@@ -207,6 +271,7 @@ export class RoomDurableObject extends DurableObject<Env> {
     // sem afetar userId/permissão, que continuam 100% verificados). Corrigido buscando o nickname
     // real em vez de confiar no texto livre da mensagem.
     let verifiedDisplayName: string | null = null;
+    let serverMediaMode: string | undefined;
     if (verifiedUserId) {
       const server = await serversRepo.findById(this.env, message.serverId);
       const roomRecord = server ? await roomsRepo.findById(this.env, message.serverId, message.roomId) : null;
@@ -219,12 +284,25 @@ export class RoomDurableObject extends DurableObject<Env> {
         return;
       }
       userId = verifiedUserId;
+      serverMediaMode = server.media_mode;
       const userRecord = await usersRepo.findById(this.env, verifiedUserId);
       verifiedDisplayName = userRecord?.display_name ?? null;
     } else if (this.env.ALLOW_UNAUTHENTICATED_ROOMS === 'true') {
       userId = message.userId;
     } else {
       this.send(ws, { type: 'join-rejected', roomId: message.roomId, reason: 'unauthorized' });
+      return;
+    }
+
+    // Checked before the duplicate handling below touches any existing socket: refusing after that
+    // would leave this user's old entry cleared without a peer-left (a ghost for everyone else).
+    // "Empty" ignores this same user's older connection, which is about to be replaced.
+    const mediaMode = await this.resolveMediaMode(
+      this.livePeers().every((p) => p.userId === userId),
+      serverMediaMode
+    );
+    if (mediaMode === 'sfu' && message.sfuCapable !== true) {
+      this.send(ws, { type: 'join-rejected', roomId: message.roomId, reason: 'update-required' });
       return;
     }
 
@@ -279,6 +357,12 @@ export class RoomDurableObject extends DurableObject<Env> {
     // Fora do ramo autenticado (só o bypass ALLOW_UNAUTHENTICATED_ROOMS, nunca produção — ver
     // acima), não existe um nickname de D1 pra confiar, então cai de volta pro que a mensagem
     // mandou — mesmo trim/cap defensivo de sempre, roomManager.ts tinha o mesmo padrão.
+    // Which server's ServerPresence to tell about this room (notifyPresence). Authenticated joins
+    // already proved above that this room belongs to message.serverId.
+    if ((await this.ctx.storage.get<string>('serverId')) !== message.serverId) {
+      await this.ctx.storage.put('serverId', message.serverId);
+    }
+
     const safeDisplayName = (verifiedDisplayName ?? message.displayName).trim().slice(0, 60) || 'Peer';
     const safeUserId = userId.trim().slice(0, 100) || crypto.randomUUID();
     const peer: PeerAttachment = {
@@ -309,8 +393,16 @@ export class RoomDurableObject extends DurableObject<Env> {
         displayName: p.displayName,
         userId: p.userId,
         status: p.status ?? 'online'
-      }))
+      })),
+      mediaMode
     });
+    if (mediaMode === 'sfu') {
+      for (const p of existingPeers) {
+        if (p.sfu?.tracks?.length) {
+          this.send(ws, { type: 'peer-sfu-tracks', roomId: message.roomId, peerId: p.peerId, tracks: sfuTrackList(p) });
+        }
+      }
+    }
 
     this.broadcast(
       {
@@ -323,6 +415,7 @@ export class RoomDurableObject extends DurableObject<Env> {
       },
       peer.peerId
     );
+    void this.notifyPresence();
   }
 
   private async handleStatusChanged(ws: WebSocket, status: PresenceStatus): Promise<void> {
@@ -371,6 +464,7 @@ export class RoomDurableObject extends DurableObject<Env> {
 
     const roomId = await this.getRoomId();
     this.broadcast({ type: 'peer-left', roomId, peerId: peer.peerId }, peer.peerId);
+    void this.notifyPresence(peer.peerId);
 
     const hostPeerId = await this.getHostPeerId();
     if (hostPeerId !== peer.peerId) return;
@@ -485,6 +579,133 @@ export class RoomDurableObject extends DurableObject<Env> {
     const sender = ws.deserializeAttachment() as PeerAttachment | null;
     if (!sender) return;
     this.sendToPeer(message.targetPeerId, { ...message, fromPeerId: sender.peerId });
+  }
+
+  // ---- SFU mode (messages.ts "SFU mode", src/sfu.ts) --------------------------------------------
+
+  /** The first peer into an empty room fixes its media mode from the server's setting; everyone
+   * after gets the stored one, so a room never mixes modes. 'sfu' also needs the SFU secrets. */
+  private async resolveMediaMode(roomIsEmpty: boolean, serverMediaMode: string | undefined): Promise<MediaMode> {
+    if (!roomIsEmpty) return (await this.ctx.storage.get<MediaMode>('mediaMode')) ?? 'mesh';
+    const override = this.env.MEDIA_MODE_OVERRIDE;
+    const wanted = override === 'sfu' || override === 'mesh' ? override : serverMediaMode;
+    const mode: MediaMode = wanted === 'sfu' && sfu.sfuConfigured(this.env) ? 'sfu' : 'mesh';
+    await this.ctx.storage.put('mediaMode', mode);
+    return mode;
+  }
+
+  /** In-flight SFU calls per socket, in memory only (hibernation never happens mid-call). */
+  private sfuInFlight = new Map<WebSocket, number>();
+
+  private async handleSfu(ws: WebSocket, message: SfuClientMessage): Promise<void> {
+    const peer = ws.deserializeAttachment() as PeerAttachment | null;
+    if (!peer) return;
+    const reply: SfuReply = (result) => this.send(ws, { type: 'sfu-result', requestId: message.requestId, ...result });
+    if ((await this.ctx.storage.get<MediaMode>('mediaMode')) !== 'sfu') return reply({ ok: false, error: 'not-sfu-room' });
+    const inFlight = this.sfuInFlight.get(ws) ?? 0;
+    if (inFlight >= SFU_MAX_IN_FLIGHT) return reply({ ok: false, error: 'busy' });
+    this.sfuInFlight.set(ws, inFlight + 1);
+    try {
+      await this.runSfu(ws, peer, message, reply);
+    } catch (error) {
+      reply({ ok: false, error: error instanceof sfu.SfuApiError ? error.code : 'internal' });
+      await logError(this.env, error, {
+        source: 'do',
+        roomId: await this.getRoomId(),
+        userId: peer.userId,
+        peerId: peer.peerId,
+        kind: message.type
+      });
+    } finally {
+      const left = (this.sfuInFlight.get(ws) ?? 1) - 1;
+      if (left > 0) this.sfuInFlight.set(ws, left);
+      else this.sfuInFlight.delete(ws);
+    }
+  }
+
+  private async runSfu(ws: WebSocket, peer: PeerAttachment, message: SfuClientMessage, reply: SfuReply): Promise<void> {
+    const state = peer.sfu ?? {};
+    switch (message.type) {
+      case 'sfu-publish': {
+        const kept = message.fresh ? [] : (state.tracks ?? []);
+        if (message.tracks.some((t) => kept.some((k) => k.role === t.role))) {
+          return reply({ ok: false, error: 'role-already-published' });
+        }
+        const pub = (!message.fresh && state.pub) || (await sfu.createSession(this.env));
+        const named = message.tracks.map((t) => ({ role: t.role, mid: t.mid, name: `${t.role}-${crypto.randomUUID().slice(0, 8)}` }));
+        const result = await sfu.pushTracks(this.env, pub, message.sdp, named.map((t) => ({ mid: t.mid, trackName: t.name })));
+        const failed = new Set((result.tracks ?? []).filter((t) => t.errorCode).flatMap((t) => [t.trackName, t.mid]));
+        const saved = this.saveSfu(ws, peer.peerId, (s) => ({
+          ...s,
+          pub,
+          tracks: [...(message.fresh ? [] : (s.tracks ?? [])), ...named.filter((t) => !failed.has(t.name) && !failed.has(t.mid))]
+        }));
+        if (!saved) return;
+        reply({
+          ok: true,
+          sdp: result.sessionDescription?.sdp,
+          tracks: (result.tracks ?? []).map((t) => ({ trackName: t.trackName ?? '', mid: t.mid, error: t.errorCode }))
+        });
+        await this.announceSfuTracks(saved);
+        return;
+      }
+      case 'sfu-unpublish': {
+        const own = new Set((state.tracks ?? []).map((t) => t.mid));
+        if (!state.pub || !message.mids.every((mid) => own.has(mid))) return reply({ ok: false, error: 'unknown-track' });
+        const result = await sfu.closeTracks(this.env, state.pub, message.mids, message.sdp);
+        const closing = new Set(message.mids);
+        const saved = this.saveSfu(ws, peer.peerId, (s) => ({ ...s, tracks: (s.tracks ?? []).filter((t) => !closing.has(t.mid)) }));
+        if (!saved) return;
+        reply({ ok: true, sdp: result.sessionDescription?.sdp });
+        await this.announceSfuTracks(saved);
+        return;
+      }
+      case 'sfu-subscribe': {
+        // The client names peers and track names only; session ids come from this room's own state.
+        const resolved = sfu.resolvePulls(message.tracks, this.livePeers(), peer.peerId);
+        const valid = resolved.filter((r): r is NonNullable<typeof r> => r !== null);
+        const notFound = (t: { peerId: string; trackName: string }) => ({ ...t, error: 'not-found' });
+        if (valid.length === 0) return reply({ ok: true, tracks: message.tracks.map(notFound) });
+        const sub = (!message.fresh && state.sub) || (await sfu.createSession(this.env));
+        const result = await sfu.pullTracks(this.env, sub, valid.map((v) => ({ sessionId: v.sessionId, trackName: v.trackName })));
+        if (!this.saveSfu(ws, peer.peerId, (s) => ({ ...s, sub }))) return;
+        reply({
+          ok: true,
+          sdp: result.sessionDescription?.sdp,
+          tracks: message.tracks.map((t, i) => {
+            const target = resolved[i];
+            if (!target) return notFound(t);
+            const pulled = result.tracks?.find(
+              (r) => r.trackName === target.trackName && (!r.sessionId || r.sessionId === target.sessionId)
+            );
+            return { ...t, mid: pulled?.mid, error: pulled ? pulled.errorCode : 'missing' };
+          })
+        });
+        return;
+      }
+      case 'sfu-renegotiate':
+        if (!state.sub) return reply({ ok: false, error: 'no-session' });
+        await sfu.renegotiate(this.env, state.sub, message.sdp);
+        return reply({ ok: true });
+      case 'sfu-unsubscribe':
+        if (state.sub) await sfu.closeTracks(this.env, state.sub, message.mids);
+        return reply({ ok: true });
+    }
+  }
+
+  /** Re-reads the attachment after the API await (another message may have changed or cleared it)
+   * and merges the new SFU state. Null when this peer left meanwhile: nothing to save or announce. */
+  private saveSfu(ws: WebSocket, peerId: string, update: (state: SfuPeerState) => SfuPeerState): PeerAttachment | null {
+    const current = ws.deserializeAttachment() as PeerAttachment | null;
+    if (!current || current.peerId !== peerId) return null;
+    const next: PeerAttachment = { ...current, sfu: update(current.sfu ?? {}) };
+    ws.serializeAttachment(next);
+    return next;
+  }
+
+  private async announceSfuTracks(peer: PeerAttachment): Promise<void> {
+    const roomId = await this.getRoomId();
+    this.broadcast({ type: 'peer-sfu-tracks', roomId, peerId: peer.peerId, tracks: sfuTrackList(peer) }, peer.peerId);
   }
 
   // ---- low-level socket helpers -----------------------------------------------------------------

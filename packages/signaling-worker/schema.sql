@@ -32,7 +32,12 @@ CREATE TABLE servers (
   name_lower TEXT NOT NULL UNIQUE,
   icon_key TEXT,
   owner_user_id TEXT NOT NULL,
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  -- How this server's rooms carry audio/video (MediaMode in @concord/shared): 'mesh' (P2P) or 'sfu'
+  -- (Cloudflare Realtime SFU). Set only by hand in D1, never through the app or the client.
+  -- Existing databases: ALTER TABLE servers ADD COLUMN media_mode TEXT NOT NULL DEFAULT 'mesh'
+  --   CHECK (media_mode IN ('mesh', 'sfu'));
+  media_mode TEXT NOT NULL DEFAULT 'mesh' CHECK (media_mode IN ('mesh', 'sfu'))
 );
 
 CREATE TABLE rooms (

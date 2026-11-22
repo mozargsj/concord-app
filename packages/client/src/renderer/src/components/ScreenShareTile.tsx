@@ -188,24 +188,30 @@ export default function ScreenShareTile({
     setHasStartedViewing(true);
   }
 
-  function handleClose(event: ReactMouseEvent) {
-    event.stopPropagation();
-    // Full reset back to the pre-first-click state — stops both the image (isLive) and the
-    // always-on audio element (hasStartedViewing gates its mount, so this also cuts the audio)
-    // rather than just leaving everything running quietly behind the collapsed grid tile.
-    // Captures a frozen frame first (same helper the own-preview auto-pause uses) so the gate
-    // shows a blurred static picture of where the transmission left off instead of going
-    // straight back to a plain "Clique para visualizar" — it only becomes live (and audible)
-    // again once clicked. Doesn't apply to the own-preview tile — there's no "pre-first-click"
-    // state for it to reset to, it just keeps auto-following Concord's own focus like normal
-    // once the fullscreen view is closed.
-    if (!isOwnPreview) {
+  // Losing focus by ANY path is "closing the transmission": the X below, Esc or "Sair da
+  // transmissão" (both in RoomView), or focusing another tile. [Bug corrigido, 2026-11-22] Only the
+  // X used to reset, so the other paths left it playing live (and audible) in the grid. Full reset
+  // back to the pre-first-click state — stops the image (isLive) and the always-on audio element
+  // (hasStartedViewing gates its mount) — with the last frame captured first, so the gate shows it
+  // blurred instead of going blank. Runs after the render that dropped focus, while the video is
+  // still mounted. The own-preview tile has no pre-first-click state: it just keeps following
+  // Concord's focus. A remote-control session never gets here by Esc (useControllerCapture
+  // swallows it).
+  const wasFocusedRef = useRef(isFocused);
+  useEffect(() => {
+    if (wasFocusedRef.current && !isFocused && !isOwnPreview) {
       setFrozenFrameUrl(captureFrozenFrame());
       setIsLive(false);
       setHasStartedViewing(false);
       setIsVolumeSliderOpen(false);
     }
-    onCloseFocus();
+    wasFocusedRef.current = isFocused;
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- captureFrozenFrame only reads the ref
+  }, [isFocused, isOwnPreview]);
+
+  function handleClose(event: ReactMouseEvent) {
+    event.stopPropagation();
+    onCloseFocus(); // the reset itself is the focus effect above
   }
 
   // Left click opens/closes the volume ruler. Right click is the dedicated mute toggle — kept

@@ -13,6 +13,14 @@ TURN_API_TOKEN=
 # what scripts/publish-update.sh reads from here to notify already-open clients automatically.
 ADMIN_SECRET=
 
+# Cloudflare Realtime SFU app (Dashboard: Realtime > SFU) — optional, blank = every room stays mesh.
+REALTIME_SFU_APP_ID=
+REALTIME_SFU_APP_SECRET=
+
+# Local testing only: 'sfu' or 'mesh' forces that media mode for every room (ignores each server's
+# servers.media_mode, which the fake test-dev servers don't have). Leave unset otherwise.
+# MEDIA_MODE_OVERRIDE=sfu
+
 # Google OAuth client secret — token exchange happens server-side now (rest.ts's
 # handleGoogleExchange), see decisions.md's security-audit section for why this moved here from
 # packages/client/.env.

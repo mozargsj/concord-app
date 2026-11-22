@@ -2,6 +2,36 @@
  * or offers; 'offline' just means "not reachable" — the user is still in the room. */
 export type PresenceStatus = 'online' | 'busy' | 'unavailable' | 'offline';
 
+/** How a room carries audio and video. 'mesh' = P2P between every pair (default); 'sfu' = through
+ * the Cloudflare Realtime SFU. Only the server decides (servers.media_mode in D1, fixed while the
+ * room has people); the client never chooses it. Data channels (chat, images, sounds, remote control,
+ * files) stay P2P in both modes. */
+export type MediaMode = 'mesh' | 'sfu';
+
+/** One published track in SFU mode — same roles the mesh uses for its senders. */
+export type SfuTrackRole = 'mic' | 'camera' | 'screenVideo' | 'screenAudio' | 'musicAudio';
+
+// ---- Server presence (/presence-ws?serverId=) — who is in each room of a server, for members
+// who are not in that room. Separate socket from the room signaling: one per open server.
+
+export interface PresencePeer {
+  userId: string;
+  displayName: string;
+}
+
+/** The only client→server message on the presence socket: authenticates, then the server answers
+ * with a snapshot and keeps pushing per-room changes. */
+export interface PresenceSubscribeMessage {
+  type: 'presence-subscribe';
+  sessionToken: string;
+}
+
+export type PresenceServerMessage =
+  /** Every room of the server that has someone in it (absent roomId = empty room). */
+  | { type: 'presence-snapshot'; rooms: Record<string, PresencePeer[]> }
+  /** One room's full current list (empty array = room emptied). */
+  | { type: 'presence-room'; roomId: string; peers: PresencePeer[] };
+
 export interface JoinRoomMessage {
   type: 'join-room';
   roomId: string;
@@ -21,6 +51,9 @@ export interface JoinRoomMessage {
   sessionToken: string;
   /** Last status the user picked (persisted client-side); the server defaults to 'online'. */
   status?: PresenceStatus;
+  /** True on clients that can run media through the SFU. Older clients omit it, and the server
+   * refuses them from an SFU room ('update-required') instead of letting a mixed room form. */
+  sfuCapable?: boolean;
 }
 
 export interface SdpOfferMessage {
@@ -139,7 +172,59 @@ export interface StatusChangedMessage {
   status: PresenceStatus;
 }
 
+// ---- SFU mode (MediaMode 'sfu') -------------------------------------------------------------
+// The client never talks to the Cloudflare API: it sends its SDP here, the room's Durable Object
+// calls the API with the app secret and answers with 'sfu-result' (matched by requestId). Each
+// client keeps two RTCPeerConnections to the SFU: one publishes (client offers), one subscribes
+// (SFU offers). `fresh` asks the server for a new SFU session on that side (first use, or after
+// the client rebuilt a failed connection).
+
+/** Publishes new local tracks: the publisher connection's offer plus the mid of each new track. */
+export interface SfuPublishMessage {
+  type: 'sfu-publish';
+  requestId: string;
+  fresh: boolean;
+  sdp: string;
+  tracks: { mid: string; role: SfuTrackRole }[];
+}
+
+/** Stops published tracks (their transceivers already stopped in this offer). */
+export interface SfuUnpublishMessage {
+  type: 'sfu-unpublish';
+  requestId: string;
+  sdp: string;
+  mids: string[];
+}
+
+/** Pulls other peers' tracks onto the subscriber connection. The server resolves each peerId to
+ * that peer's SFU session; the answer carries the SFU's offer and the mid of each track. */
+export interface SfuSubscribeMessage {
+  type: 'sfu-subscribe';
+  requestId: string;
+  fresh: boolean;
+  tracks: { peerId: string; trackName: string }[];
+}
+
+/** The subscriber connection's answer to the offer that came back in the last 'sfu-subscribe'. */
+export interface SfuRenegotiateMessage {
+  type: 'sfu-renegotiate';
+  requestId: string;
+  sdp: string;
+}
+
+/** Drops subscriptions (mids on the subscriber connection) for tracks that ended. */
+export interface SfuUnsubscribeMessage {
+  type: 'sfu-unsubscribe';
+  requestId: string;
+  mids: string[];
+}
+
 export type ClientToServerMessage =
+  | SfuPublishMessage
+  | SfuUnpublishMessage
+  | SfuSubscribeMessage
+  | SfuRenegotiateMessage
+  | SfuUnsubscribeMessage
   | JoinRoomMessage
   | StatusChangedMessage
   | SdpOfferMessage
@@ -177,12 +262,34 @@ export interface RoomJoinedMessage {
   hostPeerId: string;
   epoch: number;
   peers: { peerId: string; displayName: string; userId: string; status: PresenceStatus }[];
+  /** Absent from servers older than SFU support — read as 'mesh'. */
+  mediaMode?: MediaMode;
 }
 
 export interface JoinRejectedMessage {
   type: 'join-rejected';
   roomId: string;
-  reason: 'room-full' | 'unauthorized' | 'forbidden';
+  reason: 'room-full' | 'unauthorized' | 'forbidden' | 'update-required';
+}
+
+/** Answer to any SFU request, matched by requestId. `tracks` comes back for 'sfu-publish' and
+ * 'sfu-subscribe' (per-track failures in `error`). */
+export interface SfuResultMessage {
+  type: 'sfu-result';
+  requestId: string;
+  ok: boolean;
+  error?: string;
+  sdp?: string;
+  tracks?: { peerId?: string; trackName: string; mid?: string; error?: string }[];
+}
+
+/** The full current list of one peer's published SFU tracks — sent to everyone else whenever it
+ * changes, and to a new joiner once per peer right after 'room-joined'. */
+export interface PeerSfuTracksMessage {
+  type: 'peer-sfu-tracks';
+  roomId: string;
+  peerId: string;
+  tracks: { role: SfuTrackRole; trackName: string }[];
 }
 
 export interface PeerJoinedMessage {
@@ -289,6 +396,8 @@ export interface PeerServerIconChangedMessage {
 }
 
 export type ServerToClientMessage =
+  | SfuResultMessage
+  | PeerSfuTracksMessage
   | RoomJoinedMessage
   | JoinRejectedMessage
   | SdpOfferRelayMessage

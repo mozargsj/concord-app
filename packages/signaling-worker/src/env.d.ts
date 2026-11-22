@@ -1,11 +1,14 @@
 import type { RoomDurableObject } from './room';
 import type { UpdatesBroadcaster } from './updatesBroadcaster';
+import type { ServerPresence } from './presence';
 
 export interface Env {
   ROOMS: DurableObjectNamespace<RoomDurableObject>;
   /** Singleton (idFromName('global')) — server->client "update available" push, see
    * updatesBroadcaster.ts. Not room-scoped, unrelated to ROOMS. */
   UPDATES: DurableObjectNamespace<UpdatesBroadcaster>;
+  /** One per server (idFromName(serverId)) — who is in each room, for members outside it (presence.ts). */
+  PRESENCE: DurableObjectNamespace<ServerPresence>;
   DB: D1Database;
   /** Native R2 binding — used for direct in-Worker reads/writes (update artifacts). Presigned
    * upload/download URLs for client-facing avatar/icon uploads (src/r2.ts, aws4fetch-based) were
@@ -26,9 +29,16 @@ export interface Env {
   /** [2026-08-29] Moved here from packages/client/.env (see rest.ts's handleGoogleExchange) — the
    * one place this secret should have ever lived. Never sent to any client, never in wrangler.jsonc. */
   GOOGLE_OAUTH_CLIENT_SECRET: string;
+  /** Cloudflare Realtime SFU app (Dashboard: Realtime > SFU) — both blank = SFU unavailable, every
+   * room stays mesh whatever servers.media_mode says (src/sfu.ts sfuConfigured). */
+  REALTIME_SFU_APP_ID: string;
+  REALTIME_SFU_APP_SECRET: string;
 
   // Plain vars — see wrangler.jsonc "vars".
   ALLOW_UNAUTHENTICATED_ROOMS: string;
+  /** Optional, meant for `.dev.vars`: 'sfu' or 'mesh' forces that mode for every room instead of
+   * each server's servers.media_mode (local testing with the fake test-dev servers). Unset in production. */
+  MEDIA_MODE_OVERRIDE?: string;
   /** OAuth client ID (public — same value shipped in packages/client/.env), used as the expected
    * `aud` claim when verifying a Google id_token server-side. See src/googleAuth.ts. */
   GOOGLE_OAUTH_CLIENT_ID: string;

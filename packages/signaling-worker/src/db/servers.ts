@@ -7,6 +7,8 @@ export interface ServerRecord {
   icon_key: string | null;
   owner_user_id: string;
   created_at: number;
+  /** 'mesh' | 'sfu' (MediaMode). Optional: absent until the ALTER TABLE in schema.sql runs. */
+  media_mode?: string;
 }
 
 export class ServerCreateConflictError extends Error {

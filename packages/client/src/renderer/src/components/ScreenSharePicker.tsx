@@ -4,9 +4,9 @@ import type { ScreenSource } from '../types/window';
 import {
   getIncludeAudioPreference,
   setIncludeAudioPreference,
-  getScreenQualityMode,
-  setScreenQualityMode,
-  type ScreenQualityMode
+  getScreenFrameRate,
+  setScreenFrameRate,
+  type ScreenFrameRate
 } from '../lib/screenSharePreferences';
 import SmartAppControlHint from './SmartAppControlHint';
 import Toggle from './Toggle';
@@ -14,7 +14,7 @@ import Tooltip from './Tooltip';
 import '../styles/ScreenSharePicker.css';
 
 interface ScreenSharePickerProps {
-  onSelect: (source: ScreenSource, includeAudio: boolean, qualityMode: ScreenQualityMode) => void;
+  onSelect: (source: ScreenSource, includeAudio: boolean, frameRate: ScreenFrameRate) => void;
   onClose: () => void;
 }
 
@@ -24,10 +24,9 @@ export default function ScreenSharePicker({ onSelect, onClose }: ScreenSharePick
   // Starts from whatever was chosen last time (getIncludeAudioPreference), not always unchecked —
   // keeps the choice consistent across transmissions instead of resetting every time it's opened.
   const [includeAudio, setIncludeAudio] = useState(getIncludeAudioPreference);
-  // Same "remember last choice" pattern — pedido do Mozar: qual lado da troca banda/qualidade
-  // priorizar é decisão de quem compartilha, não algo fixo no app (webrtcMesh.ts's
-  // setScreenQualityMode).
-  const [qualityMode, setQualityMode] = useState<ScreenQualityMode>(getScreenQualityMode);
+  // Same "remember last choice" pattern — always 1080p, only the frame rate is chosen here
+  // (screenSharePreferences.ts).
+  const [frameRate, setFrameRate] = useState<ScreenFrameRate>(getScreenFrameRate);
   // null while the check is in flight — the hint only makes sense once we actually know either way.
   const [isEchoFixAvailable, setIsEchoFixAvailable] = useState<boolean | null>(null);
 
@@ -103,40 +102,30 @@ export default function ScreenSharePicker({ onSelect, onClose }: ScreenSharePick
         </div>
 
         <div className="screen-picker__quality-section">
-          <span className="screen-picker__quality-label">Se a banda apertar, priorizar:</span>
+          <span className="screen-picker__quality-label">Transmitir em:</span>
           <div className="screen-picker__quality-options">
-            <button
-              type="button"
-              className={
-                'screen-picker__quality-option' +
-                (qualityMode === 'quality' ? ' screen-picker__quality-option--selected' : '')
-              }
-              onClick={() => {
-                setQualityMode('quality');
-                setScreenQualityMode('quality');
-              }}
-            >
-              <span className="screen-picker__quality-option-title">Qualidade</span>
-              <span className="screen-picker__quality-option-hint">
-                Mantém nitidez, perde fps — ideal pra texto, documentos, apresentações
-              </span>
-            </button>
-            <button
-              type="button"
-              className={
-                'screen-picker__quality-option' +
-                (qualityMode === 'smoothness' ? ' screen-picker__quality-option--selected' : '')
-              }
-              onClick={() => {
-                setQualityMode('smoothness');
-                setScreenQualityMode('smoothness');
-              }}
-            >
-              <span className="screen-picker__quality-option-title">Fluidez</span>
-              <span className="screen-picker__quality-option-hint">
-                Mantém os fps, perde nitidez — ideal pra jogos e conteúdo dinâmico
-              </span>
-            </button>
+            {(
+              [
+                { value: 60, title: '1080p 60 fps', hint: 'Mais fluido — pesa mais no PC de quem transmite' },
+                { value: 30, title: '1080p 30 fps', hint: 'Metade do custo — use se o jogo perder fps' }
+              ] as const
+            ).map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                className={
+                  'screen-picker__quality-option' +
+                  (frameRate === option.value ? ' screen-picker__quality-option--selected' : '')
+                }
+                onClick={() => {
+                  setFrameRate(option.value);
+                  setScreenFrameRate(option.value);
+                }}
+              >
+                <span className="screen-picker__quality-option-title">{option.title}</span>
+                <span className="screen-picker__quality-option-hint">{option.hint}</span>
+              </button>
+            ))}
           </div>
         </div>
 
@@ -160,7 +149,7 @@ export default function ScreenSharePicker({ onSelect, onClose }: ScreenSharePick
           <button
             className="screen-picker__confirm"
             disabled={!selectedSource}
-            onClick={() => selectedSource && onSelect(selectedSource, includeAudio, qualityMode)}
+            onClick={() => selectedSource && onSelect(selectedSource, includeAudio, frameRate)}
           >
             Compartilhar
           </button>

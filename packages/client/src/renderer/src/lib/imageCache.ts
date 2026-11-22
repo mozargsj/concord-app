@@ -52,6 +52,16 @@ export async function loadCachedImage(kind: ImageCacheKind, ownerId: string): Pr
   return { url, hash: await hashBytes(cached.data) };
 }
 
+/** Same disk read as loadCachedImage, for the other-room rosters (useServerPresence) — tracked
+ * under its own key, so it never revokes the URL the joined room is showing for the same person. */
+export async function loadCachedAvatarForPresence(userId: string): Promise<string | null> {
+  const cached = await window.concord.imageCache.load(cacheKey('avatar', userId));
+  if (!cached) return null;
+  const url = URL.createObjectURL(new Blob([cached.data], { type: cached.mimeType }));
+  trackObjectUrl(`presence_${userId}`, url);
+  return url;
+}
+
 /** Writes to disk (persists across restarts) and returns an object URL for immediate display. */
 export async function saveCachedImage(
   kind: ImageCacheKind,

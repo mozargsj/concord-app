@@ -6,6 +6,7 @@ import * as logsRepo from './db/logs';
 
 export { RoomDurableObject } from './room';
 export { UpdatesBroadcaster } from './updatesBroadcaster';
+export { ServerPresence } from './presence';
 
 /**
  * [2026-08-29] Single origin for both REST and WebSocket signaling — same shape as
@@ -27,6 +28,11 @@ export default {
       if (url.pathname === '/updates-ws') {
         const id = env.UPDATES.idFromName('global');
         return env.UPDATES.get(id).fetch(request);
+      }
+      if (url.pathname === '/presence-ws') {
+        const serverId = url.searchParams.get('serverId');
+        if (!serverId) return new Response('Missing serverId query parameter.', { status: 400 });
+        return env.PRESENCE.get(env.PRESENCE.idFromName(serverId)).fetch(request);
       }
       const roomId = url.searchParams.get('roomId');
       if (!roomId) return new Response('Missing roomId query parameter.', { status: 400 });
