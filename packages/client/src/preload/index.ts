@@ -29,7 +29,7 @@ contextBridge.exposeInMainWorld('concord', {
       ipcRenderer.invoke('process-loopback:start', sessionId, mode, targetPid),
     stop: (sessionId: string) => ipcRenderer.send('process-loopback:stop', sessionId),
     isAvailable: (): Promise<boolean> => ipcRenderer.invoke('process-loopback:is-available'),
-    listAudioSessions: (): Promise<Array<{ pid: number; name: string; exe: string; ancestors: number[] }>> =>
+    listAudioSessions: (): Promise<Array<{ pid: number; name: string; exe: string; ancestors: number[]; descendantExes: string[] }>> =>
       ipcRenderer.invoke('process-loopback:list-audio-sessions'),
     onChunk: (sessionId: string, callback: (chunk: Uint8Array) => void) => {
       const channel = `process-loopback:chunk:${sessionId}`;

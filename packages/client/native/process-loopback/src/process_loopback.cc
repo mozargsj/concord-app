@@ -381,39 +381,73 @@ std::wstring FriendlyNameForPid(DWORD pid, const std::wstring& sessionDisplayNam
   return dot == std::wstring::npos ? exeFileName : exeFileName.substr(0, dot);
 }
 
-// pid -> parent pid for every running process (one Toolhelp snapshot). PROCESS_LOOPBACK captures a
-// whole process TREE in both modes, so the caller needs each session's ancestry: to keep Concord's
-// own children out of the list, and so an INCLUDE capture of an ancestor never drags an excluded
-// app (a child of it) into the screen-share mix.
-// ponytail: parent pids can be stale (parent exited, pid reused); Windows builds the loopback tree
-// from the same parent links, so this mirrors what the capture itself will do.
-std::map<DWORD, DWORD> SnapshotParentPids() {
-  std::map<DWORD, DWORD> parents;
+// Parent pid and exe filename of every running process (one Toolhelp snapshot). PROCESS_LOOPBACK
+// captures a whole process TREE in both modes, so an INCLUDE capture takes everything below its
+// target: the session list needs each session's ancestry (to keep Concord's own tree out, and to
+// drop a child already covered by a captured parent) and its descendants' exes (so a capture never
+// drags an excluded app running below it into the screen-share mix, even one silent right now).
+// ponytail: parent pids can be stale (parent exited, pid reused) — that only ever makes the
+// checks below drop more, never capture more.
+struct ProcInfo {
+  DWORD parent;
+  std::wstring exe;
+};
+
+std::map<DWORD, ProcInfo> SnapshotProcesses() {
+  std::map<DWORD, ProcInfo> processes;
   HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-  if (snapshot == INVALID_HANDLE_VALUE) return parents;
+  if (snapshot == INVALID_HANDLE_VALUE) return processes;
   PROCESSENTRY32W entry = {};
   entry.dwSize = sizeof(entry);
   if (Process32FirstW(snapshot, &entry)) {
     do {
-      parents[entry.th32ProcessID] = entry.th32ParentProcessID;
+      processes[entry.th32ProcessID] = ProcInfo{entry.th32ParentProcessID, entry.szExeFile};
     } while (Process32NextW(snapshot, &entry));
   }
   CloseHandle(snapshot);
-  return parents;
+  return processes;
 }
 
 // Parent, grandparent, ... up to the root. Depth cap + self-check guard against parent-pid cycles
 // that stale/reused pids can produce.
-std::vector<DWORD> AncestorsOf(DWORD pid, const std::map<DWORD, DWORD>& parents) {
+std::vector<DWORD> AncestorsOf(DWORD pid, const std::map<DWORD, ProcInfo>& processes) {
   std::vector<DWORD> ancestors;
   DWORD current = pid;
   for (int depth = 0; depth < 64; depth++) {
-    auto it = parents.find(current);
-    if (it == parents.end() || it->second == 0 || it->second == current || it->second == pid) break;
-    current = it->second;
+    auto it = processes.find(current);
+    if (it == processes.end() || it->second.parent == 0 || it->second.parent == current || it->second.parent == pid)
+      break;
+    current = it->second.parent;
     ancestors.push_back(current);
   }
   return ancestors;
+}
+
+// Exe filenames of every process below `pid` (children, grandchildren, ...), whether or not they
+// play anything. Visited set + cap guard against cycles from stale parent pids.
+std::vector<std::wstring> DescendantExesOf(DWORD pid, const std::map<DWORD, ProcInfo>& processes) {
+  std::vector<std::wstring> exes;
+  std::vector<DWORD> pending{pid};
+  std::vector<DWORD> visited{pid};
+  while (!pending.empty() && visited.size() < 4096) {
+    DWORD parent = pending.back();
+    pending.pop_back();
+    for (const auto& [childPid, info] : processes) {
+      if (info.parent != parent || childPid == parent) continue;
+      bool seen = false;
+      for (DWORD v : visited) {
+        if (v == childPid) {
+          seen = true;
+          break;
+        }
+      }
+      if (seen) continue;
+      visited.push_back(childPid);
+      pending.push_back(childPid);
+      exes.push_back(info.exe);
+    }
+  }
+  return exes;
 }
 
 // Enumerates processes with an active WASAPI render session on the default output device — the
@@ -448,7 +482,10 @@ Napi::Value ListAudioSessions(const Napi::CallbackInfo& info) {
     sessionEnumerator->GetCount(&sessionCount);
     DWORD selfPid = GetCurrentProcessId();
     std::vector<DWORD> seenPids;
-    std::map<DWORD, DWORD> parents = SnapshotParentPids();
+    std::map<DWORD, ProcInfo> processes = SnapshotProcesses();
+    // Processes ABOVE Concord (whoever launched it: explorer, the updater, a launcher). Their tree
+    // contains Concord, so an INCLUDE capture of one would carry the call's voices too.
+    std::vector<DWORD> selfAncestors = AncestorsOf(selfPid, processes);
 
     for (int i = 0; i < sessionCount; i++) {
       IAudioSessionControl* control = nullptr;
@@ -469,21 +506,22 @@ Napi::Value ListAudioSessions(const Napi::CallbackInfo& info) {
           }
         }
 
-        std::vector<DWORD> ancestors = AncestorsOf(pid, parents);
-        bool isConcordChild = false;
+        std::vector<DWORD> ancestors = AncestorsOf(pid, processes);
+        bool touchesConcordTree = false;
         for (DWORD ancestor : ancestors) {
-          if (ancestor == selfPid) {
-            isConcordChild = true;
-            break;
-          }
+          if (ancestor == selfPid) touchesConcordTree = true;
+        }
+        for (DWORD selfAncestor : selfAncestors) {
+          if (selfAncestor == pid) touchesConcordTree = true;
         }
 
-        // Skips: system-sounds pseudo-session, Concord's own process tree (Chromium's audio
-        // service is a child process — it's what actually plays everyone's voice, so including
-        // it anywhere would echo the call back out), duplicate sessions from the same app (one
-        // process can open several), and anything not actually active right now
-        // (expired/inactive sessions from an app that already closed its stream).
-        if (control2->IsSystemSoundsSession() != S_OK && pid != 0 && pid != selfPid && !isConcordChild &&
+        // Skips: system-sounds pseudo-session, anything whose capture would contain Concord's
+        // audio — its own tree (Chromium's audio service is a child process, it's what actually
+        // plays everyone's voice) and the processes above it (an INCLUDE capture takes the whole
+        // tree) — duplicate sessions from the same app (one process can open several), and
+        // anything not actually active right now (expired/inactive sessions from an app that
+        // already closed its stream).
+        if (control2->IsSystemSoundsSession() != S_OK && pid != 0 && pid != selfPid && !touchesConcordTree &&
             !alreadySeen && state == AudioSessionStateActive) {
           LPWSTR rawDisplayName = nullptr;
           std::wstring displayName;
@@ -508,6 +546,12 @@ Napi::Value ListAudioSessions(const Napi::CallbackInfo& info) {
           entry.Set("name", Napi::String::New(env, WideToUtf8(name)));
           entry.Set("exe", Napi::String::New(env, WideToUtf8(exeFileName)));
           entry.Set("ancestors", ancestorArray);
+          std::vector<std::wstring> descendantExes = DescendantExesOf(pid, processes);
+          Napi::Array descendantArray = Napi::Array::New(env, descendantExes.size());
+          for (size_t d = 0; d < descendantExes.size(); d++) {
+            descendantArray[static_cast<uint32_t>(d)] = Napi::String::New(env, WideToUtf8(descendantExes[d]));
+          }
+          entry.Set("descendantExes", descendantArray);
           result[static_cast<uint32_t>(written++)] = entry;
           seenPids.push_back(pid);
         }

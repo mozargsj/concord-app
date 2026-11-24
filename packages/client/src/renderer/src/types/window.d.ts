@@ -22,7 +22,8 @@ export interface ScreenSource {
   thumbnailDataUrl: string;
 }
 
-/** An app with an active audio session (native ListAudioSessions); Concord's own tree is never listed. */
+/** An app with an active audio session (native ListAudioSessions); Concord's own tree and the
+ * processes above it are never listed (capturing them would carry the call's audio). */
 export interface AudioSession {
   pid: number;
   name: string;
@@ -30,6 +31,8 @@ export interface AudioSession {
   exe: string;
   /** Parent, grandparent, ... (nearest first). */
   ancestors: number[];
+  /** Exe filenames of every running process below this one, playing or not. */
+  descendantExes: string[];
 }
 
 export interface RcPeerRef {

@@ -4,7 +4,8 @@
 //
 // Why INCLUDE and not EXCLUDE: the Windows API takes ONE target PID per capture, so "everything
 // except Concord and these N apps" can't be a single EXCLUDE capture. Both modes take the target's
-// whole process TREE, hence the two tree rules below.
+// whole process TREE, hence the two tree rules below. Concord's own tree and the processes above it
+// never reach this list (process_loopback.cc drops them: their capture would carry the call).
 
 export interface AudioSessionInfo {
   pid: number;
@@ -12,18 +13,20 @@ export interface AudioSessionInfo {
   exe: string;
   /** Parent, grandparent, ... (nearest first). */
   ancestors: number[];
+  /** Exe filenames of every running process below this one, playing or not. */
+  descendantExes: string[];
 }
 
 export function pidsToCapture(sessions: AudioSessionInfo[], excludedExes: string[]): number[] {
   const excluded = new Set(excludedExes.map((exe) => exe.toLowerCase()));
-  const isExcluded = (session: AudioSessionInfo) => excluded.has(session.exe.toLowerCase());
-  const excludedSessions = sessions.filter(isExcluded);
+  const isExcluded = (exe: string) => excluded.has(exe.toLowerCase());
 
   // Capturing a process's tree would also capture an excluded app running under it (a game
-  // launched by a launcher that also makes sound): skip that ancestor, losing only its own sound.
-  const safe = sessions.filter(
-    (session) => !isExcluded(session) && !excludedSessions.some((other) => other.ancestors.includes(session.pid))
-  );
+  // launched by a launcher that also makes sound), even one silent right now: skip that process,
+  // losing only its own sound.
+  // ponytail: an excluded app launched under a captured process AFTER this runs is heard until the
+  // next refresh (startAppsOnlyLoopbackAudio, 1.5 s) drops that capture.
+  const safe = sessions.filter((session) => !isExcluded(session.exe) && !session.descendantExes.some(isExcluded));
   // A safe ancestor's capture already carries this one: capturing both would double its audio.
   return safe
     .filter((session) => !safe.some((other) => session.ancestors.includes(other.pid)))
