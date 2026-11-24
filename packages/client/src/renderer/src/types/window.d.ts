@@ -22,6 +22,16 @@ export interface ScreenSource {
   thumbnailDataUrl: string;
 }
 
+/** An app with an active audio session (native ListAudioSessions); Concord's own tree is never listed. */
+export interface AudioSession {
+  pid: number;
+  name: string;
+  /** Executable filename ("Spotify.exe") — stable across runs, unlike the pid. */
+  exe: string;
+  /** Parent, grandparent, ... (nearest first). */
+  ancestors: number[];
+}
+
 export interface RcPeerRef {
   peerId: string;
   userId: string;
@@ -154,7 +164,7 @@ declare global {
         start: (sessionId: string, mode: 'exclude' | 'include', targetPid: number) => Promise<boolean>;
         stop: (sessionId: string) => void;
         isAvailable: () => Promise<boolean>;
-        listAudioSessions: () => Promise<Array<{ pid: number; name: string }>>;
+        listAudioSessions: () => Promise<AudioSession[]>;
         onChunk: (sessionId: string, callback: (chunk: Uint8Array) => void) => () => void;
         onStopped: (sessionId: string, callback: () => void) => () => void;
       };

@@ -19,7 +19,7 @@ type LoopbackMode = 'exclude' | 'include';
 interface NativeModule {
   start: (sessionId: string, mode: LoopbackMode, targetPid: number, onEvent: NativeOnEvent) => boolean;
   stop: (sessionId: string) => void;
-  listAudioSessions: () => Array<{ pid: number; name: string }>;
+  listAudioSessions: () => Array<{ pid: number; name: string; exe: string; ancestors: number[] }>;
 }
 
 const START_TIMEOUT_MS = 5000;

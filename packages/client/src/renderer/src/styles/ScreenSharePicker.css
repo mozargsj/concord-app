@@ -177,6 +177,42 @@
   line-height: 1.4;
 }
 
+.screen-picker__app-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  max-height: 96px;
+  overflow-y: auto;
+}
+
+.screen-picker__app-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: var(--color-bg-rail);
+  color: var(--color-text-primary);
+  font-size: 13px;
+}
+
+.screen-picker__app-chip:hover {
+  background: var(--color-bg-elevated-hover);
+}
+
+.screen-picker__app-chip:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+/* Excluded: struck through, muted icon, accent outline — the app's sound stays out of the share. */
+.screen-picker__app-chip--excluded {
+  border-color: var(--color-accent);
+  color: var(--color-text-secondary);
+  text-decoration: line-through;
+}
+
 .screen-picker__footer {
   flex-shrink: 0;
   margin-top: 16px;

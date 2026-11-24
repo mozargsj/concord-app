@@ -38,11 +38,12 @@ import { usePeerVolumeControl } from '../hooks/usePeerVolumeControl';
 import { getPreferredDeviceId } from '../lib/devicePreferences';
 import { loadCachedImage } from '../lib/imageCache';
 import {
+  startAppsOnlyLoopbackAudio,
   startExcludedLoopbackAudio,
   startProcessLoopbackAudio,
   type LoopbackAudioSession
 } from '../lib/processLoopbackAudio';
-import type { ScreenFrameRate } from '../lib/screenSharePreferences';
+import { getExcludedAudioApps, isDefaultExcludedAudioApp, type ScreenFrameRate } from '../lib/screenSharePreferences';
 import {
   playCameraStart,
   playCameraStop,
@@ -528,7 +529,21 @@ export default function ServerListPage({
     // folded into the sharer's captured system audio and sent back out). Windows-only; returns
     // null on any other platform or if the native addon isn't available/blocked, in which case
     // the legacy whole-desktop-loopback capture below runs completely unchanged.
-    const loopbackSession = includeAudio ? await startExcludedLoopbackAudio() : null;
+    // [Pedido do Mozar, 2026-11-24] With apps excluded by the user (picker, per account), it's one
+    // capture per allowed app instead (startAppsOnlyLoopbackAudio) — and never the legacy capture:
+    // that one takes the whole desktop mix, excluded apps included, so without the addon the share
+    // goes out with no system audio at all. Exception: the out-of-the-box exclusions (call apps,
+    // DEFAULT_EXCLUDED_AUDIO_APPS) alone don't do that — otherwise every PC where Smart App Control
+    // blocks the addon would lose system audio without anyone having chosen anything; those keep
+    // the legacy capture, as before.
+    const excludedExes = getExcludedAudioApps(currentUser.id).map((app) => app.exe);
+    const loopbackSession = !includeAudio
+      ? null
+      : excludedExes.length > 0
+        ? await startAppsOnlyLoopbackAudio(excludedExes)
+        : await startExcludedLoopbackAudio();
+    const audioDroppedForExclusions =
+      includeAudio && !loopbackSession && excludedExes.some((exe) => !isDefaultExcludedAudioApp(exe));
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         // Electron's documented desktopCapturer pattern — legacy constraint shape is still
@@ -558,8 +573,8 @@ export default function ServerListPage({
         // constraint, e pedir os dois ao mesmo tempo botaria dois sistemas de captura de sistema
         // rodando ao mesmo tempo.
         audio:
-          includeAudio && !loopbackSession
-            ? ({ mandatory: { chromeMediaSource: 'desktop' }, optional: [{ channelCount: 2 }] } as MediaTrackConstraints)
+          includeAudio && !loopbackSession && !audioDroppedForExclusions
+            ?({ mandatory: { chromeMediaSource: 'desktop' }, optional: [{ channelCount: 2 }] } as MediaTrackConstraints)
             : false,
         video: {
           mandatory: {
@@ -585,7 +600,11 @@ export default function ServerListPage({
       // no remote control at all.
       setSharingFullScreen(!!source.displayId);
       void window.concord.remoteControl.setShare(source.displayId);
-      setMediaError(null);
+      setMediaError(
+        audioDroppedForExclusions
+          ? 'Transmitindo sem áudio do sistema: excluir aplicativos do áudio exige o módulo nativo, que não está disponível neste PC.'
+          : null
+      );
       setLocalScreenTrack(stream, frameRate);
       playTransmissionEnter();
 
@@ -966,7 +985,11 @@ export default function ServerListPage({
       )}
 
       {isScreenPickerOpen && (
-        <ScreenSharePicker onSelect={handlePickScreenSource} onClose={() => setIsScreenPickerOpen(false)} />
+        <ScreenSharePicker
+          userId={currentUser.id}
+          onSelect={handlePickScreenSource}
+          onClose={() => setIsScreenPickerOpen(false)}
+        />
       )}
 
       {isAudioPickerOpen && (

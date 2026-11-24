@@ -1,11 +1,16 @@
 import { useEffect, useState } from 'react';
-import { X } from 'lucide-react';
-import type { ScreenSource } from '../types/window';
+import { VolumeX, X } from 'lucide-react';
+import type { AudioSession, ScreenSource } from '../types/window';
+import { listAudioSessions } from '../lib/processLoopbackAudio';
 import {
   getIncludeAudioPreference,
   setIncludeAudioPreference,
   getScreenFrameRate,
   setScreenFrameRate,
+  getExcludedAudioApps,
+  setExcludedAudioApps,
+  isDefaultExcludedAudioApp,
+  type ExcludedAudioApp,
   type ScreenFrameRate
 } from '../lib/screenSharePreferences';
 import SmartAppControlHint from './SmartAppControlHint';
@@ -14,11 +19,19 @@ import Tooltip from './Tooltip';
 import '../styles/ScreenSharePicker.css';
 
 interface ScreenSharePickerProps {
+  /** Owner of the "don't transmit these apps' audio" list (screenSharePreferences.ts). */
+  userId: string;
   onSelect: (source: ScreenSource, includeAudio: boolean, frameRate: ScreenFrameRate) => void;
   onClose: () => void;
 }
 
-export default function ScreenSharePicker({ onSelect, onClose }: ScreenSharePickerProps) {
+// Same cadence as AudioSharePicker: WASAPI only lists an app while it's playing, so the list
+// picks up whoever presses play after the picker opened.
+const AUDIO_SESSIONS_REFRESH_MS = 1500;
+
+const sameExe = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+
+export default function ScreenSharePicker({ userId, onSelect, onClose }: ScreenSharePickerProps) {
   const [sources, setSources] = useState<ScreenSource[] | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // Starts from whatever was chosen last time (getIncludeAudioPreference), not always unchecked —
@@ -54,6 +67,49 @@ export default function ScreenSharePicker({ onSelect, onClose }: ScreenSharePick
       cancelled = true;
     };
   }, []);
+
+  // [Pedido do Mozar, 2026-11-24] Apps kept out of the system audio. Only with the native addon:
+  // without it the system audio is the whole desktop mix and nothing can be taken out of it.
+  const [excludedApps, setExcludedApps] = useState<ExcludedAudioApp[]>(() => getExcludedAudioApps(userId));
+  const [audioSessions, setAudioSessions] = useState<AudioSession[]>([]);
+  const showAppExclusions = includeAudio && isEchoFixAvailable === true;
+
+  useEffect(() => {
+    if (!showAppExclusions) return;
+    let cancelled = false;
+    const refresh = () =>
+      listAudioSessions()
+        .then((result) => {
+          if (!cancelled) setAudioSessions(result);
+        })
+        .catch(() => {});
+    refresh();
+    const interval = setInterval(refresh, AUDIO_SESSIONS_REFRESH_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [showAppExclusions]);
+
+  // Apps the user excluded stay listed even when silent, so they can be put back; then whoever is
+  // playing. Default exclusions (call apps) only show while playing: listing every call app the PC
+  // may not even have would bury the real choices. Sorted by name so a chip doesn't jump around
+  // when toggled or when the poll reorders sessions.
+  const appChoices = excludedApps.filter((app) => !isDefaultExcludedAudioApp(app.exe));
+  for (const session of audioSessions) {
+    if (session.exe && !appChoices.some((app) => sameExe(app.exe, session.exe))) {
+      appChoices.push({ exe: session.exe, name: session.name });
+    }
+  }
+  appChoices.sort((a, b) => a.name.localeCompare(b.name));
+
+  function toggleExcludedApp(app: ExcludedAudioApp) {
+    const next = excludedApps.some((excluded) => sameExe(excluded.exe, app.exe))
+      ? excludedApps.filter((excluded) => !sameExe(excluded.exe, app.exe))
+      : [...excludedApps, app];
+    setExcludedApps(next);
+    setExcludedAudioApps(userId, next);
+  }
 
   const screens = (sources ?? []).filter((source) => source.id.startsWith('screen:'));
   const windows = (sources ?? []).filter((source) => source.id.startsWith('window:'));
@@ -128,6 +184,39 @@ export default function ScreenSharePicker({ onSelect, onClose }: ScreenSharePick
             ))}
           </div>
         </div>
+
+        {showAppExclusions && (
+          <div className="screen-picker__quality-section">
+            <span className="screen-picker__quality-label">Não transmitir o áudio de:</span>
+            {appChoices.length === 0 ? (
+              <p className="screen-picker__hint">
+                Nenhum aplicativo está tocando som agora. Dê play no app que você quer tirar da transmissão.
+              </p>
+            ) : (
+              <div className="screen-picker__app-chips">
+                {appChoices.map((app) => {
+                  const excluded = excludedApps.some((item) => sameExe(item.exe, app.exe));
+                  return (
+                    <button
+                      key={app.exe.toLowerCase()}
+                      type="button"
+                      aria-pressed={excluded}
+                      className={'screen-picker__app-chip' + (excluded ? ' screen-picker__app-chip--excluded' : '')}
+                      onClick={() => toggleExcludedApp(app)}
+                    >
+                      {excluded && <VolumeX size={14} aria-hidden />}
+                      {app.name}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+            <p className="screen-picker__hint">
+              Discord e outros apps de chamada ficam fora por padrão. Clique num app para tirar ou devolver o som
+              dele. A escolha fica salva.
+            </p>
+          </div>
+        )}
 
         <footer className="screen-picker__footer">
           <div className="screen-picker__audio-column">

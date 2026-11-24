@@ -336,6 +336,15 @@ function elapsedSince(entry: PeerConnectionEntry): string {
   return `t+${Date.now() - entry.connectionCreatedAt}ms`;
 }
 
+// Silent stand-in so the 'mic' sender can exist without a mic track (see addLocalTracksTo). Never
+// actually sent: the sender drops it for null right away. Shared by every connection.
+// ponytail: one AudioContext kept for the app's lifetime, it only feeds this silent track.
+let silentAudioTrack: MediaStreamTrack | null = null;
+function silentPlaceholderTrack(): MediaStreamTrack {
+  silentAudioTrack ??= new AudioContext().createMediaStreamDestination().stream.getAudioTracks()[0];
+  return silentAudioTrack;
+}
+
 interface MeshManagerOptions {
   send: (message: ClientToServerMessage) => void;
   onRemoteStreamsChange: (
@@ -1454,15 +1463,12 @@ export class MeshManager {
     // Camera and screen are both kind:'video', so which is which is determined by
     // grouping: local tracks are added via distinct MediaStream objects (personal,
     // screen, music), and that stream id survives the wire (msid) — the first distinct
-    // stream id seen for a peer is always "personal" since the mic track is always
-    // present from the very first offer, before screen share or music share is ever
-    // possible. [2026-08-30] A stream id already known as screen/music (its OTHER track
-    // arriving — screen's audio after its video, same stream.id both times) is matched
-    // directly; a genuinely new non-personal stream is screen if its track is video
-    // (music never has one) or music otherwise (screen's own audio, if any, is never the
-    // first track observed for a brand-new screen stream.id — setLocalScreenTrack always
-    // addTrack()s video before audio within the same renegotiation, and a single
-    // setRemoteDescription delivers ontrack in m-line order).
+    // stream id seen for a peer is always "personal" since the mic sender is always the
+    // first one created, track or not (addLocalTracksTo — peers before 2026-11-24 skipped it
+    // while muted and broke this). [2026-08-30] A stream id already known as screen/music
+    // (its OTHER track arriving — screen's audio after its video, same stream.id both times)
+    // is matched directly; a genuinely new non-personal stream is screen if it carries video
+    // (music never has one) or music otherwise.
     pc.ontrack = (event) => {
       const stream = event.streams[0];
       if (!stream) return;
@@ -1477,7 +1483,11 @@ export class MeshManager {
       } else if (entry.musicStreamId === stream.id) {
         kind = 'music';
         entry.musicStream = stream;
-      } else if (event.track.kind === 'video') {
+      } else if (stream.getVideoTracks().length > 0) {
+        // The whole stream, not just this track: setRemoteDescription adds every track of the
+        // description to its stream before firing any 'track' event, so a screen stream whose
+        // audio m-line comes first (the answerer's tracks follow the offerer's m-line order) is
+        // still screen, not music — music would play for everyone, with no click and no focus.
         kind = 'screen';
         entry.screenStreamId = stream.id;
         entry.screenStream = stream;
@@ -1506,12 +1516,17 @@ export class MeshManager {
 
   private addLocalTracksTo(entry: PeerConnectionEntry): void {
     if (this.sfu) return; // SFU room: media goes through the SFU, this connection is data-only
-    if (this.micTrack) {
-      entry.senders.mic = entry.pc.addTrack(this.micTrack, this.personalStream);
-      // addTrack can't take null directly — add the real track then immediately silence it,
-      // before any ICE/DTLS negotiation has a chance to actually send anything.
-      if (this.micMuted) void entry.senders.mic.replaceTrack(null);
-    }
+    // The 'mic' sender is ALWAYS created, and first, even with no mic track — muted
+    // (releaseLocalMicTrack nulls it) or no mic device at all. The other side's pc.ontrack takes
+    // the FIRST stream id it sees from a peer as "personal". [Bug, 2026-11-24] With mute persisting
+    // across sessions, a muted sharer's screen stream arrived first and was taken as the camera:
+    // the share played in that person's own tile, audible to everyone without focus, and its X
+    // never went back to the click gate. addTrack (not a trackless addTransceiver, which a remote
+    // offer never reuses, JSEP) needs a real track — the silent placeholder stands in, and it's
+    // swapped for null before any ICE/DTLS negotiation has a chance to actually send anything,
+    // same as the mute path always did.
+    entry.senders.mic = entry.pc.addTrack(this.micTrack ?? silentPlaceholderTrack(), this.personalStream);
+    if (this.micMuted || !this.micTrack) void entry.senders.mic.replaceTrack(null);
     if (this.cameraTrack) entry.senders.camera = entry.pc.addTrack(this.cameraTrack, this.personalStream);
     if (this.screenVideoTrack) {
       const sender = entry.pc.addTrack(this.screenVideoTrack, this.screenStream);

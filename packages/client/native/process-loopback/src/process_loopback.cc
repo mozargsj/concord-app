@@ -4,7 +4,10 @@
 //       of screen-share system audio, so remote peers never hear an echo of themselves.
 //   (2) INCLUDE mode: captures only one target process (and its children). Used for "share this
 //       app's audio" (2026-08-30, pedido do Mozar — a transmissão de tela já usava (1), esta
-//       parte é o modo espelhado, mesma API do Windows, só o enum diferente).
+//       parte é o modo espelhado, mesma API do Windows, só o enum diferente). Also, one INCLUDE
+//       capture per allowed app, summed in the renderer, when the user excludes apps from the
+//       screen-share audio (2026-11-24) — the API takes a single target PID per capture, so
+//       "everything except these N apps" can't be one EXCLUDE capture.
 // https://learn.microsoft.com/en-us/windows/win32/coreaudio/process-loopback-recording
 // (Windows 10 2004+). Also exposes ListAudioSessions(), enumerating processes with an active
 // audio session — the source list for the "which app?" picker feeding INCLUDE-mode captures.
@@ -25,6 +28,7 @@
 #include <audioclient.h>
 #include <audioclientactivationparams.h>
 #include <audiopolicy.h>
+#include <tlhelp32.h>
 
 #include <atomic>
 #include <cstdio>
@@ -350,27 +354,66 @@ std::string WideToUtf8(const std::wstring& wide) {
   return result;
 }
 
-// Friendly name for a PID — the session's own DisplayName when a well-behaved app set one
-// (IAudioSessionControl::GetDisplayName), otherwise the exe's own filename without extension
-// (QueryFullProcessImageNameW + manual trim, avoids pulling in Psapi.lib for GetModuleBaseName).
-std::wstring FriendlyNameForPid(DWORD pid, const std::wstring& sessionDisplayName) {
-  if (!sessionDisplayName.empty()) return sessionDisplayName;
-
-  std::wstring name = L"Processo " + std::to_wstring(pid);
+// The exe's own filename with extension ("Spotify.exe"), empty if the process can't be opened —
+// QueryFullProcessImageNameW + manual trim, avoids pulling in Psapi.lib for GetModuleBaseName.
+// Stable across runs (a PID isn't), so it's what the screen-share "exclude these apps" list keys on.
+std::wstring ExeFileNameForPid(DWORD pid) {
   HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
-  if (!process) return name;
-
+  if (!process) return std::wstring();
   WCHAR path[MAX_PATH] = {};
   DWORD size = MAX_PATH;
+  std::wstring fileName;
   if (QueryFullProcessImageNameW(process, 0, path, &size)) {
     std::wstring full(path);
     size_t slash = full.find_last_of(L"\\/");
-    std::wstring fileName = slash == std::wstring::npos ? full : full.substr(slash + 1);
-    size_t dot = fileName.find_last_of(L'.');
-    name = dot == std::wstring::npos ? fileName : fileName.substr(0, dot);
+    fileName = slash == std::wstring::npos ? full : full.substr(slash + 1);
   }
   CloseHandle(process);
-  return name;
+  return fileName;
+}
+
+// Friendly name for a PID — the session's own DisplayName when a well-behaved app set one
+// (IAudioSessionControl::GetDisplayName), otherwise the exe's filename without extension.
+std::wstring FriendlyNameForPid(DWORD pid, const std::wstring& sessionDisplayName, const std::wstring& exeFileName) {
+  if (!sessionDisplayName.empty()) return sessionDisplayName;
+  if (exeFileName.empty()) return L"Processo " + std::to_wstring(pid);
+  size_t dot = exeFileName.find_last_of(L'.');
+  return dot == std::wstring::npos ? exeFileName : exeFileName.substr(0, dot);
+}
+
+// pid -> parent pid for every running process (one Toolhelp snapshot). PROCESS_LOOPBACK captures a
+// whole process TREE in both modes, so the caller needs each session's ancestry: to keep Concord's
+// own children out of the list, and so an INCLUDE capture of an ancestor never drags an excluded
+// app (a child of it) into the screen-share mix.
+// ponytail: parent pids can be stale (parent exited, pid reused); Windows builds the loopback tree
+// from the same parent links, so this mirrors what the capture itself will do.
+std::map<DWORD, DWORD> SnapshotParentPids() {
+  std::map<DWORD, DWORD> parents;
+  HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+  if (snapshot == INVALID_HANDLE_VALUE) return parents;
+  PROCESSENTRY32W entry = {};
+  entry.dwSize = sizeof(entry);
+  if (Process32FirstW(snapshot, &entry)) {
+    do {
+      parents[entry.th32ProcessID] = entry.th32ParentProcessID;
+    } while (Process32NextW(snapshot, &entry));
+  }
+  CloseHandle(snapshot);
+  return parents;
+}
+
+// Parent, grandparent, ... up to the root. Depth cap + self-check guard against parent-pid cycles
+// that stale/reused pids can produce.
+std::vector<DWORD> AncestorsOf(DWORD pid, const std::map<DWORD, DWORD>& parents) {
+  std::vector<DWORD> ancestors;
+  DWORD current = pid;
+  for (int depth = 0; depth < 64; depth++) {
+    auto it = parents.find(current);
+    if (it == parents.end() || it->second == 0 || it->second == current || it->second == pid) break;
+    current = it->second;
+    ancestors.push_back(current);
+  }
+  return ancestors;
 }
 
 // Enumerates processes with an active WASAPI render session on the default output device — the
@@ -405,6 +448,7 @@ Napi::Value ListAudioSessions(const Napi::CallbackInfo& info) {
     sessionEnumerator->GetCount(&sessionCount);
     DWORD selfPid = GetCurrentProcessId();
     std::vector<DWORD> seenPids;
+    std::map<DWORD, DWORD> parents = SnapshotParentPids();
 
     for (int i = 0; i < sessionCount; i++) {
       IAudioSessionControl* control = nullptr;
@@ -425,11 +469,22 @@ Napi::Value ListAudioSessions(const Napi::CallbackInfo& info) {
           }
         }
 
-        // Skips: system-sounds pseudo-session, Concord's own process, duplicate sessions from
-        // the same app (one process can open several), and anything not actually active right
-        // now (expired/inactive sessions from an app that already closed its stream).
-        if (control2->IsSystemSoundsSession() != S_OK && pid != 0 && pid != selfPid && !alreadySeen &&
-            state == AudioSessionStateActive) {
+        std::vector<DWORD> ancestors = AncestorsOf(pid, parents);
+        bool isConcordChild = false;
+        for (DWORD ancestor : ancestors) {
+          if (ancestor == selfPid) {
+            isConcordChild = true;
+            break;
+          }
+        }
+
+        // Skips: system-sounds pseudo-session, Concord's own process tree (Chromium's audio
+        // service is a child process — it's what actually plays everyone's voice, so including
+        // it anywhere would echo the call back out), duplicate sessions from the same app (one
+        // process can open several), and anything not actually active right now
+        // (expired/inactive sessions from an app that already closed its stream).
+        if (control2->IsSystemSoundsSession() != S_OK && pid != 0 && pid != selfPid && !isConcordChild &&
+            !alreadySeen && state == AudioSessionStateActive) {
           LPWSTR rawDisplayName = nullptr;
           std::wstring displayName;
           if (SUCCEEDED(control->GetDisplayName(&rawDisplayName)) && rawDisplayName) {
@@ -442,10 +497,17 @@ Napi::Value ListAudioSessions(const Napi::CallbackInfo& info) {
           // showing that raw string to the user.
           if (!displayName.empty() && displayName[0] == L'@') displayName.clear();
 
-          std::wstring name = FriendlyNameForPid(pid, displayName);
+          std::wstring exeFileName = ExeFileNameForPid(pid);
+          std::wstring name = FriendlyNameForPid(pid, displayName, exeFileName);
+          Napi::Array ancestorArray = Napi::Array::New(env, ancestors.size());
+          for (size_t a = 0; a < ancestors.size(); a++) {
+            ancestorArray[static_cast<uint32_t>(a)] = Napi::Number::New(env, static_cast<double>(ancestors[a]));
+          }
           Napi::Object entry = Napi::Object::New(env);
           entry.Set("pid", Napi::Number::New(env, static_cast<double>(pid)));
           entry.Set("name", Napi::String::New(env, WideToUtf8(name)));
+          entry.Set("exe", Napi::String::New(env, WideToUtf8(exeFileName)));
+          entry.Set("ancestors", ancestorArray);
           result[static_cast<uint32_t>(written++)] = entry;
           seenPids.push_back(pid);
         }
